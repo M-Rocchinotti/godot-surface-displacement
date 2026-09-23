@@ -1,0 +1,22 @@
+# Normalize line endings
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.exr binary
+*.glb binary
+
+# Only the addon (and the licence) is shipped when the repository is downloaded as an
+# archive (Godot Asset Library / Asset Store / "Download ZIP"); the demo project, its textures,
+# tests, tools, docs and the repository README (its links point into docs/) stay in git. The
+# addon has its own README and LICENSE. tests/run_standalone_check.py checks the archive.
+/.gitattributes export-ignore
+/.gitignore export-ignore
+/demo export-ignore
+/docs export-ignore
+/tests export-ignore
+/tools export-ignore
+/icon.svg export-ignore
+/icon.svg.import export-ignore
+/project.godot export-ignore
+/README.md export-ignore
+/CHANGELOG.md export-ignore

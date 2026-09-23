@@ -1,0 +1,27 @@
+# Godot 4 cache and imports
+.godot/
+.import/
+*.translation
+
+# Machine-local engine path for tools/godot.py
+tools/.godot_path
+
+# Build output, logs, test captures
+build/
+export/
+export_presets.cfg
+*.tmp
+*.log
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+*.swp
+.vscode/
+.idea/
+__pycache__/
+*.pyc
+
+# Secrets
+.env
+*.env
