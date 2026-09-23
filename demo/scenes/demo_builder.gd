@@ -23,7 +23,7 @@ static func build(index: int) -> Node3D:
 
 # --- Shared pieces ---------------------------------------------------------------------------
 
-static func _root(scene_name: String, sun_elevation: float, sun_azimuth: float) -> Node3D:
+static func make_root(scene_name: String, sun_elevation: float, sun_azimuth: float) -> Node3D:
 	var root := Node3D.new()
 	root.name = scene_name.replace(" ", "")
 	var we := WorldEnvironment.new()
@@ -219,7 +219,7 @@ static func terrain_height(x: float, z: float) -> float:
 
 
 static func build_gravel_path() -> Node3D:
-	var root := _root("Gravel path", 26.0, 200.0)
+	var root := make_root("Gravel path", 26.0, 200.0)
 	var pebbles := ground_material("clean_pebbles")
 	var dirt := ground_material("forest_ground_04")
 	var terrain := heightfield(Vector2(90, 90), 0.5, func(x: float, z: float) -> float: return terrain_height(x, z))
@@ -270,7 +270,7 @@ static func build_gravel_path() -> Node3D:
 # --- 2. Cobblestone street -------------------------------------------------------------------
 
 static func build_cobblestone_street() -> Node3D:
-	var root := _root("Cobblestone street", 32.0, 235.0)
+	var root := make_root("Cobblestone street", 32.0, 235.0)
 	var cobble := ground_material("cobblestone_floor_08")
 	var pavers := ground_material("square_cobblestone", {"planar_rotation_deg": 0.0})
 	var street := PlaneMesh.new()
@@ -318,7 +318,7 @@ static func rocky_height(x: float, z: float) -> float:
 
 
 static func build_rocky_ground() -> Node3D:
-	var root := _root("Rocky ground", 24.0, 150.0)
+	var root := make_root("Rocky ground", 24.0, 150.0)
 	var rocks := ground_material("rocks_ground_05")
 	var terrain := heightfield(Vector2(70, 70), 0.25, func(x: float, z: float) -> float: return rocky_height(x, z))
 	_mesh_node(root, "Terrain", terrain, rocks, Vector3.ZERO, &"sd_ground")
@@ -337,7 +337,7 @@ static func build_rocky_ground() -> Node3D:
 # --- 4. Brick wall and props -----------------------------------------------------------------
 
 static func build_brick_wall() -> Node3D:
-	var root := _root("Brick wall and props", 18.0, 290.0)
+	var root := make_root("Brick wall and props", 18.0, 290.0)
 	var floor_mat := ground_material("gravel_stones")
 	var floor_mesh := PlaneMesh.new()
 	floor_mesh.size = Vector2(30.0, 30.0)

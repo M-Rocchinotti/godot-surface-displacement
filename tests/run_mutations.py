@@ -1,0 +1,178 @@
+#!/usr/bin/env python
+"""Mutation checks: prove that the tests catch the bugs they are meant to catch.
+
+Each mutation re-introduces one known bug (or removes one safeguard), runs the tests that should
+catch it and expects them to FAIL. The files are restored afterwards, also when the run is
+interrupted; mutations of an .import file re-import before and after. Render suites run headed.
+
+    python tests/run_mutations.py              # all mutations
+    python tests/run_mutations.py sign seam    # only mutations whose name contains a word
+
+Exit code 0 = every mutation was caught, 1 = a mutation survived (or no longer applies).
+"""
+from __future__ import annotations
+
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+RUNNER = ROOT / "tools" / "godot.py"
+SH = "addons/surface_displacement/shaders/"
+CORE = SH + "sd_core.gdshaderinc"
+COMMON = SH + "sd_common.gdshaderinc"
+MARCH = SH + "sd_march.gdshaderinc"
+SURFACE = SH + "sd_surface.gdshaderinc"
+FIELD_SH = SH + "sd_field.gdshaderinc"
+PEBBLES = SH + "sd_pebble_process.gdshader"
+FIELD = "addons/surface_displacement/nodes/displacement_field_3d.gd"
+MANAGER = "addons/surface_displacement/nodes/surface_displacement.gd"
+BAKE = "addons/surface_displacement/core/sd_ground_bake.gd"
+HEIGHT_IMPORT = "demo/textures/clean_pebbles/clean_pebbles_height.exr.import"
+
+# (name, what it breaks, [(file, old, new)], [(suite, name filter)]); suite is "logic",
+# "render" (tests/render_tests.gd) or "field" (tests/field_tests.gd).
+MUTATIONS = [
+    ("no mipmaps", "the demo height map imported without mipmaps (the crater's POM bug)",
+     [(HEIGHT_IMPORT, "mipmaps/generate=true", "mipmaps/generate=false")],
+     [("logic", ""), ("render", "shimmer")]),
+    ("march reads mip 0", "the march samples the full-size height map at every distance",
+     [(CORE, "	return max(0.5 * log2(max(rho2, 1e-12)) + sd_pom_range.z, 0.0);", "	return 0.0 * rho2;")],
+     [("render", "shimmer")]),
+    ("wrong parallax sign", "the view ray walks the relief the wrong way (the crater floor's suspected bug)",
+     [(CORE, "	return vec2(dot(p.gu, v), dot(p.gv, v)) * (dot(n, p.axis) / nv);", "	return -vec2(dot(p.gu, v), dot(p.gv, v)) * (dot(n, p.axis) / nv);")],
+     [("render", "pom_matches,swim")]),
+    ("no binary refinement", "the linear search is followed by the secant step only",
+     [(MARCH, "		if (j >= refine) {", "		if (j >= 0) {")],
+     [("render", "pom_matches")]),
+    ("world rotation sign", "world-planar u gradient rotated the wrong way",
+     [(CORE, "	p.gu = vec3(c, 0.0, -s) / texture_size_m.x;", "	p.gu = vec3(c, 0.0, s) / texture_size_m.x;")],
+     [("render", "pom_matches")]),
+    ("triplanar X plane mirrored", "the X plane's u axis points the other way",
+     [(CORE, "		right = vec3(0.0, 0.0, -sg);", "		right = vec3(0.0, 0.0, sg);")],
+     [("render", "pom_matches")]),
+    ("zero-weight planes marched", "triplanar marches all three planes, also those with no weight",
+     [(SURFACE, "		if (wa <= 0.0) {\n			continue; // Zero-weight planes are neither marched nor sampled.", "		if (false) {\n			continue; // Zero-weight planes are neither marched nor sampled.")],
+     [("render", "triplanar")]),
+    ("no distance fade", "the relief keeps its full depth at every distance",
+     [(SURFACE, "	float amp = height_m * fade;", "	float amp = height_m + 0.0 * fade;")],
+     [("render", "fade")]),
+    ("LIGHT_VERTEX not written", "lighting and received shadows use the flat surface, not the relief",
+     [(SURFACE, "	LIGHT_VERTEX = VERTEX + offset_view;", "	LIGHT_VERTEX = VERTEX + 0.0 * offset_view;")],
+     [("render", "light_vertex")]),
+    ("self-shadow ray reversed", "the self-shadow march walks away from the light",
+     [(CORE, "	vec2 duv_dz = vec2(dot(sd_ss_gu, l), dot(sd_ss_gv, l)) * (na / max(n_dot_l, SD_MIN_NDOTV));",
+       "	vec2 duv_dz = -vec2(dot(sd_ss_gu, l), dot(sd_ss_gv, l)) * (na / max(n_dot_l, SD_MIN_NDOTV));")],
+     [("render", "self_shadow")]),
+    ("light(): Lambert diffuse", "light() uses Lambert while the engine shades with Burley",
+     [(COMMON, "		float diffuse_brdf_nl = (1.0 / SD_PI) * fd_v * fd_l * c_n_dot_l;", "		float diffuse_brdf_nl = (1.0 / SD_PI) * c_n_dot_l + 0.0 * fd_v * fd_l;")],
+     [("render", "light_function")]),
+    ("light(): clamped GGX", "D clamped to 1 (the engine's saturateHalf is not a clamp)",
+     [(COMMON, "	return k * k * (1.0 / SD_PI);", "	return clamp(k * k * (1.0 / SD_PI), 0.0, 1.0);")],
+     [("render", "light_function")]),
+    ("light(): no energy compensation", "direct specular without the engine's multiple-scattering term",
+     [(COMMON, "		vec3 energy_compensation = 1.0 + f0 * (1.0 / max(e, 1e-4) - 1.0);", "		vec3 energy_compensation = vec3(1.0) + 0.0 * e;")],
+     [("render", "light_function")]),
+    ("depth-write leak", "every POM variant writes DEPTH, not only the opt-in ones",
+     [(SURFACE, "#ifdef SD_DEPTH_WRITE\n	// With the depth pre-pass on,", "#ifdef SD_POM\n	// With the depth pre-pass on,")],
+     [("render", "depth")]),
+    ("depth not rounded", "the opt-in depth write without the rounding that keeps both passes equal",
+     [(SURFACE, "	DEPTH = round(depth / depth_step) * depth_step;", "	DEPTH = depth + 0.0 * depth_step;")],
+     [("render", "depth")]),
+    ("no LOD seam stitch", "rings do not geomorph towards the next ring (open T-junctions at ring seams)",
+     [(FIELD_SH, "	vec2 lattice_m = lattice - odd * spacing_units * m;", "	vec2 lattice_m = lattice - odd * spacing_units * m * 0.0;")],
+     [("field", "cracks,swim")]),
+    ("no grid snapping", "the grid follows the camera continuously (vertices slide over the height map)",
+     [(FIELD, "	return Vector3(floorf(p.x / snap + 0.5) * snap, 0.0, floorf(p.z / snap + 0.5) * snap)", "	return Vector3(p.x, 0.0, p.z) + 0.0 * snap * Vector3.ONE")],
+     [("field", "vertex,swim")]),
+    ("vertex fetch at mip 0", "the geometry samples the full-size height map (aliasing, sparkle)",
+     [(FIELD_SH, "	float lod = log2(base_spacing) + (level + m);", "	float lod = -20.0 + 0.0 * (log2(base_spacing) + level + m);")],
+     [("field", "vertex")]),
+    ("relief pushed down", "the field displaces downwards (the ground would hide it)",
+     [(FIELD_SH, "	float y = ground + lift + sd_field_fade(xz) * sd_fade(view_distance) * sd_field_relief(xz, lod, w);",
+       "	float y = ground + lift - sd_field_fade(xz) * sd_fade(view_distance) * sd_field_relief(xz, lod, w);")],
+     [("field", "vertex")]),
+    ("pebbles hashed by window slot", "pebbles placed by their slot in the camera window, not their world cell",
+     [(PEBBLES, "	ivec2 world_cell = ivec2(window_cell) + cell_xy;", "	ivec2 world_cell = cell_xy + 0 * ivec2(window_cell);")],
+     [("field", "pebbles")]),
+    ("bake ignores layers", "every ground surface is captured as 'not displaceable'",
+     [(BAKE, "			copy.set_surface_override_material(s, materials[layer_index(surface_material(mi, s), layers) + 1])",
+       "			copy.set_surface_override_material(s, materials[0 * layer_index(surface_material(mi, s), layers)])")],
+     [("field", "bake")]),
+    ("feature switch adds features", "a feature switch turns on what the preset leaves out",
+     [(MANAGER, "	base.near_field_enabled = base.near_field_enabled and near_field", "	base.near_field_enabled = near_field")],
+     [("logic", "")]),
+]
+
+SUITES = {
+    "logic": (["--headless", "--script", "tests/run_logic_tests.gd"], r"logic tests: \d+ passed, \d+ failed"),
+    "render": (["--script", "tests/render_tests.gd"], r"render tests: \d+ passed, \d+ failed"),
+    "field": (["--script", "tests/field_tests.gd"], r"field tests: \d+ passed, \d+ failed"),
+}
+
+
+def godot(args: list[str], timeout: int = 1800) -> subprocess.CompletedProcess:
+    return subprocess.run([sys.executable, str(RUNNER), "--timeout", str(timeout)] + args,
+                          cwd=ROOT, capture_output=True, text=True, encoding="utf-8", errors="replace")
+
+
+def reimport() -> None:
+    godot(["--headless", "--import"], 900)
+
+
+def run_tests(targets: list[tuple[str, str]]) -> tuple[bool, list[str]]:
+    """True when at least one targeted test failed; also the FAIL lines and measurements."""
+    caught = False
+    lines = []
+    for suite, only in targets:
+        args, summary = SUITES[suite]
+        proc = godot(args + (["--", "--only=" + only] if only else []))
+        out = proc.stdout + proc.stderr
+        fails = [line.strip() for line in out.splitlines() if line.strip().startswith("FAIL")]
+        measured = [line.rstrip() for line in out.splitlines() if line.startswith("  ") and not line.strip().startswith(("ok", "FAIL", "at:", "GDScript", "["))]
+        m = re.search(summary, out)
+        lines.append(f"{suite} '{only}': {m.group(0) if m else 'no summary (exit %d)' % proc.returncode}")
+        lines += ["|" + line for line in measured[:12]] + fails
+        caught = caught or (proc.returncode != 0 and bool(fails))
+    return caught, lines
+
+
+def main() -> int:
+    words = sys.argv[1:]
+    selected = [m for m in MUTATIONS if not words or any(w in m[0] for w in words)]
+    survived = []
+    for name, description, edits, targets in selected:
+        originals: dict[str, str] = {}
+        imports = any(path.endswith(".import") for path, _, _ in edits)
+        try:
+            for path, old, new in edits:
+                file = ROOT / path
+                current = file.read_text(encoding="utf-8")
+                originals.setdefault(path, current)
+                if old not in current:
+                    raise LookupError(f"pattern not found in {path}: {old!r}")
+                file.write_text(current.replace(old, new, 1), encoding="utf-8", newline="\n")
+            if imports:
+                reimport()
+            caught, lines = run_tests(targets)
+            print(f"{'CAUGHT  ' if caught else 'SURVIVED'} {name}: {description}", flush=True)
+            for line in lines:
+                print(f"         {line}", flush=True)
+            if not caught:
+                survived.append(name)
+        except LookupError as error:
+            # The code the mutation targets changed: the mutation must be updated, not skipped.
+            print(f"STALE    {name}: {error}", flush=True)
+            survived.append(name)
+        finally:
+            for path, text in originals.items():
+                (ROOT / path).write_text(text, encoding="utf-8", newline="\n")
+            if imports:
+                reimport()
+    print(f"\n{len(selected) - len(survived)}/{len(selected)} mutations caught")
+    return 1 if survived else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

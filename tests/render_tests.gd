@@ -34,6 +34,7 @@ func _run() -> void:
 	await _test("self_shadow_matches_height_field", test_self_shadow)
 	await _test("depth_write_opt_in", test_depth_write)
 	await _test("mip_shimmer_at_distance", test_mip_shimmer)
+	await _test("relief_fades_with_distance", test_distance_fade)
 	print("\nrender tests: %d passed, %d failed" % [_passed, _failed])
 	h.clear_scene()
 	h.viewport.queue_free()
@@ -708,6 +709,48 @@ func test_mip_shimmer() -> void:
 	print("  mean per-pixel flicker 10-60 m away: flat %.5f, POM %.5f (x%.2f)" % [results[SDMaterials.Quality.FLAT], results[SDMaterials.Quality.POM], ratio])
 	# Measured: x1.02 with mip-correct sampling, x1.8 when the march reads mip 0 (mutation check).
 	check(ratio < 1.3, "POM adds less than 30 % flicker over plain normal mapping at a distance")
+
+
+# --- 11. Distance fade ---------------------------------------------------------------------------
+
+## With the fade set to 6-10 m, the parallax offset must be the full one before 6 m, shrink in
+## between and be exactly zero beyond 10 m (plain normal mapping, no march).
+func test_distance_fade() -> void:
+	var field := Harness.make_stone_field(256, 40, 2)
+	var tex := ImageTexture.create_from_image(field["image"])
+	h.new_debug_scene()
+	var mat := SDMaterials.create(SDMaterials.Mapping.WORLD, {"height": tex}, {"height_m": 0.05, "height_center": 0.0, "texture_size_m": Vector2(1, 1)}, SDMaterials.Quality.POM)
+	var plane := PlaneMesh.new()
+	plane.size = Vector2(60, 60)
+	var mi := MeshInstance3D.new()
+	mi.mesh = plane
+	mi.material_override = mat
+	h.scene.add_child(mi)
+	var cam := h.add_camera(Vector3(0, 1.7, 0), Vector3(0, 0, -8))
+	SDGlobals.set_value(SDGlobals.POM_RANGE, Vector4(6, 10, 0, 99))
+	debug_view(Harness.DEBUG_HIT_OFFSET)
+	await h.frames(3)
+	var img := await h.capture()
+	var near_max := 0.0
+	var far_max := 0.0
+	var far_n := 0
+	for py in range(0, SIZE.y, 2):
+		for px in range(0, SIZE.x, 4):
+			var o := cam.project_ray_origin(Vector2(px, py) + Vector2(0.5, 0.5))
+			var d := cam.project_ray_normal(Vector2(px, py) + Vector2(0.5, 0.5))
+			if d.y >= 0.0:
+				continue
+			var dist := (o + d * (-o.y / d.y)).distance_to(o)
+			var off := Harness.decode_offset(img, Vector2i(px, py), OFFSET_SCALE).length()
+			if dist < 5.0:
+				near_max = maxf(near_max, off)
+			elif dist > 10.5 and dist < 28.0:
+				far_max = maxf(far_max, off)
+				far_n += 1
+	debug_view(Harness.DEBUG_OFF)
+	print("  largest parallax offset: before the fade %.1f mm, beyond it %.3f mm (%d px)" % [near_max * 1000.0, far_max * 1000.0, far_n])
+	check(near_max > 0.02, "the full relief is there before the fade starts")
+	check(far_n > 1000 and far_max < 0.0002, "beyond the fade end the offset is zero (plain normal mapping)")
 
 
 ## Mean over pixels (ground 10-60 m away) of the standard deviation of luminance over frames.

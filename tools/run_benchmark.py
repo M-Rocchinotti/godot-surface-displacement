@@ -1,0 +1,94 @@
+#!/usr/bin/env python
+"""Run tests/benchmark.gd only on an idle GPU.
+
+The development GPU is shared with other work. A benchmark taken while another process renders
+measures that process too, so this waits until, for a whole observation window, `nvidia-smi`
+reports low GPU utilisation AND no other Godot or Unreal process runs; it re-checks right
+before starting and records the GPU state next to the results. It never stops other processes.
+
+    python tools/run_benchmark.py                 # wait up to 2 hours for an idle GPU
+    python tools/run_benchmark.py --max-wait 0    # check once, give up if busy
+
+Exit code: the benchmark's (1 = a preset over budget), 3 = the GPU never became idle.
+"""
+from __future__ import annotations
+
+import argparse
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+BUSY_PROCESSES = ("godot", "unrealeditor", "unrealengine", "ue4editor", "ue5editor")
+
+
+def gpu_utilisation() -> int | None:
+    try:
+        out = subprocess.run(["nvidia-smi", "--query-gpu=utilization.gpu", "--format=csv,noheader,nounits"],
+                             capture_output=True, text=True, timeout=20).stdout
+        return max(int(v) for v in out.split() if v.strip().isdigit())
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+
+
+def busy_processes() -> list[str]:
+    try:
+        if sys.platform == "win32":
+            out = subprocess.run(["tasklist", "/fo", "csv", "/nh"], capture_output=True, text=True, timeout=20).stdout
+            names = [line.split('","')[0].strip('"') for line in out.splitlines() if line]
+        else:
+            out = subprocess.run(["ps", "-eo", "comm"], capture_output=True, text=True, timeout=20).stdout
+            names = out.split()
+    except (OSError, subprocess.SubprocessError):
+        return []
+    return sorted({n for n in names if any(b in n.lower() for b in BUSY_PROCESSES)})
+
+
+def idle_for(seconds: int, threshold: int) -> tuple[bool, str]:
+    """True when utilisation stays at or below threshold and no busy process runs for [seconds]."""
+    samples = []
+    for _ in range(max(seconds // 2, 1)):
+        procs = busy_processes()
+        util = gpu_utilisation()
+        if procs:
+            return False, f"busy processes: {', '.join(procs)}"
+        if util is None:
+            return False, "nvidia-smi not available"
+        samples.append(util)
+        if util > threshold:
+            return False, f"GPU utilisation {util} %"
+        time.sleep(2)
+    return True, f"GPU utilisation {max(samples)} % max over {seconds} s, no other Godot/Unreal process"
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--max-wait", type=int, default=7200, help="seconds to wait for an idle GPU")
+    parser.add_argument("--window", type=int, default=20, help="seconds the GPU must stay idle")
+    parser.add_argument("--threshold", type=int, default=8, help="max utilisation %% counted as idle")
+    args = parser.parse_args()
+    deadline = time.time() + args.max_wait
+    while True:
+        ok, state = idle_for(args.window, args.threshold)
+        print(f"[run_benchmark] {time.strftime('%H:%M:%S')} {state}", flush=True)
+        if ok:
+            break
+        if time.time() > deadline:
+            print("[run_benchmark] GPU not idle; benchmark not run")
+            return 3
+        time.sleep(30)
+    proc = subprocess.run([sys.executable, str(ROOT / "tools" / "godot.py"), "--timeout", "3600", "--log", "benchmark",
+                           "--script", "tests/benchmark.gd"], cwd=ROOT)
+    after_util = gpu_utilisation()
+    after_procs = busy_processes()
+    results = ROOT / "build" / "benchmark_results.md"
+    if results.exists():
+        with results.open("a", encoding="utf-8") as f:
+            f.write(f"\nGPU state: before: {state}; after: utilisation {after_util} %, other Godot/Unreal processes: "
+                    f"{', '.join(after_procs) or 'none'}.\n")
+    return proc.returncode
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -167,7 +167,14 @@ static func bake(meshes: Array[MeshInstance3D], layers: Array, texel: float, bou
 	cam.near = 0.05
 	cam.far = h_range + 2.0
 	vp.add_child(cam)
-	tree.root.add_child(vp)
+	# In the editor the capture lives in the editor's own UI, outside the edited scene (nodes
+	# added inside it or to the editor's root window trip up the inspector and undo history
+	# later); in a running game, under the root.
+	var editor := Engine.get_singleton(&"EditorInterface") if Engine.is_editor_hint() else null
+	if editor != null:
+		(editor.get_base_control() as Node).add_child(vp)
+	else:
+		tree.root.add_child(vp)
 
 	var result := SDGroundBake.new()
 	result.texel_size = texel
@@ -188,8 +195,10 @@ static func bake(meshes: Array[MeshInstance3D], layers: Array, texel: float, bou
 			var centre := Vector3(aabb.position.x + (tx + tile.x * 0.5) * texel, h_min + h_range + 1.0,
 					aabb.position.z + (ty + tile.y * 0.5) * texel)
 			cam.size = tile.y * texel
+			# The only camera in the SubViewport is current by itself. (Setting `current` in the
+			# editor registers it with the editor's camera preview, which later trips over the
+			# freed camera.)
 			cam.global_transform = Transform3D(Basis(Vector3(1, 0, 0), Vector3(0, 0, -1), Vector3(0, 1, 0)), centre)
-			cam.current = true
 			for i in 3:
 				await tree.process_frame
 			await RenderingServer.frame_post_draw
