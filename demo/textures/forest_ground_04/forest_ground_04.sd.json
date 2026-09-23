@@ -1,0 +1,17 @@
+{
+  "id": "forest_ground_04",
+  "size_m": [
+    3.15,
+    3.15
+  ],
+  "height_m": 0.02,
+  "resolution": 1024,
+  "height_source": "exr",
+  "source_percentiles": [
+    0.316162,
+    0.498291
+  ],
+  "height_remap_applied": true,
+  "license": "CC0-1.0",
+  "source": "https://polyhaven.com/a/forest_ground_04"
+}

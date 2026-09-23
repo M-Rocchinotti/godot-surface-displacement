@@ -102,7 +102,10 @@ static func surface_material(mi: MeshInstance3D, surface: int) -> Material:
 ## Captures [param meshes] from above into a new bake (coroutine: await it). Must run with a
 ## rendering device (not --headless). [param layers]: the field's layer materials.
 ## [param bounds]: the XZ rectangle to capture; empty = the meshes' bounds.
-static func bake(meshes: Array[MeshInstance3D], layers: Array, texel: float, bounds := Rect2()) -> SDGroundBake:
+## [param step_limit]: a height change larger than this between neighbouring texels (a kerb, a
+## step) is not a height field; the texels on both sides are marked not displaceable, so the
+## field dives under the ground there instead of draping a ramp over the step.
+static func bake(meshes: Array[MeshInstance3D], layers: Array, texel: float, bounds := Rect2(), step_limit := 0.04) -> SDGroundBake:
 	if meshes.is_empty():
 		push_warning("SDGroundBake: nothing to bake (no ground meshes).")
 		return null
@@ -202,10 +205,36 @@ static func bake(meshes: Array[MeshInstance3D], layers: Array, texel: float, bou
 						weight_bytes[g * 4 + code - 1] = 255
 					covered[g] = 1
 	vp.queue_free()
+	_mark_steps(heights, covered, weight_bytes, size, step_limit)
 	_fill_uncovered(heights, covered, size)
 	result.height = Image.create_from_data(size.x, size.y, false, Image.FORMAT_RF, heights.to_byte_array())
 	result.weights = Image.create_from_data(size.x, size.y, false, Image.FORMAT_RGBA8, weight_bytes)
 	return result
+
+
+## Clears the layer weights of texels next to a height step larger than [param limit] (and of
+## texels next to no ground at all).
+static func _mark_steps(heights: PackedFloat32Array, covered: PackedByteArray, weights: PackedByteArray, size: Vector2i, limit: float) -> void:
+	var clear := PackedByteArray()
+	clear.resize(size.x * size.y)
+	for y in size.y:
+		for x in size.x:
+			var i := y * size.x + x
+			if covered[i] == 0:
+				continue
+			for d: Vector2i in [Vector2i(1, 0), Vector2i(0, 1)]:
+				var nx := x + d.x
+				var ny := y + d.y
+				if nx >= size.x or ny >= size.y:
+					continue
+				var j := ny * size.x + nx
+				if covered[j] == 0 or absf(heights[i] - heights[j]) > limit:
+					clear[i] = 1
+					clear[j] = 1
+	for i in clear.size():
+		if clear[i] != 0:
+			for c in 4:
+				weights[i * 4 + c] = 0
 
 
 ## Gives texels without ground the height of their covered neighbours (repeated one-texel

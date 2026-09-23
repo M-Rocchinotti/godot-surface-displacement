@@ -49,6 +49,7 @@ DEMO_SETS = {
     "rocks_ground_05": (1024, 0.18),
     "brick_wall_001": (1024, 0.025),
     "rubble": (1024, 0.08),
+    "forest_ground_04": (1024, 0.02),
 }
 
 
@@ -103,7 +104,7 @@ def prepare(cache: Path, out_root: Path, set_id: str, entry: dict, res: int, hei
         "license": "CC0-1.0",
         "source": f"https://polyhaven.com/a/{set_id}",
     }
-    (out / f"{set_id}.sd.json").write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
+    (out / f"{set_id}.sd.json").write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8", newline="\n")
     return meta
 
 

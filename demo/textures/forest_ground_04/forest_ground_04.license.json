@@ -1,0 +1,22 @@
+{
+  "asset": "forest_ground_04",
+  "name": "Forest Ground 04",
+  "license": "CC0-1.0",
+  "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+  "source": "https://polyhaven.com/a/forest_ground_04",
+  "authors": {
+    "Rob Tuytel": "Photography, Processing",
+    "Rico Cilliers": "Minor adjustment"
+  },
+  "files": [
+    "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/forest_ground_04/forest_ground_04_diff_2k.jpg",
+    "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/forest_ground_04/forest_ground_04_nor_gl_2k.jpg",
+    "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/forest_ground_04/forest_ground_04_arm_2k.jpg",
+    "https://dl.polyhaven.org/file/ph-assets/Textures/exr/2k/forest_ground_04/forest_ground_04_disp_2k.exr"
+  ],
+  "retrieved": "2026-09-23",
+  "dimensions_m": [
+    3.15,
+    3.15
+  ]
+}
