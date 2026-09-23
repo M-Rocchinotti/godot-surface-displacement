@@ -1,0 +1,17 @@
+{
+  "id": "cobblestone_floor_08",
+  "size_m": [
+    2.0,
+    2.0
+  ],
+  "height_m": 0.05,
+  "resolution": 1024,
+  "height_source": "png16",
+  "source_percentiles": [
+    0.128786,
+    0.934554
+  ],
+  "height_remap_applied": true,
+  "license": "CC0-1.0",
+  "source": "https://polyhaven.com/a/cobblestone_floor_08"
+}

@@ -1,0 +1,17 @@
+{
+  "id": "gravel_stones",
+  "size_m": [
+    2.0,
+    2.0
+  ],
+  "height_m": 0.03,
+  "resolution": 1024,
+  "height_source": "exr",
+  "source_percentiles": [
+    0.4021,
+    0.818359
+  ],
+  "height_remap_applied": true,
+  "license": "CC0-1.0",
+  "source": "https://polyhaven.com/a/gravel_stones"
+}

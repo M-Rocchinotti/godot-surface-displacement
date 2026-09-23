@@ -1,0 +1,17 @@
+{
+  "id": "brick_wall_001",
+  "size_m": [
+    3.0,
+    3.0
+  ],
+  "height_m": 0.025,
+  "resolution": 1024,
+  "height_source": "png16",
+  "source_percentiles": [
+    0.287739,
+    0.872694
+  ],
+  "height_remap_applied": true,
+  "license": "CC0-1.0",
+  "source": "https://polyhaven.com/a/brick_wall_001"
+}

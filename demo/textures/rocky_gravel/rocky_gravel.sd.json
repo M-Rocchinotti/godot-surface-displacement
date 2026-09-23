@@ -1,0 +1,17 @@
+{
+  "id": "rocky_gravel",
+  "size_m": [
+    1.81,
+    1.81
+  ],
+  "height_m": 0.035,
+  "resolution": 1024,
+  "height_source": "exr",
+  "source_percentiles": [
+    0.228271,
+    0.628906
+  ],
+  "height_remap_applied": true,
+  "license": "CC0-1.0",
+  "source": "https://polyhaven.com/a/rocky_gravel"
+}

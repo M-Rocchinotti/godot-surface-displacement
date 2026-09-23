@@ -1,0 +1,17 @@
+{
+  "id": "rocks_ground_05",
+  "size_m": [
+    3.0,
+    3.0
+  ],
+  "height_m": 0.18,
+  "resolution": 1024,
+  "height_source": "png16",
+  "source_percentiles": [
+    0.083376,
+    0.941558
+  ],
+  "height_remap_applied": true,
+  "license": "CC0-1.0",
+  "source": "https://polyhaven.com/a/rocks_ground_05"
+}

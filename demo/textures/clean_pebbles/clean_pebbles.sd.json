@@ -1,0 +1,17 @@
+{
+  "id": "clean_pebbles",
+  "size_m": [
+    2.0,
+    2.0
+  ],
+  "height_m": 0.025,
+  "resolution": 2048,
+  "height_source": "exr",
+  "source_percentiles": [
+    0.267334,
+    0.814941
+  ],
+  "height_remap_applied": true,
+  "license": "CC0-1.0",
+  "source": "https://polyhaven.com/a/clean_pebbles"
+}
