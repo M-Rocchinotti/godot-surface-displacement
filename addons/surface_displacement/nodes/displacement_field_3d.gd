@@ -311,12 +311,8 @@ func _apply_ground() -> void:
 		_height_range = Vector2(y, y)
 
 
-## A shader parameter of an SD material, or the shader's default when it was never set.
 static func _param(material: ShaderMaterial, name: String) -> Variant:
-	var value: Variant = material.get_shader_parameter(name)
-	if value == null and material.shader != null:
-		value = RenderingServer.shader_get_parameter_default(material.shader.get_rid(), name)
-	return value
+	return SDMaterials.get_param(material, name)
 
 
 func _apply_layers() -> void:

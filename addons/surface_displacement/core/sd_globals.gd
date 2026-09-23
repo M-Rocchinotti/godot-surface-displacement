@@ -69,9 +69,22 @@ static func ensure_registered(to_project_settings := false) -> PackedStringArray
 	return missing
 
 
+## Values last written through [method set_value] (plain vectors, no objects). The RenderingServer
+## can only be read back in the editor, so this keeps them for [method get_value].
+static var _values := {}
+
+
 static func set_value(name: StringName, value: Variant) -> void:
+	_values[name] = value
 	RenderingServer.global_shader_parameter_set(name, value)
 
 
+## The value last set through [method set_value], else the Project Settings value, else the
+## default of [method definitions].
 static func get_value(name: StringName) -> Variant:
-	return RenderingServer.global_shader_parameter_get(name)
+	if _values.has(name):
+		return _values[name]
+	var key := "shader_globals/" + String(name)
+	if ProjectSettings.has_setting(key):
+		return (ProjectSettings.get_setting(key) as Dictionary).get("value")
+	return definitions()[name][2]

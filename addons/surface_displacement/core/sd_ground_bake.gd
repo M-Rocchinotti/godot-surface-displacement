@@ -109,6 +109,9 @@ static func bake(meshes: Array[MeshInstance3D], layers: Array, texel: float, bou
 	if meshes.is_empty():
 		push_warning("SDGroundBake: nothing to bake (no ground meshes).")
 		return null
+	if RenderingServer.get_rendering_device() == null:
+		push_warning("SDGroundBake: baking needs a rendering device (the ground stays flat); not available with --headless.")
+		return null
 	var tree := meshes[0].get_tree()
 	var aabb := AABB()
 	var first := true

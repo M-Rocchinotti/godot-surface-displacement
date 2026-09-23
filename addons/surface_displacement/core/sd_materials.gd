@@ -15,6 +15,34 @@ enum Quality { FLAT, POM, POM_SELF_SHADOW }
 const VARIANT_DIR := "res://addons/surface_displacement/shaders/variants/"
 const MAPPING_NAMES: Array[String] = ["uv", "world", "triplanar"]
 const QUALITY_NAMES: Array[String] = ["flat", "pom", "pom_ss"]
+## The shader's default for every non-texture uniform of sd_core.gdshaderinc (the render tests
+## check that the two agree), for code that reads a parameter a material never set.
+const PARAMETER_DEFAULTS := {
+	"albedo_tint": Color(1, 1, 1, 1),
+	"normal_strength": 1.0,
+	"ao_strength": 1.0,
+	"roughness_scale": 1.0,
+	"metallic_scale": 0.0,
+	"specular": 0.5,
+	"height_m": 0.03,
+	"height_center": 1.0,
+	"height_remap": Vector2(0.0, 1.0),
+	"pom_steps_scale": 1.0,
+	"self_shadow_strength": 1.0,
+	"uv_scale": Vector2(1.0, 1.0),
+	"uv_offset": Vector2(0.0, 0.0),
+	"texture_size_m": Vector2(2.0, 2.0),
+	"planar_rotation_deg": 0.0,
+	"planar_offset_m": Vector2(0.0, 0.0),
+	"triplanar_sharpness": 4.0,
+}
+
+
+## A shader parameter of an SD material: its value, or the shader's default when it was never set
+## (null for an unset texture).
+static func get_param(material: ShaderMaterial, name: String) -> Variant:
+	var value: Variant = material.get_shader_parameter(name)
+	return PARAMETER_DEFAULTS.get(name) if value == null else value
 
 static func variant_path(mapping: Mapping, quality: Quality, depth_write := false) -> String:
 	var depth := depth_write and quality != Quality.FLAT

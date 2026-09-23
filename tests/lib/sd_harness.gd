@@ -8,6 +8,10 @@ const DEBUG_HIT_OFFSET := 1
 const DEBUG_COST := 2
 const DEBUG_RELIEF := 3
 const DEBUG_NORMAL := 4
+const DEBUG_SELF_SHADOW := 5
+const DEBUG_WORLD_HEIGHT := 6
+const DEBUG_WHITE := 7
+const DEBUG_LEVELS := 8
 
 var tree: SceneTree
 var viewport: SubViewport
@@ -68,6 +72,31 @@ func new_debug_scene() -> Node3D:
 	scene.add_child(we)
 	viewport.add_child(scene)
 	return scene
+
+
+## A scene lit by [param ambient] (flat colour, no sky) with linear tone mapping and nothing else
+## (no SSAO, glow or fog), so pixel values are directly comparable between renders.
+func new_lit_scene(ambient := Color(0.2, 0.2, 0.2)) -> Node3D:
+	var s := new_debug_scene()
+	var env := (s.get_child(0) as WorldEnvironment).environment
+	env.ambient_light_color = ambient
+	env.ambient_light_energy = 1.0
+	return s
+
+
+func add_sun(elevation_deg: float, azimuth_deg: float, shadows := true, max_distance := 20.0) -> DirectionalLight3D:
+	var sun := DirectionalLight3D.new()
+	sun.rotation_degrees = Vector3(-elevation_deg, azimuth_deg, 0.0)
+	sun.shadow_enabled = shadows
+	sun.directional_shadow_mode = DirectionalLight3D.SHADOW_ORTHOGONAL
+	sun.directional_shadow_max_distance = max_distance
+	scene.add_child(sun)
+	return sun
+
+
+## Unit vector towards a directional light (the opposite of its forward -Z).
+static func light_direction(light: DirectionalLight3D) -> Vector3:
+	return light.global_transform.basis.z.normalized()
 
 
 func add_camera(from: Vector3, to: Vector3, fov := 60.0, up := Vector3.UP) -> Camera3D:
@@ -236,6 +265,48 @@ static func _ray_minus_relief(origin: Vector3, dir: Vector3, t: float, surface: 
 	var uv: Vector2 = (surface["uv"] as Callable).call(foot)
 	var amp: float = surface["amp"]
 	return z - amp * (sample_field(surface["field"], uv) - float(surface["center"]))
+
+
+## Relief height (m) of [param surface] (see trace_height_field) at foot point [param p].
+static func relief_at(surface: Dictionary, p: Vector3) -> float:
+	var uv: Vector2 = (surface["uv"] as Callable).call(p)
+	return float(surface["amp"]) * (sample_field(surface["field"], uv) - float(surface["center"]))
+
+
+## Whether the height field of [param surface] blocks the ray from surface point [param from]
+## (on the relief) towards the unit direction [param to_light]; marched in steps of 0.2 mm of
+## relief height up to the top of the slab.
+static func height_field_shadowed(from: Vector3, to_light: Vector3, surface: Dictionary, bias: float) -> bool:
+	var n: Vector3 = surface["normal"]
+	var a: Vector3 = surface["axis"]
+	var na := n.dot(a)
+	var rate := n.dot(to_light) / na
+	if rate <= 0.0:
+		return false
+	var z0 := n.dot(from - (surface["point"] as Vector3)) / na
+	var z_top := (1.0 - float(surface["center"])) * float(surface["amp"])
+	var steps := ceili((z_top - z0) / 0.0002)
+	for i in range(1, steps + 1):
+		var z := z0 + (z_top - z0) * i / steps
+		var r := from + to_light * ((z - z0) / rate)
+		var foot := r - a * z
+		if relief_at(surface, foot) - z > bias:
+			return true
+	return false
+
+
+## Mip [param level] of a field made by field_from_data, as {"data", "size"} for sample_field.
+static func field_mip(field: Dictionary, level: int) -> Dictionary:
+	var img: Image = field["image"]
+	var size: int = int(field["size"]) >> level
+	var mip := Image.create_from_data(size, size, false, img.get_format(),
+			img.get_data().slice(img.get_mipmap_offset(level), img.get_mipmap_offset(level) + size * size * 2))
+	var data := PackedFloat32Array()
+	data.resize(size * size)
+	for y in size:
+		for x in size:
+			data[y * size + x] = mip.get_pixel(x, y).r
+	return {"data": data, "size": size}
 
 
 ## Decodes debug view 1 (hit offset, world space) at pixel p.

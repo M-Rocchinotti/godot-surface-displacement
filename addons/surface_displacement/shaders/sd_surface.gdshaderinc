@@ -4,6 +4,15 @@
 
 #include "res://addons/surface_displacement/shaders/sd_core.gdshaderinc"
 
+// After a march the hit uv jumps at relief edges, so textures are sampled with the rasterized
+// uv's derivatives. Without a march (flat variants of UV and world mapping) the implicit
+// derivatives are the same and texture() matches BaseMaterial3D bit for bit.
+#if defined(SD_POM) || defined(SD_MAPPING_TRIPLANAR)
+#define SD_SAMPLE(tex, uv, ddx, ddy) textureGrad(tex, uv, ddx, ddy)
+#else
+#define SD_SAMPLE(tex, uv, ddx, ddy) texture(tex, uv)
+#endif
+
 void vertex() {
 	sd_world_pos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
 	sd_world_normal = normalize(MODEL_NORMAL_MATRIX * NORMAL);
@@ -78,9 +87,9 @@ void fragment() {
 	float amp_uv = inv_det != 0.0 ? amp : 0.0;
 	offset_view = sd_resolve_plane(p, n, v, amp_uv, fade, lod, uv_hit, z_hit, steps_used);
 	planes_marched = steps_used > 0.0 ? 1.0 : 0.0;
-	albedo_sum = textureGrad(albedo_texture, uv_hit, p.ddx, p.ddy).rgb;
-	orm_sum = textureGrad(orm_texture, uv_hit, p.ddx, p.ddy).rgb;
-	NORMAL_MAP = textureGrad(normal_texture, uv_hit, p.ddx, p.ddy).rgb;
+	albedo_sum = SD_SAMPLE(albedo_texture, uv_hit, p.ddx, p.ddy).rgb;
+	orm_sum = SD_SAMPLE(orm_texture, uv_hit, p.ddx, p.ddy).rgb;
+	NORMAL_MAP = SD_SAMPLE(normal_texture, uv_hit, p.ddx, p.ddy).rgb;
 	NORMAL_MAP_DEPTH = normal_strength;
 	normal_world = view_to_world * n;
 	main_plane = p;
@@ -106,9 +115,9 @@ void fragment() {
 	vec3 offset_world = sd_resolve_plane(p, n, v, amp, fade, lod, uv_hit, z_hit, steps_used);
 	planes_marched = steps_used > 0.0 ? 1.0 : 0.0;
 	offset_view = world_to_view * offset_world;
-	albedo_sum = textureGrad(albedo_texture, uv_hit, p.ddx, p.ddy).rgb;
-	orm_sum = textureGrad(orm_texture, uv_hit, p.ddx, p.ddy).rgb;
-	vec3 nm = textureGrad(normal_texture, uv_hit, p.ddx, p.ddy).rgb;
+	albedo_sum = SD_SAMPLE(albedo_texture, uv_hit, p.ddx, p.ddy).rgb;
+	orm_sum = SD_SAMPLE(orm_texture, uv_hit, p.ddx, p.ddy).rgb;
+	vec3 nm = SD_SAMPLE(normal_texture, uv_hit, p.ddx, p.ddy).rgb;
 	normal_world = sd_apply_normal_map(nm, normalize(p.gu), -normalize(p.gv), n, normal_strength);
 	NORMAL = normalize(world_to_view * normal_world);
 	main_plane = p;
@@ -143,9 +152,9 @@ void fragment() {
 		float before = steps_used;
 		offset_world += wa * sd_resolve_plane(p, n, v, amp, fade, lod, uv_hit, z_hit, steps_used);
 		planes_marched += steps_used > before ? 1.0 : 0.0;
-		albedo_sum += wa * textureGrad(albedo_texture, uv_hit, p.ddx, p.ddy).rgb;
-		orm_sum += wa * textureGrad(orm_texture, uv_hit, p.ddx, p.ddy).rgb;
-		vec3 nm = textureGrad(normal_texture, uv_hit, p.ddx, p.ddy).rgb;
+		albedo_sum += wa * SD_SAMPLE(albedo_texture, uv_hit, p.ddx, p.ddy).rgb;
+		orm_sum += wa * SD_SAMPLE(orm_texture, uv_hit, p.ddx, p.ddy).rgb;
+		vec3 nm = SD_SAMPLE(normal_texture, uv_hit, p.ddx, p.ddy).rgb;
 		nsum += wa * sd_apply_normal_map(nm, normalize(p.gu), -normalize(p.gv), n, normal_strength);
 		if (wa > main_w) {
 			main_w = wa;
@@ -170,8 +179,15 @@ void fragment() {
 	LIGHT_VERTEX = VERTEX + offset_view;
 #endif
 #ifdef SD_DEPTH_WRITE
+	// With the depth pre-pass on, the colour pass keeps a fragment only if its depth EQUALS the
+	// pre-pass depth, and the two passes are separately compiled shaders whose arithmetic can
+	// differ in the last bit (1.3 % of the pixels in the depth test). Rounding the depth to 12
+	// mantissa bits (0.25 mm at 2 m) makes the two agree except where a value falls right on a
+	// rounding step: a few pixels per million (README, Limitations).
 	vec4 clip = PROJECTION_MATRIX * vec4(VERTEX + offset_view, 1.0);
-	DEPTH = clip.z / clip.w;
+	float depth = clip.z / clip.w;
+	float depth_step = exp2(floor(log2(max(depth, 1e-30))) - 12.0);
+	DEPTH = round(depth / depth_step) * depth_step;
 #endif
 
 #ifdef SD_SELF_SHADOW

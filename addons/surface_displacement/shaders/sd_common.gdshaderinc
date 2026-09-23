@@ -52,15 +52,16 @@ float sd_schlick_fresnel(float u) {
 	return m2 * m2 * m;
 }
 
+// The engine wraps D and V in saturateHalf(), which is not a [0, 1] clamp: it only caps at the
+// largest half float on FP16 builds and does nothing on FP32 ones (half_inc.glsl).
 float sd_d_ggx(float n_dot_h, float roughness) {
 	float a = n_dot_h * roughness;
 	float k = roughness / (1.0 - n_dot_h * n_dot_h + a * a);
-	return clamp(k * k * (1.0 / SD_PI), 0.0, 1.0);
+	return k * k * (1.0 / SD_PI);
 }
 
 float sd_v_ggx(float n_dot_l, float n_dot_v, float alpha) {
-	float v = 0.5 / mix(2.0 * n_dot_l * n_dot_v, n_dot_l + n_dot_v, alpha);
-	return clamp(v, 0.0, 1.0);
+	return 0.5 / mix(2.0 * n_dot_l * n_dot_v, n_dot_l + n_dot_v, alpha);
 }
 
 // Bilinear lookup of E(n.v, roughness) with clamp-to-edge, as the engine's sampler does.
@@ -82,7 +83,9 @@ void sd_brdf(vec3 n, vec3 l, vec3 v, vec3 light_color, float attenuation, bool i
 		inout vec3 diffuse_light, inout vec3 specular_light) {
 	float n_dot_l = min(dot(n, l), 1.0);
 	float c_n_dot_v = max(dot(n, v), 1e-4);
-	if (!(is_directional || attenuation > 6.10352e-5)) {
+	// HALF_FLT_MIN of the engine's FP32 path (on FP16 builds it is 6.1e-5; the difference is
+	// invisible).
+	if (!(is_directional || attenuation > 1.175494351e-38)) {
 		return;
 	}
 	float c_n_dot_l = max(n_dot_l, 0.0);
