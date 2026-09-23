@@ -16,19 +16,13 @@ const VARIANT_DIR := "res://addons/surface_displacement/shaders/variants/"
 const MAPPING_NAMES: Array[String] = ["uv", "world", "triplanar"]
 const QUALITY_NAMES: Array[String] = ["flat", "pom", "pom_ss"]
 
-static var _cache := {}
-
-
 static func variant_path(mapping: Mapping, quality: Quality, depth_write := false) -> String:
 	var depth := depth_write and quality != Quality.FLAT
 	return VARIANT_DIR + "sd_%s_%s%s.gdshader" % [MAPPING_NAMES[mapping], QUALITY_NAMES[quality], "_depth" if depth else ""]
 
 
 static func get_shader(mapping: Mapping, quality: Quality, depth_write := false) -> Shader:
-	var path := variant_path(mapping, quality, depth_write)
-	if not _cache.has(path):
-		_cache[path] = load(path)
-	return _cache[path]
+	return load(variant_path(mapping, quality, depth_write))
 
 
 ## {"mapping": Mapping, "quality": Quality, "depth_write": bool} of an SD variant, or {} for any

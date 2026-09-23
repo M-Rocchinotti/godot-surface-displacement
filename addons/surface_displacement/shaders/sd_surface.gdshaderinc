@@ -109,7 +109,7 @@ void fragment() {
 	albedo_sum = textureGrad(albedo_texture, uv_hit, p.ddx, p.ddy).rgb;
 	orm_sum = textureGrad(orm_texture, uv_hit, p.ddx, p.ddy).rgb;
 	vec3 nm = textureGrad(normal_texture, uv_hit, p.ddx, p.ddy).rgb;
-	normal_world = sd_apply_normal_map(nm, normalize(p.gu), -normalize(p.gv), n);
+	normal_world = sd_apply_normal_map(nm, normalize(p.gu), -normalize(p.gv), n, normal_strength);
 	NORMAL = normalize(world_to_view * normal_world);
 	main_plane = p;
 	main_uv = uv_hit;
@@ -146,7 +146,7 @@ void fragment() {
 		albedo_sum += wa * textureGrad(albedo_texture, uv_hit, p.ddx, p.ddy).rgb;
 		orm_sum += wa * textureGrad(orm_texture, uv_hit, p.ddx, p.ddy).rgb;
 		vec3 nm = textureGrad(normal_texture, uv_hit, p.ddx, p.ddy).rgb;
-		nsum += wa * sd_apply_normal_map(nm, normalize(p.gu), -normalize(p.gv), n);
+		nsum += wa * sd_apply_normal_map(nm, normalize(p.gu), -normalize(p.gv), n, normal_strength);
 		if (wa > main_w) {
 			main_w = wa;
 			main_plane = p;
@@ -194,9 +194,17 @@ void fragment() {
 
 	// Debug views (sd_debug.x): 1 = hit offset (world, 0.5 + offset / (2 * sd_debug.y)),
 	// 2 = cost (steps / 64, planes marched / 3, LOD / 8), 3 = relief height in the slab,
-	// 4 = world normal. Output through EMISSION with black, non-reflective ALBEDO/SPECULAR.
+	// 4 = world normal, 5 = self-shadow factor of directional lights (written by light()).
+	// Output through EMISSION with black, non-reflective ALBEDO/SPECULAR; view 5 through a white,
+	// non-reflective ALBEDO that light() fills.
 	int debug_view = int(sd_debug.x + 0.5);
-	if (debug_view > 0) {
+	if (debug_view == 5) {
+		ALBEDO = vec3(1.0);
+		SPECULAR = 0.0;
+		METALLIC = 0.0;
+		ROUGHNESS = 1.0;
+		AO = 1.0;
+	} else if (debug_view > 0) {
 		vec3 off_world = view_to_world * offset_view;
 		vec3 debug_color = vec3(0.0);
 		if (debug_view == 1) {
@@ -219,11 +227,20 @@ void fragment() {
 
 #ifdef SD_SELF_SHADOW
 void light() {
+	// Debug view 5 shows the self-shadow factor alone (the fragment set a white, non-reflective
+	// ALBEDO); `return` is not allowed in light(), hence the branches.
+	bool shadow_view = int(sd_debug.x + 0.5) == 5;
 	float attenuation = ATTENUATION;
 	if (LIGHT_IS_DIRECTIONAL) {
-		attenuation *= sd_self_shadow(LIGHT);
+		float self_shadow = sd_self_shadow(LIGHT);
+		if (shadow_view) {
+			DIFFUSE_LIGHT += vec3(self_shadow);
+		}
+		attenuation *= self_shadow;
 	}
-	sd_brdf(NORMAL, LIGHT, VIEW, LIGHT_COLOR, attenuation, LIGHT_IS_DIRECTIONAL, ALBEDO, ROUGHNESS, METALLIC,
-			SPECULAR_AMOUNT, DIFFUSE_LIGHT, SPECULAR_LIGHT);
+	if (!shadow_view) {
+		sd_brdf(NORMAL, LIGHT, VIEW, LIGHT_COLOR, attenuation, LIGHT_IS_DIRECTIONAL, ALBEDO, ROUGHNESS, METALLIC,
+			specular, SPECULAR_AMOUNT, DIFFUSE_LIGHT, SPECULAR_LIGHT);
+	}
 }
 #endif
