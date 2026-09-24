@@ -147,7 +147,7 @@ func _finish() -> void:
 	# no undo) usually prints "Can't use get_node() with absolute paths from outside the active
 	# scene tree" during shutdown. It is reproducible with an empty project and no addon. The
 	# editor's own quit (window close, Scene > Quit) goes through EditorNode::_exit_editor() and
-	# does not print it. Clearing the selection first avoids it.
+	# does not print it. Clearing the selection first avoids it (README, Known issues).
 	EditorInterface.get_selection().clear()
 	await _frames_wait(10)
 	get_tree().quit(0 if _failures.is_empty() else 1)

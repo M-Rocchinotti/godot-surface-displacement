@@ -435,6 +435,22 @@ pass because two errors cancel.
   float; other sources may not be.
 - The **Mobile** and **Compatibility** renderers and XR are untested.
 
+## Known issues
+
+- **Godot 4.7.2 prints "Can't use get_node() with absolute paths from outside the active scene
+  tree" when an editor plugin quits the editor while a Node3D is selected.** An engine issue,
+  not this addon's: it happens in an empty project without the addon and does not depend on any
+  addon action (bake, undo). It only concerns scripts that call `get_tree().quit()` in the editor
+  (this repository's editor check does, and clears the selection first); closing the editor
+  normally (window close, Scene > Quit) goes through the editor's own shutdown and does not print
+  it. Reproduction: a scene with a Node3D root and a Node3D child; an editor plugin that opens
+  the scene (`EditorInterface.open_scene_from_path()`), selects the child
+  (`EditorInterface.edit_node()`) and a few frames later calls `get_tree().quit()`. Measured with
+  the headed 4.7.2 editor: 7 of 8 runs print the error; 0 of 4 with a plain Node or nothing
+  selected; 0 of 3 when quitting through the editor's close request. The error comes from engine
+  code during shutdown (no script on the stack). No matching Godot issue was found (searched
+  2026-09-24).
+
 ## Troubleshooting
 
 | Symptom | Fix |
@@ -445,7 +461,6 @@ pass because two errors cancel.
 | Relief goes the wrong way (stones look like holes) | `height_center` is 1 where 0 is meant, or the height map is inverted (`height_remap` = (1, 0)). |
 | The field is not visible | It needs a rendering device (not `--headless`), a preset with near-camera geometry (Epic, or Custom), a ground layer that is displaceable at the camera's position (Field rings debug view), and a baked or flat ground under it. Ground materials must be world-planar with `height_center` 0. A terrain plugin's terrain (Terrain3D, HTerrain) is not captured by the bake: use `SDGroundBake.from_arrays()`. |
 | Props float above the relief or cut into it | Opt-in depth write on that surface; or place props on the relief's average height. |
-| After undoing and redoing Bake Ground, quitting the editor with the field selected prints "Can't use get_node() with absolute paths from outside the active scene tree" | Seen with Godot 4.7.2 at shutdown, after the scene was saved; nothing is lost. The cause was not found; deselecting the field before quitting avoids it. |
 
 ## Roadmap
 
