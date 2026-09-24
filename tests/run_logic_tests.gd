@@ -237,8 +237,7 @@ func test_field_mesh_seams() -> void:
 # --- Ground bake ---------------------------------------------------------------------------------
 
 func test_ground_bake_sampling() -> void:
-	print("
-== ground bake sampling")
+	print("\n== ground bake sampling")
 	# A linear ramp of 8 x 8 texels (0.1 m and 0.3 m per 0.5 m texel: below the 0.8 slope limit).
 	var n := 8
 	var heights := PackedFloat32Array()
