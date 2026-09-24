@@ -73,6 +73,9 @@ func _enter_tree() -> void:
 		_particles.lifetime = 3600.0
 		_particles.interpolate = false
 		_particles.fract_delta = false
+		# Process every frame (the default, 30 steps per second, would leave the new cells of a
+		# moved window empty or showing their old pebbles for a frame or more).
+		_particles.fixed_fps = 0
 		_particles.process_material = _process_material
 		_particles.draw_pass_1 = make_pebble_mesh(1)
 		_particles.material_override = _pebble_material

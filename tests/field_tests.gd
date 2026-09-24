@@ -425,9 +425,15 @@ func test_pebbles() -> void:
 	f.get_mesh_instance().visible = false
 	await h.frames(4)
 	var before := await h.capture()
-	tracked.position = Vector3(0.85, 1.7, 0.6)
+	var window_before: Vector2 = pebbles.get_particles().process_material.get_shader_parameter("window_cell")
+	# Across cell boundaries in x and z (1 m cells), so the window really moves; both camera
+	# positions stay closer than half the radius (4 m) to every pebble in view, where the pebbles
+	# start to shrink with distance.
+	tracked.position = Vector3(1.2, 1.7, -0.3)
 	await h.frames(6)
 	var after := await h.capture()
+	var window_after: Vector2 = pebbles.get_particles().process_material.get_shader_parameter("window_cell")
+	check(window_after - window_before == Vector2(1, -1), "the cell window moved with the camera (%s -> %s)" % [window_before, window_after])
 	var pebble_px := 0
 	var changed := 0
 	for py in range(0, SIZE.y, 2):
@@ -438,7 +444,7 @@ func test_pebbles() -> void:
 				pebble_px += 1
 			if maxf(maxf(absf(a.r - b.r), absf(a.g - b.g)), absf(a.b - b.b)) > 0.002:
 				changed += 1
-	print("  pebble pixels %d; pixels that changed when the camera moved 1.04 m: %d" % [pebble_px, changed])
+	print("  pebble pixels %d; pixels that changed when the camera moved 1.24 m: %d" % [pebble_px, changed])
 	check(pebble_px > 500, "pebbles are drawn around the camera")
 	check(changed == 0, "they stay exactly where they are when the camera (and the cell window) moves")
 
