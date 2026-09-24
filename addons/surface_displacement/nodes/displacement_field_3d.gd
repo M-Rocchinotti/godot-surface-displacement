@@ -94,16 +94,17 @@ var _ground_dirty := true
 var _mesh_dirty := true
 var _params_dirty := true
 var _baking := false
-var _height_texture: ImageTexture
-var _weights_texture: ImageTexture
+var _ground_texture: ImageTexture
+var _flat_height := NAN
 var _height_range := Vector2(-1.0, 1.0)
 var _origin := Vector3.ZERO
-var _last_camera_position := Vector3(INF, INF, INF)
 
 
 func _enter_tree() -> void:
 	add_to_group(&"surface_displacement_field")
-	if _mesh_instance == null:
+	if _mesh_instance != null:
+		_mesh_instance.visible = not _baking
+	else:
 		_material = ShaderMaterial.new()
 		_material.shader = _field_shader(_quality)
 		_mesh_instance = MeshInstance3D.new()
@@ -159,10 +160,9 @@ static func _bake_and_apply(field_ref: WeakRef, meshes: Array[MeshInstance3D], b
 
 func _finish_bake(result: SDGroundBake) -> void:
 	_baking = false
-	if not is_inside_tree():
-		return
 	ground_bake = result
-	_mesh_instance.visible = is_visible_in_tree()
+	# Out of the tree the mesh instance is not drawn anyway; _enter_tree() shows it again.
+	_mesh_instance.visible = true
 	baked.emit()
 
 
@@ -250,9 +250,12 @@ func _process(_delta: float) -> void:
 		_ground_dirty = false
 		_apply_ground()
 		_params_dirty = true
-	if Engine.is_editor_hint():
+	if Engine.is_editor_hint() and Engine.get_process_frames() % 30 == 0:
 		# Parameters may have been edited on the layer materials.
 		_apply_layers()
+	if ground_bake == null and global_position.y != _flat_height:
+		# The flat ground follows the node.
+		_ground_dirty = true
 	var cam := _find_camera()
 	if cam == null:
 		return
@@ -264,7 +267,6 @@ func _process(_delta: float) -> void:
 	_mesh_instance.global_transform = Transform3D(Basis.IDENTITY, _origin)
 	_material.set_shader_parameter("field_origin", _origin)
 	_material.set_shader_parameter("field_camera", p)
-	_last_camera_position = p
 
 
 func _find_camera() -> Camera3D:
@@ -304,23 +306,22 @@ func _apply_params() -> void:
 
 
 func _apply_ground() -> void:
-	if ground_bake != null and ground_bake.height != null:
-		_height_texture = ImageTexture.create_from_image(ground_bake.height)
-		_weights_texture = ImageTexture.create_from_image(ground_bake.weights)
+	if ground_bake != null and ground_bake.data != null:
+		_ground_texture = ImageTexture.create_from_image(ground_bake.data)
 		_material.set_shader_parameter("ground_mode", 1)
-		_material.set_shader_parameter("ground_height", _height_texture)
-		_material.set_shader_parameter("ground_weights", _weights_texture)
+		_material.set_shader_parameter("ground_data", _ground_texture)
 		_material.set_shader_parameter("ground_rect", Vector4(ground_bake.origin.x, ground_bake.origin.y, ground_bake.texel_size, 0.0))
+		_material.set_shader_parameter("ground_decode", Vector4(ground_bake.height_min, ground_bake.height_range, ground_bake.step_limit, 0.0))
 		_height_range = ground_bake.get_height_range()
+		_flat_height = NAN
 	else:
-		_height_texture = null
-		_weights_texture = null
+		_ground_texture = null
 		_material.set_shader_parameter("ground_mode", 0)
-		_material.set_shader_parameter("ground_height", null)
-		_material.set_shader_parameter("ground_weights", null)
+		_material.set_shader_parameter("ground_data", null)
 		var y := global_position.y if is_inside_tree() else 0.0
 		_material.set_shader_parameter("ground_rect", Vector4(0.0, 0.0, 1.0, y))
 		_height_range = Vector2(y, y)
+		_flat_height = y
 
 
 static func _param(material: ShaderMaterial, name: String) -> Variant:

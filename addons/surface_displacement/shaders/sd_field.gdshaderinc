@@ -11,9 +11,10 @@
 // next ring's (m = 0). Edge vertices force m = 1 / m = 0, whatever the distances say.
 //
 // Height, "up only": y = ground + lift + fade * sum_i(w_i * height_m_i * h_i), where ground and
-// the layer weights w come from the baked ground (or a flat plane) and h_i from each layer's
-// height map at the mip that matches the vertex spacing. Where no layer is displaceable, the
-// vertices dive `push_down` below the ground so the original ground mesh hides them.
+// the layer weights w come from the baked ground or a flat plane (sd_ground.gdshaderinc) and h_i
+// from each layer's height map at the mip that matches the vertex spacing. Where no layer is
+// displaceable, the vertices dive `push_down` below the ground so the original ground mesh hides
+// them. The vertices pass the layer weights on to the fragments.
 //
 // The geometry can only carry relief down to its vertex spacing (2 cm at High): a gravel's
 // individual stones are finer than that. So the geometry is a proxy (coverage, silhouettes, real
@@ -26,6 +27,7 @@
 // light()).
 
 #include "res://addons/surface_displacement/shaders/sd_common.gdshaderinc"
+#include "res://addons/surface_displacement/shaders/sd_ground.gdshaderinc"
 
 #define SD_FIELD_MAX_LEVELS 8
 #define SD_FIELD_LAYERS 4
@@ -38,11 +40,6 @@ uniform vec4 level_morph[SD_FIELD_MAX_LEVELS]; // per ring: morph start (m), mor
 uniform vec2 amp_fade = vec2(10.0, 12.0);      // relief fades out between these distances (m)
 uniform float lift = 0.002;
 uniform float push_down = 0.1;
-// Ground: 0 = flat at ground_rect.w, 1 = baked height texture (texelFetch, bilinear in code).
-uniform int ground_mode = 0;
-uniform sampler2D ground_height : filter_nearest, repeat_disable;
-uniform vec4 ground_rect = vec4(0.0, 0.0, 0.1, 0.0); // origin x, origin z, texel size (m), flat height
-uniform sampler2D ground_weights : filter_linear, repeat_disable;
 // Layers (copied from the ground materials).
 uniform int layer_count = 1;
 uniform sampler2D layer_height[SD_FIELD_LAYERS] : filter_linear_mipmap, repeat_enable;
@@ -58,6 +55,8 @@ uniform vec4 layer_e[SD_FIELD_LAYERS]; // specular, steps scale, self-shadow str
 varying vec3 f_base_normal;
 varying float f_ground;
 varying float f_level;
+varying vec4 f_weights;        // normalised layer weights
+varying float f_displaceable;  // 0 = no layer here (the vertices dove under the ground)
 
 #ifdef SD_SELF_SHADOW
 varying vec2 f_ss_xz;
@@ -79,42 +78,7 @@ vec2 sd_layer_uv(int i, vec2 xz) {
 
 float sd_layer_h(int i, vec2 xz, float lod) {
 	float h = textureLod(layer_height[i], sd_layer_uv(i, xz), lod).r;
-	return clamp((h - layer_a[i].y) / max(layer_a[i].z - layer_a[i].y, 1e-5), 0.0, 1.0);
-}
-
-// Baked ground height at world xz, bilinear from texel centres, clamped to the bake.
-float sd_ground_at(vec2 xz) {
-	if (ground_mode == 0) {
-		return ground_rect.w;
-	}
-	ivec2 size = textureSize(ground_height, 0);
-	vec2 t = clamp((xz - ground_rect.xy) / ground_rect.z - 0.5, vec2(0.0), vec2(size) - 1.0);
-	ivec2 i0 = ivec2(floor(t));
-	ivec2 i1 = min(i0 + 1, size - 1);
-	vec2 f = t - vec2(i0);
-	float a = texelFetch(ground_height, i0, 0).r;
-	float b = texelFetch(ground_height, ivec2(i1.x, i0.y), 0).r;
-	float c = texelFetch(ground_height, ivec2(i0.x, i1.y), 0).r;
-	float d = texelFetch(ground_height, i1, 0).r;
-	return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
-}
-
-vec4 sd_ground_weights_at(vec2 xz) {
-	if (ground_mode == 0) {
-		return vec4(1.0, 0.0, 0.0, 0.0);
-	}
-	vec2 size = vec2(textureSize(ground_weights, 0));
-	return textureLod(ground_weights, (xz - ground_rect.xy) / (ground_rect.z * size), 0.0);
-}
-
-vec3 sd_ground_normal_at(vec2 xz) {
-	if (ground_mode == 0) {
-		return vec3(0.0, 1.0, 0.0);
-	}
-	float e = ground_rect.z;
-	float hx = sd_ground_at(xz + vec2(e, 0.0)) - sd_ground_at(xz - vec2(e, 0.0));
-	float hz = sd_ground_at(xz + vec2(0.0, e)) - sd_ground_at(xz - vec2(0.0, e));
-	return normalize(vec3(-hx, 2.0 * e, -hz));
+	return sd_remap_height(h, layer_a[i].yz);
 }
 
 // Relief above the ground (m) at world xz: sum over layers of weight * height_m * h. `lod` is
@@ -142,9 +106,9 @@ float sd_field_amp(vec4 w) {
 	return a;
 }
 
-// Normalised layer weights, and how displaceable the point is (0 = not at all).
-vec4 sd_field_weights(vec2 xz, out float displaceable) {
-	vec4 w = sd_ground_weights_at(xz);
+// Normalised layer weights from the ground's, and how displaceable the point is (0 = not at all).
+vec4 sd_field_weights(vec4 ground_weights, out float displaceable) {
+	vec4 w = ground_weights;
 	vec4 mask = vec4(0.0);
 	for (int i = 0; i < SD_FIELD_LAYERS; i++) {
 		mask[i] = i < layer_count ? 1.0 : 0.0;
@@ -207,19 +171,22 @@ void vertex() {
 	vec2 xz = field_origin.xz + local_xz;
 	// log2 of the metres between vertices: one level coarser at m = 1, as the next ring samples.
 	float lod = log2(base_spacing) + (level + m);
+	SDGround g = sd_ground(xz);
 	float displaceable;
-	vec4 w = sd_field_weights(xz, displaceable);
-	float ground = sd_ground_at(xz);
+	vec4 w = sd_field_weights(g.weights, displaceable);
+	float ground = g.height;
 	// The field's own fade towards its edge, times the parallax distance fade the materials use,
 	// so the geometry never shows more relief than the parallax shading around it.
 	float view_distance = distance(vec3(xz.x, ground, xz.y), field_camera);
 	float y = ground + lift + sd_field_fade(xz) * sd_fade(view_distance) * sd_field_relief(xz, lod, w);
 	y = mix(ground - push_down, y, displaceable);
 	VERTEX = vec3(local_xz.x, y - field_origin.y, local_xz.y);
-	f_base_normal = sd_ground_normal_at(xz);
+	f_base_normal = g.normal;
 	NORMAL = f_base_normal;
 	f_ground = ground;
 	f_level = level + m;
+	f_weights = w;
+	f_displaceable = displaceable;
 }
 
 void fragment() {
@@ -228,14 +195,19 @@ void fragment() {
 	vec3 wpos = (INV_VIEW_MATRIX * vec4(VERTEX, 1.0)).xyz;
 	vec3 v = view_to_world * VIEW;
 	vec3 n = normalize(f_base_normal);
-	float displaceable;
-	vec4 w = sd_field_weights(wpos.xz, displaceable);
+	float displaceable = f_displaceable;
+	vec4 w = f_weights;
 	float pom_fade = sd_fade(length(VERTEX));
 	float amp = sd_field_amp(w) * pom_fade;
-	// log2 of metres per pixel on the ground (uniform control flow).
-	vec3 dpdx = dFdx(wpos);
-	vec3 dpdy = dFdy(wpos);
-	float pix_m = max(length(dpdx.xz), length(dpdy.xz));
+	// log2 of metres per pixel on the ground (uniform control flow). The footprint is taken on the
+	// ground plane under the proxy: the view ray's point there is the same for every point of the
+	// ray, so its derivatives are smooth across the proxy's bumps and silhouettes (the proxy's own
+	// derivatives jump there and would blur the march and the textures), and equal the ground
+	// material's around the field.
+	vec2 plane_xz = wpos.xz - v.xz * (n.y / max(dot(n, v), SD_MIN_NDOTV)) * (wpos.y - (f_ground + lift));
+	vec2 dpdx = dFdx(plane_xz);
+	vec2 dpdy = dFdy(plane_xz);
+	float pix_m = max(length(dpdx), length(dpdy));
 	float lod = log2(max(pix_m, 1e-6)) + sd_pom_range.z;
 	int main_layer = 0;
 	for (int i = 1; i < SD_FIELD_LAYERS; i++) {
@@ -246,6 +218,7 @@ void fragment() {
 	vec2 xz_hit = wpos.xz;
 	// Height of this fragment above the ground (the proxy's relief).
 	float z_hit = wpos.y - (f_ground + lift);
+	vec3 hit = wpos;
 	float steps_used = 0.0;
 #ifdef SD_POM
 	// March the full-resolution relief over the whole slab [0, amp] along the true view ray,
@@ -255,10 +228,13 @@ void fragment() {
 		vec2 dxz_dz = v.xz * (n.y / nv);
 		int steps = sd_field_step_count(dot(n, v), pom_fade, w);
 		vec2 base_xz = wpos.xz - dxz_dz * z_hit;
+		float z_proxy = z_hit;
 		z_hit = sd_march(base_xz, dxz_dz, amp, 0.0, w * pom_fade, lod, steps, int(sd_pom_steps.z), xz_hit, steps_used);
+		// The hit on the view ray (on sloped ground the ground height under xz_hit differs from
+		// f_ground, so it is not rebuilt from xz_hit and z_hit).
+		hit = wpos + v * ((z_hit - z_proxy) * n.y / nv);
 	}
 #endif
-	vec3 hit = vec3(xz_hit.x, f_ground + lift + z_hit, xz_hit.y);
 	vec3 albedo = vec3(0.0);
 	vec3 orm = vec3(0.0);
 	vec3 nsum = vec3(0.0);
@@ -268,8 +244,8 @@ void fragment() {
 			continue;
 		}
 		vec2 uv = sd_layer_uv(i, xz_hit);
-		vec2 ddx = sd_layer_uv(i, wpos.xz + dpdx.xz) - sd_layer_uv(i, wpos.xz);
-		vec2 ddy = sd_layer_uv(i, wpos.xz + dpdy.xz) - sd_layer_uv(i, wpos.xz);
+		vec2 ddx = sd_layer_uv(i, wpos.xz + dpdx) - sd_layer_uv(i, wpos.xz);
+		vec2 ddy = sd_layer_uv(i, wpos.xz + dpdy) - sd_layer_uv(i, wpos.xz);
 		albedo += w[i] * textureGrad(layer_albedo[i], uv, ddx, ddy).rgb * layer_d[i].rgb;
 		vec3 o = textureGrad(layer_orm[i], uv, ddx, ddy).rgb;
 		orm += w[i] * vec3(mix(1.0, o.r, layer_c[i].z), o.g * layer_c[i].w, o.b * layer_d[i].a);
@@ -327,8 +303,10 @@ void fragment() {
 		} else if (debug_view == 4) {
 			debug_color = normal_world * 0.5 + 0.5;
 		} else if (debug_view == 6) {
-			// World height relative to sd_debug.z, in units of sd_debug.y (tests read it exactly).
-			debug_color = vec3((wpos.y - sd_debug.z) / max(sd_debug.y, 1e-6), fract(f_level), f_level / 8.0);
+			// World height of the (marched) surface point relative to sd_debug.z, in units of
+			// sd_debug.y: the vertex height where no march runs, else the relief hit on the view
+			// ray (tests read both exactly).
+			debug_color = vec3((hit.y - sd_debug.z) / max(sd_debug.y, 1e-6), fract(f_level), f_level / 8.0);
 		} else if (debug_view == 7) {
 			debug_color = vec3(1.0);
 		} else if (debug_view == 8) {

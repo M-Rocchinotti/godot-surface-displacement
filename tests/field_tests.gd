@@ -26,6 +26,8 @@ func _initialize() -> void:
 
 func _run() -> void:
 	await _test("vertex_heights_match_the_height_map", test_vertex_heights)
+	await _test("baked_ground_matches_the_cpu_reference", test_baked_ground)
+	await _test("field_pom_matches_ray_traced_height_field", test_field_pom)
 	await _test("no_cracks_between_rings", test_no_cracks)
 	await _test("geometry_does_not_swim", test_no_swimming)
 	await _test("edge_blends_into_pom", test_edge_seam)
@@ -167,12 +169,179 @@ func test_vertex_heights() -> void:
 	SDGlobals.set_value(SDGlobals.DEBUG, Vector4(0, 0.1, 0, 0))
 
 
+## The field over a baked ground with a gentle slope, a 6 cm kerb, a cell without ground and
+## ground that is none of the field's layers: every vertex (away from morph bands and the fade)
+## must sit where SDGroundBake.sample() - the CPU twin of sd_ground.gdshaderinc - puts it:
+## mix(ground - push_down, ground + lift + relief, smoothstep(0.35, 0.65, weight sum)).
+func test_baked_ground() -> void:
+	var tile := 1.28
+	var amp := 0.04
+	var field := Harness.make_wave_field(256)
+	h.new_debug_scene()
+	var tracked := add_tracked_camera(Vector3(0.37, 1.7, -0.23))
+	var f := add_field(field, tile, amp, tracked)
+	var texel := 0.05
+	var cells := Vector2i(200, 200)
+	var bake_origin := Vector2(-5.0, -5.0)
+	var heights := PackedFloat32Array()
+	var layer_ids := PackedInt32Array()
+	for y in cells.y:
+		for x in cells.x:
+			var p := bake_origin + (Vector2(x, y) + Vector2(0.5, 0.5)) * texel
+			heights.append(0.004 * p.x - 0.003 * p.y + (0.06 if p.x > 1.5 else 0.0))
+			var id := 0
+			if p.y > 2.2:
+				id = -1
+			if p.distance_to(Vector2(-1.2, 0.9)) < 0.12:
+				id = -2
+			layer_ids.append(id)
+	var bake := SDGroundBake.from_arrays(cells, heights, layer_ids, bake_origin, texel)
+	f.ground_bake = bake
+	await h.frames(3)
+	var snap := pow(2.0, LEVELS) * S0
+	var origin := Vector2(floorf(0.37 / snap + 0.5) * snap, floorf(-0.23 / snap + 0.5) * snap)
+	var centre := origin - Vector2(0.5, 0.5) * S0
+	add_top_camera(centre, S0)
+	# World height relative to -0.2 m in units of 0.2 m: values 0.3-1.7, where half floats keep
+	# 0.2 mm.
+	var reference := -0.2
+	var scale := 0.2
+	SDGlobals.set_value(SDGlobals.DEBUG, Vector4(Harness.DEBUG_WORLD_HEIGHT, scale, reference, 0.0))
+	await h.frames(5)
+	var img := await h.capture()
+	var mips := []
+	for k in LEVELS:
+		mips.append(Harness.field_mip(field, 2 + k))
+	var push: float = f.get_material().get_shader_parameter("push_down")
+	var fade := f.get_fade_range()
+	var errors := []
+	var kinds := {"displaced": 0, "dived": 0, "blended": 0}
+	# Every pixel (one per innermost vertex): the partly displaceable vertices lie in bands a
+	# fraction of a texel wide.
+	for py in SIZE.y:
+		for px in SIZE.x:
+			var xz := pixel_to_xz(Vector2i(px, py), centre, S0)
+			var lat := ((xz - origin) / S0).round()
+			var ring := maxf(absf(lat.x), absf(lat.y))
+			var k := 0
+			while k < LEVELS - 1 and ring > N / 2.0 * pow(2.0, k):
+				k += 1
+			var step := pow(2.0, k)
+			if fposmod(lat.x, step) != 0.0 or fposmod(lat.y, step) != 0.0:
+				continue
+			if is_equal_approx(ring, N / 2.0 * step) or (k > 0 and is_equal_approx(ring, N / 4.0 * step)):
+				continue
+			var d := xz.distance_to(Vector2(tracked.position.x, tracked.position.z))
+			if d >= f.get_morph_range(k).x or d >= fade.x:
+				continue
+			var s := bake.sample(xz)
+			var w: Color = s["weights"]
+			var displaceable := smoothstep(0.35, 0.65, w.r)
+			var ground: float = s["height"]
+			var want := lerpf(ground - push, ground + f.lift + amp * Harness.sample_field(mips[k], xz / tile), displaceable)
+			var got := reference + img.get_pixel(px, py).r * scale
+			errors.append(absf(got - want))
+			if displaceable >= 1.0:
+				kinds["displaced"] += 1
+			elif displaceable <= 0.0:
+				kinds["dived"] += 1
+			else:
+				kinds["blended"] += 1
+	var worst := percentile(errors, 1.0)
+	print("  %d vertices checked %s, largest error %.4f mm" % [errors.size(), kinds, worst * 1000.0])
+	check(kinds["displaced"] > 1000 and kinds["dived"] > 1000 and kinds["blended"] > 2, "displaced, dived and partly displaced vertices are all checked")
+	check(worst < 0.0003, "every vertex is where the CPU reference of the baked ground puts it (within 0.3 mm)")
+	SDGlobals.set_value(SDGlobals.DEBUG, Vector4(0, 0.1, 0, 0))
+
+
 static func percentile(values: Array, q: float) -> float:
 	if values.is_empty():
 		return INF
 	var sorted := values.duplicate()
 	sorted.sort()
 	return sorted[clampi(int(q * (sorted.size() - 1) + 0.5), 0, sorted.size() - 1)]
+
+
+# --- 1b. The field's fragments march the relief like the surfaces -------------------------------
+
+## The field's own parallax (its fragments march the full relief over the whole slab along the
+## view ray) against the CPU ray / height-field intersection the surface test uses: the hit
+## height (debug view 6) from a steep, a 45-degree and a grazing view; then its hard
+## self-shadow against the CPU height-field shadow.
+func test_field_pom() -> void:
+	var tile := 1.0
+	var amp := 0.05
+	var field := Harness.make_stone_field(512, 70, 7)
+	var surface := {"point": Vector3(0.0, 0.002, 0.0), "normal": Vector3.UP, "axis": Vector3.UP, "amp": amp, "center": 0.0, "field": field,
+			"uv": func(p: Vector3) -> Vector2: return Vector2(p.x, p.z) / tile}
+	var views := {"steep": Vector3(0.25, 1.0, 0.35), "45 deg": Vector3(0.3, 0.75, 0.75), "grazing": Vector3(0.2, 0.42, 1.0)}
+	# Mip 0 forced (LOD bias -10) like the surfaces' test: the reference traces the full-size map.
+	SDGlobals.set_value(SDGlobals.POM_RANGE, Vector4(1000, 2000, -10, 99))
+	var worst := 0.0
+	for view_name: String in views:
+		h.new_debug_scene()
+		var cam := h.add_camera((views[view_name] as Vector3).normalized() * 1.3, Vector3.ZERO, 60.0)
+		var f := add_field(field, tile, amp, cam, SDMaterials.Quality.POM)
+		var reference := -0.05
+		var scale := 0.1
+		SDGlobals.set_value(SDGlobals.DEBUG, Vector4(Harness.DEBUG_WORLD_HEIGHT, scale, reference, 0.0))
+		await h.frames(4)
+		var img := await h.capture()
+		var errors := []
+		for py in range(12, SIZE.y, 24):
+			for px in range(12, SIZE.x, 24):
+				var o := cam.project_ray_origin(Vector2(px, py) + Vector2(0.5, 0.5))
+				var d := cam.project_ray_normal(Vector2(px, py) + Vector2(0.5, 0.5))
+				var ref := Harness.trace_height_field(o, d, surface)
+				if ref.is_empty():
+					continue
+				var raster: Vector3 = ref["raster"]
+				if absf(raster.x) > 1.6 or absf(raster.z) > 1.6:
+					continue
+				var y := reference + img.get_pixel(px, py).r * scale
+				var got := o + d * ((y - o.y) / d.y)
+				errors.append(got.distance_to(ref["hit"]))
+		var p50 := percentile(errors, 0.5) * 1000.0
+		var p90 := percentile(errors, 0.9) * 1000.0
+		worst = maxf(worst, p90)
+		print("  %-8s %4d px  median %.3f mm  p90 %.3f mm" % [view_name, errors.size(), p50, p90])
+		check(errors.size() >= 150 and p50 < 0.2 and p90 < 0.4, "%s: the field's hit within 0.2 mm (median) / 0.4 mm (90 %%) of the traced height field" % view_name)
+		f.free()
+	SDGlobals.set_value(SDGlobals.DEBUG, Vector4(0, 0.1, 0, 0))
+
+	# Hard self-shadow, as the surfaces' test does it.
+	h.new_debug_scene()
+	var sun := h.add_sun(25.0, 60.0, false)
+	sun.light_energy = 1.0
+	var cam := h.add_camera(Vector3(0.1, 1.3, 0.6), Vector3(0.0, 0.0, 0.0))
+	add_field(field, tile, amp, cam, SDMaterials.Quality.POM_SELF_SHADOW)
+	SDGlobals.set_value(SDGlobals.SHADOW, Vector4(16, 20, 0, 1))
+	SDGlobals.set_value(SDGlobals.DEBUG, Vector4(Harness.DEBUG_SELF_SHADOW, 0.1, 0.0, 0.0))
+	await h.frames(4)
+	var img := await h.capture()
+	var to_sun := Harness.light_direction(sun)
+	var agree := 0
+	var total := 0
+	var shadowed := 0
+	for py in range(4, SIZE.y, 10):
+		for px in range(4, SIZE.x, 10):
+			var o := cam.project_ray_origin(Vector2(px, py) + Vector2(0.5, 0.5))
+			var d := cam.project_ray_normal(Vector2(px, py) + Vector2(0.5, 0.5))
+			var ref := Harness.trace_height_field(o, d, surface)
+			if ref.is_empty():
+				continue
+			var hit: Vector3 = ref["hit"]
+			if absf(hit.x) > 1.5 or absf(hit.z) > 1.5:
+				continue
+			var want := Harness.height_field_shadowed(hit, to_sun, surface, 0.01 * amp)
+			total += 1
+			shadowed += 1 if want else 0
+			agree += 1 if want == (img.get_pixel(px, py).r < 0.5) else 0
+	var share := float(agree) / maxf(total, 1.0)
+	print("  self-shadow: %d pixels, %.1f %% in traced shadow, classification agrees on %.1f %%" % [total, 100.0 * shadowed / maxf(total, 1.0), share * 100.0])
+	check(shadowed > total / 10 and share > 0.98, "the field's hard self-shadow agrees with a traced height-field shadow on more than 98 % of pixels")
+	SDGlobals.set_value(SDGlobals.SHADOW, Vector4(8, 20, 0, 1))
+	SDGlobals.set_value(SDGlobals.DEBUG, Vector4(0, 0.1, 0, 0))
 
 
 # --- 2. No cracks -------------------------------------------------------------------------------
@@ -258,7 +427,9 @@ func test_no_swimming() -> void:
 		previous = img
 	print("  innermost ring (%d samples): largest height change %.4f mm; morph band: largest change per 1 cm step %.3f mm" % [still_count, still_max * 1000.0, band_step_max * 1000.0])
 	check(still_count > 10000 and still_max < 0.00002, "near the camera the geometry does not move at all while the camera walks")
-	check(band_step_max < 0.004, "in the morph band it changes by less than 4 mm per 1 cm step (no pops when the grid snaps)")
+	# A 1 cm step moves the morph by 2.6 % of its 0.38 m band; with 5 cm of relief that bounds the
+	# change at about 1.3 mm.
+	check(band_step_max < 0.002, "in the morph band it changes by less than 2 mm per 1 cm step (no pops when the grid snaps)")
 	SDGlobals.set_value(SDGlobals.DEBUG, Vector4(0, 0.1, 0, 0))
 
 
@@ -296,6 +467,7 @@ func test_edge_seam() -> void:
 	var fade := f.get_fade_range()
 	var band_diff := 0.0
 	var band_n := 0
+	var inner := []
 	var beyond := []
 	for py in range(0, SIZE.y, 2):
 		for px in range(0, SIZE.x, 2):
@@ -312,9 +484,16 @@ func test_edge_seam() -> void:
 			if dist > fade.y - 1.0 and dist < fade.y and in_grid:
 				band_diff += absf(a - b) / maxf(b, 0.01)
 				band_n += 1
+			elif dist > 2.0 and dist < fade.x and in_grid:
+				inner.append(absf(a - b) / maxf(b, 0.01))
 			elif absf(hit.x - origin.x) > f.get_reach() + 0.5 or absf(hit.z - origin.z) > f.get_reach() + 0.5:
 				beyond.append(absf(a - b) / maxf(b, 0.01))
 	var mean_band := band_diff / maxf(band_n, 1.0)
+	var inner_mean := 0.0
+	for v: float in inner:
+		inner_mean += v
+	inner_mean /= maxf(inner.size(), 1.0)
+	print("  inside the grid (2 m to the fade, %d px): mean luminance difference %.2f %%, median %.2f %%" % [inner.size(), inner_mean * 100.0, percentile(inner, 0.5) * 100.0])
 	print("  %d pixels in the last metre before the relief fades out: mean luminance difference %.2f %%; beyond the grid (%d px): 99.9th percentile %.3f %%, largest %.3f %%" % [
 			band_n, mean_band * 100.0, beyond.size(), percentile(beyond, 0.999) * 100.0, percentile(beyond, 1.0) * 100.0])
 	check(band_n > 1000 and mean_band < 0.02, "at its edge the field looks like the parallax ground it covers (within 2 %)")
@@ -524,9 +703,15 @@ func test_demo_scenes() -> void:
 	h.make_viewport(SIZE, false)
 	for index in Builder.SCENE_NAMES.size():
 		var scene := Builder.build(index)
+		var start := Time.get_ticks_msec()
 		h.viewport.add_child(scene)
 		(scene.get_node("Camera") as Camera3D).current = true
 		var sd := scene.get_node("SurfaceDisplacement") as SurfaceDisplacement
+		for field: DisplacementField3D in scene.find_children("*", "DisplacementField3D", true, false):
+			if field.is_baking():
+				await field.baked
+			if field.ground_bake != null:
+				print("  %s: ground bake of %s texels in %d ms" % [Builder.SCENE_NAMES[index], field.ground_bake.get_size(), Time.get_ticks_msec() - start])
 		var back_facing := 0
 		for node in scene.find_children("*", "MeshInstance3D", true, false):
 			if node.is_in_group(&"sd_ground"):

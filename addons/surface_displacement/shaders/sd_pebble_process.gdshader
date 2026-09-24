@@ -2,12 +2,17 @@
 // slot `INDEX` belongs to window cell INDEX / per_cell and takes its position, size and rotation
 // from a hash of the cell's WORLD coordinates and the slot, so a pebble stays where it is while
 // the window moves and cells that leave on one side come back on the other with their own
-// pebbles. Density comes from the ground's layer weights (per-layer density) and prefers the
-// height map's valleys, where loose stones settle. Nothing is read back to the CPU.
+// pebbles. Density comes from the ground's layer weights (per-layer density, normalised and
+// faded like the field's) and prefers the height map's valleys, where loose stones settle.
+// Nothing is read back to the CPU.
 shader_type particles;
 render_mode disable_velocity, disable_force;
 
 #define SD_FIELD_LAYERS 4
+
+#include "res://addons/surface_displacement/shaders/sd_common.gdshaderinc"
+// Ground (ground_mode, ground_data, ground_rect, ground_decode), copied from the parent field.
+#include "res://addons/surface_displacement/shaders/sd_ground.gdshaderinc"
 
 uniform vec3 camera_position;
 uniform vec2 window_cell;          // world cell index of the window's first cell
@@ -20,11 +25,7 @@ uniform vec2 size_range = vec2(0.012, 0.035);
 uniform float valley_bias = 2.0;
 uniform float lift = 0.002;
 uniform float base_spacing = 0.02;
-// Ground and layers, copied from the parent DisplacementField3D.
-uniform int ground_mode = 0;
-uniform sampler2D ground_height : filter_nearest, repeat_disable;
-uniform vec4 ground_rect = vec4(0.0, 0.0, 0.1, 0.0);
-uniform sampler2D ground_weights : filter_linear, repeat_disable;
+// Layers, copied from the parent DisplacementField3D.
 uniform int layer_count = 1;
 uniform sampler2D layer_height[SD_FIELD_LAYERS] : filter_linear_mipmap, repeat_enable;
 uniform vec4 layer_a[SD_FIELD_LAYERS];
@@ -53,30 +54,6 @@ vec2 sd_layer_uv(int i, vec2 xz) {
 	return vec2(cs.x * q.x - cs.y * q.y, cs.y * q.x + cs.x * q.y) * layer_b[i].xy;
 }
 
-float sd_ground_at(vec2 xz) {
-	if (ground_mode == 0) {
-		return ground_rect.w;
-	}
-	ivec2 size = textureSize(ground_height, 0);
-	vec2 t = clamp((xz - ground_rect.xy) / ground_rect.z - 0.5, vec2(0.0), vec2(size) - 1.0);
-	ivec2 i0 = ivec2(floor(t));
-	ivec2 i1 = min(i0 + 1, size - 1);
-	vec2 f = t - vec2(i0);
-	float a = texelFetch(ground_height, i0, 0).r;
-	float b = texelFetch(ground_height, ivec2(i1.x, i0.y), 0).r;
-	float c = texelFetch(ground_height, ivec2(i0.x, i1.y), 0).r;
-	float d = texelFetch(ground_height, i1, 0).r;
-	return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
-}
-
-vec4 sd_ground_weights_at(vec2 xz) {
-	if (ground_mode == 0) {
-		return vec4(1.0, 0.0, 0.0, 0.0);
-	}
-	vec2 size = vec2(textureSize(ground_weights, 0));
-	return textureLod(ground_weights, (xz - ground_rect.xy) / (ground_rect.z * size), 0.0);
-}
-
 void process() {
 	int slot = int(INDEX) % per_cell;
 	int cell = int(INDEX) / per_cell;
@@ -85,7 +62,13 @@ void process() {
 	uint state = sd_hash(uint(world_cell.x) * 73856093u ^ uint(world_cell.y) * 19349663u ^ uint(slot) * 83492791u);
 	vec2 xz = (vec2(world_cell) + vec2(sd_rand(state), sd_rand(state))) * cell_size;
 	float accept = sd_rand(state);
-	vec4 w = sd_ground_weights_at(xz);
+	SDGround g = sd_ground(xz);
+	// The field's weights (sd_field_weights): only its layers, normalised, faded where the ground
+	// is only partly displaceable.
+	vec4 w = g.weights * vec4(lessThan(ivec4(0, 1, 2, 3), ivec4(layer_count)));
+	float w_sum = w.x + w.y + w.z + w.w;
+	float displaceable = smoothstep(0.35, 0.65, w_sum);
+	w = w_sum > 1e-4 ? w / w_sum : vec4(0.0);
 	float wanted = 0.0;
 	float relief = 0.0;
 	float relief_proxy = 0.0;
@@ -98,11 +81,11 @@ void process() {
 		}
 		vec2 uv = sd_layer_uv(i, xz);
 		float h = textureLod(layer_height[i], uv, 0.0).r;
-		h = clamp((h - layer_a[i].y) / max(layer_a[i].z - layer_a[i].y, 1e-5), 0.0, 1.0);
+		h = sd_remap_height(h, layer_a[i].yz);
 		// The field's innermost geometry samples one texel per vertex; pebbles must not sink
 		// below it (its depth hides them even where the parallax shows a deeper gap).
 		float hp = textureLod(layer_height[i], uv, max(log2(base_spacing) + layer_e[i].w, 0.0)).r;
-		hp = clamp((hp - layer_a[i].y) / max(layer_a[i].z - layer_a[i].y, 1e-5), 0.0, 1.0);
+		hp = sd_remap_height(hp, layer_a[i].yz);
 		relief += w[i] * layer_a[i].x * h;
 		relief_proxy += w[i] * layer_a[i].x * hp;
 		wanted += w[i] * layer_density[i];
@@ -112,8 +95,9 @@ void process() {
 			h_main = h;
 		}
 	}
-	// Valleys (low h) collect loose stones: acceptance falls with height.
-	wanted *= density * pow(1.0 - h_main, valley_bias);
+	// Valleys (low h) collect loose stones: acceptance falls with height (max(): pow(0, 0) is
+	// undefined in GLSL, and valley_bias may be 0).
+	wanted *= density * displaceable * pow(max(1.0 - h_main, 1e-4), valley_bias);
 	float d = distance(xz, camera_position.xz);
 	// Pebbles shrink away between half the radius and the radius: beyond a few metres a 3 cm stone
 	// is a few pixels and reads as noise.
@@ -135,7 +119,7 @@ void process() {
 		// Resting on the relief (or the field's coarser surface where that is higher), sunk in to
 		// about 40 % of its height: a pebble standing on top of the gravel shows mostly its side,
 		// which reads as a dark speck against the lit stone tops when the sun is behind it.
-		float y = sd_ground_at(xz) + lift + max(relief, relief_proxy) + s.y * 0.1;
+		float y = g.height + lift + max(relief, relief_proxy) + s.y * 0.1;
 		TRANSFORM = mat4(vec4(basis[0], 0.0), vec4(basis[1], 0.0), vec4(basis[2], 0.0), vec4(xz.x, y, xz.y, 1.0));
 		COLOR = vec4(vec3(0.8 + 0.35 * sd_rand(state)), 1.0);
 		CUSTOM = vec4(float(layer), sd_rand(state), 0.0, 0.0);

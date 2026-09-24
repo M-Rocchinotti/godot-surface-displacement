@@ -25,6 +25,7 @@ COMMON = SH + "sd_common.gdshaderinc"
 MARCH = SH + "sd_march.gdshaderinc"
 SURFACE = SH + "sd_surface.gdshaderinc"
 FIELD_SH = SH + "sd_field.gdshaderinc"
+GROUND = SH + "sd_ground.gdshaderinc"
 PEBBLES = SH + "sd_pebble_process.gdshader"
 FIELD = "addons/surface_displacement/nodes/displacement_field_3d.gd"
 MANAGER = "addons/surface_displacement/nodes/surface_displacement.gd"
@@ -101,6 +102,25 @@ MUTATIONS = [
      [(BAKE, "			copy.set_surface_override_material(s, materials[layer_index(surface_material(mi, s), layers) + 1])",
        "			copy.set_surface_override_material(s, materials[0 * layer_index(surface_material(mi, s), layers)])")],
      [("field", "bake")]),
+    ("inverted remap flattens", "height_remap (1, 0) clamps its negative span to 1e-5 (every height becomes 0)",
+     [(COMMON, "	span = abs(span) < 1e-5 ? 1e-5 : span;", "	span = max(span, 1e-5);")],
+     [("render", "inverted_height_remap")]),
+    ("field parallax sign", "the field's fragments march the view ray the wrong way",
+     [(FIELD_SH, "		vec2 dxz_dz = v.xz * (n.y / nv);", "		vec2 dxz_dz = -v.xz * (n.y / nv);")],
+     [("field", "field_pom")]),
+    ("field self-shadow reversed", "the field's self-shadow march walks away from the light",
+     [(FIELD_SH, "	vec2 dxz_dz = vec2(dot(f_ss_x, l), dot(f_ss_z_axis, l)) * (na / max(n_dot_l, SD_MIN_NDOTV));",
+       "	vec2 dxz_dz = -vec2(dot(f_ss_x, l), dot(f_ss_z_axis, l)) * (na / max(n_dot_l, SD_MIN_NDOTV));")],
+     [("field", "field_pom")]),
+    ("ground steps not marked (shader)", "the field treats kerbs as ground (drapes a ramp over them)",
+     [(GROUND, "	float limit = ground_decode.z;", "	float limit = 1e9 + 0.0 * ground_decode.z;")],
+     [("field", "baked_ground")]),
+    ("ground steps not marked (CPU)", "SDGroundBake.sample() treats kerbs as ground",
+     [(BAKE, "			ok = ok and covered[n] and absf(h[n] - h[c]) <= step_limit", "			ok = ok and covered[n]")],
+     [("logic", "")]),
+    ("ground beyond the bake displaced", "texels outside the bake count as covered (the field continues past the ground's edge)",
+     [(GROUND, "		covered[k] = p == pc && d.a > 0.5;", "		covered[k] = d.a > 0.5;")],
+     [("field", "baked_ground")]),
     ("feature switch adds features", "a feature switch turns on what the preset leaves out",
      [(MANAGER, "	base.near_field_enabled = base.near_field_enabled and near_field", "	base.near_field_enabled = near_field")],
      [("logic", "")]),

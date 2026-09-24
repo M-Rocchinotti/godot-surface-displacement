@@ -48,7 +48,7 @@ extends Node3D
 
 const PROCESS_SHADER := preload("res://addons/surface_displacement/shaders/sd_pebble_process.gdshader")
 const PEBBLE_SHADER := preload("res://addons/surface_displacement/shaders/sd_pebble.gdshader")
-const COPIED_FROM_FIELD := ["ground_mode", "ground_height", "ground_rect", "ground_weights", "layer_count",
+const COPIED_FROM_FIELD := ["ground_mode", "ground_data", "ground_rect", "ground_decode", "layer_count",
 		"layer_height", "layer_a", "layer_b", "layer_c", "layer_e", "lift", "base_spacing"]
 const COPIED_TO_PEBBLES := ["layer_albedo", "layer_orm", "layer_b", "layer_c", "layer_d"]
 

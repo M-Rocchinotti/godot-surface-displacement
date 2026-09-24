@@ -1,72 +1,137 @@
 @tool
 class_name SDGroundBake
 extends Resource
-## The ground under a [DisplacementField3D]: world height and field-layer weights on a regular
-## grid, captured once from above.
+## The ground under a [DisplacementField3D]: world height and field layer on a regular grid,
+## captured once from above.
 ##
 ## [method bake] renders the meshes of a ground group into an orthographic top-down SubViewport of
 ## its own World3D (so nothing else in the scene is captured: no tunnel roofs, overhangs or
 ## props). Each surface writes its world height (16-bit fixed point over the bake's height range)
-## and which field layer its material is. Save the result as a resource (.res) from the editor;
-## a field without one bakes at runtime.
+## and which field layer its material is. The image is stored as captured; the field's shaders
+## (sd_ground.gdshaderinc) and [method sample] decode it, decide which texels are displaceable
+## (covered, and no step to a neighbour higher than [member step_limit]) and interpolate. Save
+## the result as a resource (.res) from the editor; a field without one bakes at runtime.
 
-## Height of the ground (m) at texel centres, [constant Image.FORMAT_RF].
-@export var height: Image
-## Coverage of field layers 0-3 (RGBA), [constant Image.FORMAT_RGBA8].
-@export var weights: Image
+## One texel per cell, [constant Image.FORMAT_RGBAH]: R, G = height high and low byte / 255, B =
+## layer code (field layer i + 1) / 8 (0 = ground that is none of the layers), A = 1 where a
+## ground mesh covered the cell.
+@export var data: Image
 ## World XZ of the corner of texel (0, 0).
 @export var origin := Vector2.ZERO
 ## Texel size in metres.
 @export var texel_size := 0.05
-## The layer materials the weights refer to, in order (resource paths or names), for validation.
+## The encoded heights span [height_min, height_min + height_range] (m).
+@export var height_min := 0.0
+@export var height_range := 1.0
+## A texel whose neighbour's height differs by more than this (m) is at a step (a kerb), not on a
+## height field: it is not displaceable.
+@export var step_limit := 0.04
+## The layer materials the codes refer to, in order (resource paths or names), for validation.
 @export var layer_names := PackedStringArray()
 
 const CAPTURE_SHADER := preload("res://addons/surface_displacement/shaders/sd_ground_capture.gdshader")
 const TILE_PX := 2048
+## Default steepest slope (rise / run between neighbouring texels) that still counts as ground:
+## 0.8 is 38.7 degrees, whatever the texel size.
+const STEP_SLOPE := 0.8
 
 
 func get_size() -> Vector2i:
-	return Vector2i.ZERO if height == null else height.get_size()
+	return Vector2i.ZERO if data == null else data.get_size()
 
 
 func get_rect() -> Rect2:
 	return Rect2(origin, Vector2(get_size()) * texel_size)
 
 
-## Minimum and maximum baked height.
+## The range the heights are encoded in (m): at least the ground's lowest and highest point.
 func get_height_range() -> Vector2:
-	if height == null:
-		return Vector2.ZERO
-	var data := height.get_data().to_float32_array()
+	return Vector2(height_min, height_min + height_range)
+
+
+## Height (m), normal and field-layer weights at world [param xz], exactly as the field's shaders
+## compute them (sd_ground.gdshaderinc): {"height": float, "normal": Vector3, "weights": Color}.
+func sample(xz: Vector2) -> Dictionary:
+	var size := get_size()
+	var t := (xz - origin) / texel_size - Vector2(0.5, 0.5)
+	var i0 := Vector2i(floori(t.x), floori(t.y))
+	var f := t - Vector2(i0)
+	var h := PackedFloat64Array()
+	h.resize(16)
+	var covered: Array[bool] = []
+	covered.resize(16)
+	var code := PackedInt32Array()
+	code.resize(16)
+	var covered_sum := 0.0
+	var covered_count := 0
+	for k in 16:
+		var p := i0 + Vector2i(k % 4 - 1, k / 4 - 1)
+		var pc := p.clamp(Vector2i.ZERO, size - Vector2i.ONE)
+		var d := data.get_pixel(pc.x, pc.y)
+		h[k] = height_min + (roundf(d.r * 255.0) * 256.0 + roundf(d.g * 255.0)) / 65535.0 * height_range
+		covered[k] = p == pc and d.a > 0.5
+		code[k] = roundi(d.b * 8.0)
+		if covered[k]:
+			covered_sum += h[k]
+			covered_count += 1
+	var fill := covered_sum / covered_count if covered_count > 0 else h[5]
+	for k in 16:
+		if not covered[k]:
+			h[k] = fill
+	var w: Array[Color] = []
+	var gradient: Array[Vector2] = []
+	for c: int in [5, 6, 9, 10]:
+		var ok := covered[c]
+		for n: int in [c - 1, c + 1, c - 4, c + 4]:
+			ok = ok and covered[n] and absf(h[n] - h[c]) <= step_limit
+		var one_hot := Color(0, 0, 0, 0)
+		if ok and code[c] >= 1 and code[c] <= 4:
+			one_hot[code[c] - 1] = 1.0
+		w.append(one_hot)
+		gradient.append(Vector2(h[c + 1] - h[c - 1], h[c + 4] - h[c - 4]) / (2.0 * texel_size))
+	var slope := gradient[0].lerp(gradient[1], f.x).lerp(gradient[2].lerp(gradient[3], f.x), f.y)
+	return {
+		"height": lerpf(lerpf(h[5], h[6], f.x), lerpf(h[9], h[10], f.x), f.y),
+		"normal": Vector3(-slope.x, 1.0, -slope.y).normalized(),
+		"weights": w[0].lerp(w[1], f.x).lerp(w[2].lerp(w[3], f.x), f.y),
+	}
+
+
+## Ground height (m) at world [param xz], see [method sample].
+func sample_height(xz: Vector2) -> float:
+	return sample(xz)["height"]
+
+
+## Field-layer weights (r = layer 0 ...) at world [param xz], see [method sample].
+func sample_weights(xz: Vector2) -> Color:
+	return sample(xz)["weights"]
+
+
+## A bake from arrays, e.g. procedural terrain (row-major, [param size].x values per row, row 0
+## at [param origin_xz].y): [param heights] in metres, [param layers] the field layer of each
+## cell (-1 = ground that is none of the layers, -2 = no ground).
+static func from_arrays(size: Vector2i, heights: PackedFloat32Array, layers: PackedInt32Array, origin_xz: Vector2,
+		texel: float, step_slope := STEP_SLOPE) -> SDGroundBake:
+	var result := SDGroundBake.new()
+	result.origin = origin_xz
+	result.texel_size = texel
+	result.step_limit = step_slope * texel
 	var lo := INF
 	var hi := -INF
-	for v in data:
+	for v in heights:
 		lo = minf(lo, v)
 		hi = maxf(hi, v)
-	return Vector2(lo, hi)
-
-
-## Height at world [param xz]: bilinear between texel centres, clamped to the bake, exactly as the
-## field's vertex shader computes it (sd_ground_at).
-func sample_height(xz: Vector2) -> float:
-	var size := get_size()
-	var t := ((xz - origin) / texel_size - Vector2(0.5, 0.5)).clamp(Vector2.ZERO, Vector2(size) - Vector2.ONE)
-	var i0 := Vector2i(floori(t.x), floori(t.y))
-	var i1 := Vector2i(mini(i0.x + 1, size.x - 1), mini(i0.y + 1, size.y - 1))
-	var f := t - Vector2(i0)
-	var a := height.get_pixel(i0.x, i0.y).r
-	var b := height.get_pixel(i1.x, i0.y).r
-	var c := height.get_pixel(i0.x, i1.y).r
-	var d := height.get_pixel(i1.x, i1.y).r
-	return lerpf(lerpf(a, b, f.x), lerpf(c, d, f.x), f.y)
-
-
-## Layer weights at world [param xz] (nearest texel).
-func sample_weights(xz: Vector2) -> Color:
-	var size := get_size()
-	var p := ((xz - origin) / texel_size).floor()
-	var i := Vector2i(clampi(int(p.x), 0, size.x - 1), clampi(int(p.y), 0, size.y - 1))
-	return weights.get_pixel(i.x, i.y)
+	result.height_min = lo - 0.01
+	result.height_range = maxf(hi - lo + 0.02, 0.01)
+	result.data = Image.create(size.x, size.y, false, Image.FORMAT_RGBAH)
+	for y in size.y:
+		for x in size.x:
+			var i := y * size.x + x
+			if layers[i] <= -2:
+				continue
+			var q := roundi((heights[i] - result.height_min) / result.height_range * 65535.0)
+			result.data.set_pixel(x, y, Color((q >> 8) / 255.0, (q & 255) / 255.0, (layers[i] + 1) / 8.0, 1.0))
+	return result
 
 
 ## The MeshInstance3D nodes of [param group] in [param tree] (members and their descendants).
@@ -102,10 +167,10 @@ static func surface_material(mi: MeshInstance3D, surface: int) -> Material:
 ## Captures [param meshes] from above into a new bake (coroutine: await it). Must run with a
 ## rendering device (not --headless). [param layers]: the field's layer materials.
 ## [param bounds]: the XZ rectangle to capture; empty = the meshes' bounds.
-## [param step_limit]: a height change larger than this between neighbouring texels (a kerb, a
-## step) is not a height field; the texels on both sides are marked not displaceable, so the
-## field dives under the ground there instead of draping a ramp over the step.
-static func bake(meshes: Array[MeshInstance3D], layers: Array, texel: float, bounds := Rect2(), step_limit := 0.04) -> SDGroundBake:
+## [param step_slope]: a height change between neighbouring texels steeper than this (rise / run)
+## is a step (a kerb), not ground to displace; see [member step_limit].
+## It renders a few frames per 2048 x 2048 tile; nothing is processed per texel on the CPU.
+static func bake(meshes: Array[MeshInstance3D], layers: Array, texel: float, bounds := Rect2(), step_slope := STEP_SLOPE) -> SDGroundBake:
 	if meshes.is_empty():
 		push_warning("SDGroundBake: nothing to bake (no ground meshes).")
 		return null
@@ -178,14 +243,12 @@ static func bake(meshes: Array[MeshInstance3D], layers: Array, texel: float, bou
 	var result := SDGroundBake.new()
 	result.texel_size = texel
 	result.origin = Vector2(aabb.position.x, aabb.position.z)
+	result.height_min = h_min
+	result.height_range = h_range
+	result.step_limit = step_slope * texel
 	for layer in layers:
 		result.layer_names.append(layer.resource_path if layer != null and not layer.resource_path.is_empty() else str(layer))
-	var heights := PackedFloat32Array()
-	heights.resize(size.x * size.y)
-	var weight_bytes := PackedByteArray()
-	weight_bytes.resize(size.x * size.y * 4)
-	var covered := PackedByteArray()
-	covered.resize(size.x * size.y)
+	result.data = Image.create(size.x, size.y, false, Image.FORMAT_RGBAH)
 	for ty in range(0, size.y, TILE_PX):
 		for tx in range(0, size.x, TILE_PX):
 			var tile := Vector2i(mini(TILE_PX, size.x - tx), mini(TILE_PX, size.y - ty))
@@ -196,90 +259,14 @@ static func bake(meshes: Array[MeshInstance3D], layers: Array, texel: float, bou
 			cam.size = tile.y * texel
 			# The only camera in the SubViewport is current by itself. (Setting `current` in the
 			# editor registers it with the editor's camera preview, which later trips over the
-			# freed camera.)
-			# A direct child of the SubViewport: its transform is its global transform.
+			# freed camera.) A direct child of the SubViewport: its transform is its global one.
 			cam.transform = Transform3D(Basis(Vector3(1, 0, 0), Vector3(0, 0, -1), Vector3(0, 1, 0)), centre)
 			for i in 3:
 				await tree.process_frame
 			await RenderingServer.frame_post_draw
 			var img := vp.get_texture().get_image()
-			img.convert(Image.FORMAT_RGBAF)
-			var px := img.get_data().to_float32_array()
-			for y in tile.y:
-				for x in tile.x:
-					var o := (y * tile.x + x) * 4
-					if px[o + 3] < 0.5:
-						continue
-					var g := (ty + y) * size.x + tx + x
-					heights[g] = h_min + (roundf(px[o] * 255.0) * 256.0 + roundf(px[o + 1] * 255.0)) / 65535.0 * h_range
-					var code := roundi(px[o + 2] * 8.0)
-					if code >= 1 and code <= 4:
-						weight_bytes[g * 4 + code - 1] = 255
-					covered[g] = 1
+			if img.get_format() != Image.FORMAT_RGBAH:
+				img.convert(Image.FORMAT_RGBAH)
+			result.data.blit_rect(img, Rect2i(Vector2i.ZERO, tile), Vector2i(tx, ty))
 	vp.queue_free()
-	_mark_steps(heights, covered, weight_bytes, size, step_limit)
-	_fill_uncovered(heights, covered, size)
-	result.height = Image.create_from_data(size.x, size.y, false, Image.FORMAT_RF, heights.to_byte_array())
-	result.weights = Image.create_from_data(size.x, size.y, false, Image.FORMAT_RGBA8, weight_bytes)
 	return result
-
-
-## Clears the layer weights of texels next to a height step larger than [param limit] (and of
-## texels next to no ground at all).
-static func _mark_steps(heights: PackedFloat32Array, covered: PackedByteArray, weights: PackedByteArray, size: Vector2i, limit: float) -> void:
-	var clear := PackedByteArray()
-	clear.resize(size.x * size.y)
-	for y in size.y:
-		for x in size.x:
-			var i := y * size.x + x
-			if covered[i] == 0:
-				continue
-			for d: Vector2i in [Vector2i(1, 0), Vector2i(0, 1)]:
-				var nx := x + d.x
-				var ny := y + d.y
-				if nx >= size.x or ny >= size.y:
-					continue
-				var j := ny * size.x + nx
-				if covered[j] == 0 or absf(heights[i] - heights[j]) > limit:
-					clear[i] = 1
-					clear[j] = 1
-	for i in clear.size():
-		if clear[i] != 0:
-			for c in 4:
-				weights[i * 4 + c] = 0
-
-
-## Gives texels without ground the height of their covered neighbours (repeated one-texel
-## dilation), so the bilinear lookup stays sane at the ground's edges.
-static func _fill_uncovered(heights: PackedFloat32Array, covered: PackedByteArray, size: Vector2i) -> void:
-	if covered.find(1) < 0:
-		return
-	var remaining := true
-	while remaining:
-		remaining = false
-		var next := covered.duplicate()
-		for y in size.y:
-			for x in size.x:
-				var i := y * size.x + x
-				if covered[i] != 0:
-					continue
-				var sum := 0.0
-				var n := 0
-				if x > 0 and covered[i - 1] != 0:
-					sum += heights[i - 1]
-					n += 1
-				if x < size.x - 1 and covered[i + 1] != 0:
-					sum += heights[i + 1]
-					n += 1
-				if y > 0 and covered[i - size.x] != 0:
-					sum += heights[i - size.x]
-					n += 1
-				if y < size.y - 1 and covered[i + size.x] != 0:
-					sum += heights[i + size.x]
-					n += 1
-				if n > 0:
-					heights[i] = sum / n
-					next[i] = 1
-				else:
-					remaining = true
-		covered = next

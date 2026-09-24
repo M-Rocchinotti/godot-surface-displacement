@@ -237,31 +237,70 @@ func test_field_mesh_seams() -> void:
 # --- Ground bake ---------------------------------------------------------------------------------
 
 func test_ground_bake_sampling() -> void:
-	print("\n== ground bake sampling")
-	var bake := SDGroundBake.new()
-	bake.texel_size = 0.5
-	bake.origin = Vector2(-1.0, 2.0)
-	var data := PackedFloat32Array()
-	for y in 4:
-		for x in 4:
-			data.append(0.1 * x + 0.3 * y)
-	bake.height = Image.create_from_data(4, 4, false, Image.FORMAT_RF, data.to_byte_array())
-	# A linear function is reproduced exactly between texel centres and clamped beyond them.
+	print("
+== ground bake sampling")
+	# A linear ramp of 8 x 8 texels (0.1 m and 0.3 m per 0.5 m texel: below the 0.8 slope limit).
+	var n := 8
+	var heights := PackedFloat32Array()
+	var layers := PackedInt32Array()
+	for y in n:
+		for x in n:
+			heights.append(0.1 * x + 0.3 * y)
+			layers.append(0)
+	var bake := SDGroundBake.from_arrays(Vector2i(n, n), heights, layers, Vector2(-1.0, 2.0), 0.5)
 	var ok := true
-	for p: Vector2 in [Vector2(-0.6, 2.4), Vector2(0.1, 3.3), Vector2(0.49, 3.49)]:
+	var normal_ok := true
+	for p: Vector2 in [Vector2(0.1, 3.3), Vector2(0.49, 3.49), Vector2(1.2, 4.1)]:
 		var t := (p - bake.origin) / bake.texel_size - Vector2(0.5, 0.5)
-		ok = ok and absf(bake.sample_height(p) - (0.1 * t.x + 0.3 * t.y)) < 1e-6
-	check(ok, "bilinear between texel centres, as the field shader samples it")
-	check(is_equal_approx(bake.sample_height(Vector2(-5.0, 0.0)), 0.0) and is_equal_approx(bake.sample_height(Vector2(9.0, 9.0)), 0.1 * 3 + 0.3 * 3),
-			"clamped to the baked area")
-	var heights := PackedFloat32Array([0, 0, 0.2, 0.2, 0, 0, 0.2, 0.2])
-	var covered := PackedByteArray([1, 1, 1, 1, 1, 1, 1, 1])
-	var weights := PackedByteArray()
-	weights.resize(32)
-	weights.fill(255)
-	SDGroundBake._mark_steps(heights, covered, weights, Vector2i(4, 2), 0.04)
-	check(weights[0] == 255 and weights[1 * 4] == 0 and weights[2 * 4] == 0 and weights[3 * 4] == 255,
-			"texels on both sides of a 20 cm step lose their layer (the field dives there), the others keep it")
+		var s := bake.sample(p)
+		ok = ok and absf(float(s["height"]) - (0.1 * t.x + 0.3 * t.y)) < 1e-4 and (s["weights"] as Color).r > 0.999
+		normal_ok = normal_ok and (s["normal"] as Vector3).distance_to(Vector3(-0.2, 1.0, -0.6).normalized()) < 1e-3
+	check(ok, "heights bilinear between texel centres (16-bit precision), layer 0 displaceable inside")
+	check(normal_ok, "the normal follows the height's gradient")
+	var corner := bake.origin + Vector2(0.25, 0.25)
+	check(bake.sample_weights(corner).r < 1e-6 and bake.sample_weights(bake.origin + Vector2(-3.0, 1.0)).r < 1e-6,
+			"nothing is displaceable at the bake's border texels or beyond the bake")
+	check(absf(bake.sample_height(bake.origin + Vector2(20.0, 20.0)) - (0.1 * (n - 1) + 0.3 * (n - 1))) < 1e-4,
+			"beyond the bake the height continues its edge")
+
+	# Steps are judged by slope, whatever the texel size: 5 cm texels (limit 4 cm) and 20 cm
+	# texels (16 cm): a 30-degree slope stays ground, a 45-degree one and a 15 cm kerb do not.
+	for texel: float in [0.05, 0.2]:
+		var row := func(rise_per_texel: float) -> bool:
+			var hs := PackedFloat32Array()
+			var ls := PackedInt32Array()
+			for y in 5:
+				for x in 5:
+					hs.append(rise_per_texel * x)
+					ls.append(0)
+			var b := SDGroundBake.from_arrays(Vector2i(5, 5), hs, ls, Vector2.ZERO, texel)
+			return b.sample_weights(Vector2(2.5, 2.5) * texel).r > 0.999
+		check(row.call(tan(deg_to_rad(30.0)) * texel) and not row.call(tan(deg_to_rad(45.0)) * texel),
+				"%.2f m texels: a 30-degree slope is ground, a 45-degree slope is a step" % texel)
+	var kerb := PackedFloat32Array()
+	var kerb_layers := PackedInt32Array()
+	for y in 5:
+		for x in 8:
+			kerb.append(0.15 if x >= 4 else 0.0)
+			kerb_layers.append(0)
+	var kb := SDGroundBake.from_arrays(Vector2i(8, 5), kerb, kerb_layers, Vector2.ZERO, 0.05)
+	check(kb.sample_weights(Vector2(1.5, 2.5) * 0.05).r > 0.999 and kb.sample_weights(Vector2(3.5, 2.5) * 0.05).r < 1e-6
+			and kb.sample_weights(Vector2(4.5, 2.5) * 0.05).r < 1e-6 and kb.sample_weights(Vector2(6.5, 2.5) * 0.05).r > 0.999,
+			"texels on both sides of a 15 cm kerb lose their layer (the field dives there), the others keep it")
+
+	# A cell without ground and a cell of ground that is none of the field's layers.
+	var flat := PackedFloat32Array()
+	var mixed := PackedInt32Array()
+	for y in 7:
+		for x in 7:
+			flat.append(0.5)
+			mixed.append(-2 if Vector2i(x, y) == Vector2i(3, 3) else (1 if x == 5 else 0))
+	var hb := SDGroundBake.from_arrays(Vector2i(7, 7), flat, mixed, Vector2.ZERO, 0.1)
+	check(hb.sample_weights(Vector2(0.35, 0.35)).r < 1e-6 and hb.sample_weights(Vector2(0.25, 0.35)).r < 1e-6
+			and absf(hb.sample_height(Vector2(0.35, 0.35)) - 0.5) < 1e-4,
+			"no ground: that cell and its neighbours are not displaceable, its height is its neighbours'")
+	check(hb.sample_weights(Vector2(0.55, 0.15)).g > 0.999 and hb.sample_weights(Vector2(0.15, 0.15)).r > 0.999,
+			"each cell carries the field layer its ground is")
 
 
 # --- Demo textures ------------------------------------------------------------------------------
