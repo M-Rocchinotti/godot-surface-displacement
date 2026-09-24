@@ -128,13 +128,14 @@ void process() {
 	} else {
 		float yaw = sd_rand(state) * 6.2831853;
 		float tilt = (sd_rand(state) - 0.5) * 0.6;
-		vec3 s = size * vec3(1.0 + 0.4 * sd_rand(state), 0.55 + 0.25 * sd_rand(state), 0.8 + 0.3 * sd_rand(state));
+		vec3 s = size * vec3(1.0 + 0.4 * sd_rand(state), 0.45 + 0.2 * sd_rand(state), 0.8 + 0.3 * sd_rand(state));
 		mat3 r_yaw = mat3(vec3(cos(yaw), 0.0, -sin(yaw)), vec3(0.0, 1.0, 0.0), vec3(sin(yaw), 0.0, cos(yaw)));
 		mat3 r_tilt = mat3(vec3(1.0, 0.0, 0.0), vec3(0.0, cos(tilt), sin(tilt)), vec3(0.0, -sin(tilt), cos(tilt)));
 		mat3 basis = r_yaw * r_tilt * mat3(vec3(s.x, 0.0, 0.0), vec3(0.0, s.y, 0.0), vec3(0.0, 0.0, s.z));
-		// Resting on the relief (or the field's coarser surface where that is higher), a third of
-		// its height sunk in.
-		float y = sd_ground_at(xz) + lift + max(relief, relief_proxy) + s.y * 0.35;
+		// Resting on the relief (or the field's coarser surface where that is higher), sunk in to
+		// about 40 % of its height: a pebble standing on top of the gravel shows mostly its side,
+		// which reads as a dark speck against the lit stone tops when the sun is behind it.
+		float y = sd_ground_at(xz) + lift + max(relief, relief_proxy) + s.y * 0.1;
 		TRANSFORM = mat4(vec4(basis[0], 0.0), vec4(basis[1], 0.0), vec4(basis[2], 0.0), vec4(xz.x, y, xz.y, 1.0));
 		COLOR = vec4(vec3(0.8 + 0.35 * sd_rand(state)), 1.0);
 		CUSTOM = vec4(float(layer), sd_rand(state), 0.0, 0.0);

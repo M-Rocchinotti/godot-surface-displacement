@@ -1,7 +1,7 @@
 // PebbleScatter3D pebbles: coloured by the ground layer they lie on (its albedo and roughness
-// sampled at the pebble's position, with a per-pebble tint), a little darker towards the ground.
+// sampled at the pebble's position, with a per-pebble tint), a little darker where it meets the ground.
 shader_type spatial;
-render_mode cull_back;
+render_mode cull_back, diffuse_burley, specular_schlick_ggx;
 
 #define SD_FIELD_LAYERS 4
 
@@ -41,7 +41,12 @@ void fragment() {
 			orm = textureLod(layer_orm[i], uv, albedo_lod).rgb;
 		}
 	}
-	ALBEDO = albedo * pebble_tint * mix(0.55, 1.0, smoothstep(-1.0, 0.6, local_height));
+	// A few pixels wide, a pebble is shaded like the mip-mapped ground around it: its normals
+	// bend towards the ground's (up) between 1 and 4 m. Otherwise its side facing the camera,
+	// unlit when the sun is behind it, makes it a dark speck on the averaged, lit gravel.
+	float far = smoothstep(1.0, 4.0, length(VERTEX));
+	NORMAL = normalize(mix(NORMAL, (VIEW_MATRIX * vec4(0.0, 1.0, 0.0, 0.0)).xyz, far));
+	ALBEDO = albedo * pebble_tint * mix(0.8, 1.0, smoothstep(-0.5, 0.3, local_height));
 	ROUGHNESS = clamp(orm.g, 0.3, 1.0);
-	AO = mix(0.6, 1.0, smoothstep(-1.0, 0.3, local_height));
+	AO = mix(0.7, 1.0, smoothstep(-0.5, 0.2, local_height));
 }
