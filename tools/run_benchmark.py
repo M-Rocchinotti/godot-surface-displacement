@@ -56,7 +56,7 @@ def _process_list() -> list[tuple[str, str]] | None:
             script = (f'@(Get-CimInstance Win32_Process -Filter "{wql}" | Select-Object Name, CommandLine)'
                       " | ConvertTo-Json -Compress")
             proc = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
-                                  capture_output=True, text=True, timeout=90)
+                                  capture_output=True, text=True, timeout=120)
             if proc.returncode != 0:
                 return None
             text = proc.stdout.strip()
@@ -77,12 +77,31 @@ def _process_list() -> list[tuple[str, str]] | None:
     return rows or None
 
 
+def _engine_names() -> list[str] | None:
+    """Names of the Godot and Unreal processes from tasklist (fast, no command lines), or None."""
+    if sys.platform != "win32":
+        return None
+    try:
+        proc = subprocess.run(["tasklist", "/fo", "csv", "/nh"], capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    names = [line.split('","')[0].strip('"') for line in proc.stdout.splitlines() if line.startswith('"')]
+    if proc.returncode != 0 or not names:
+        return None
+    return [n for n in names if "godot" in n.lower() or is_unreal(n)]
+
+
 def rendering_engines() -> list[str]:
     """The Godot processes that render (not --headless) and the Unreal editors, one entry per
-    process; [UNKNOWN] when the process list cannot be read (that must count as busy)."""
+    process; [UNKNOWN] when that cannot be told (it must count as busy)."""
     rows = _process_list()
     if rows is None:
-        return [UNKNOWN]
+        # The command lines could not be read (WMI is slow on a loaded machine). Without any
+        # Godot process the answer does not need them.
+        names = _engine_names()
+        if names is None or any("godot" in n.lower() for n in names):
+            return [UNKNOWN]
+        return names
     out = []
     for name, cmd in rows:
         low = name.lower()
