@@ -154,7 +154,8 @@ snapping moves ring boundaries, the geometry does not pop either (render test: u
   is the same function on the CPU, and a render test checks the field's vertices against it.
 - The vertices pass the normalised layer weights to the fragments (varyings), so the fragments
   do not decode the bake again.
-- The field is drawn *on top of* the original ground: relief "up only" plus `lift` (2 mm).
+- The field is drawn *on top of* the original ground: relief "up only", the geometry raised by
+  `lift` (2 mm).
   Where no layer is displaceable, vertices dive `push_down` under the ground and the ground mesh
   hides them - no `discard`, so early-Z stays.
 - Collision stays on the original ground.
@@ -167,15 +168,16 @@ that, so the geometry alone shows soft lumps. Each field fragment therefore marc
 relief over the whole slab along its true view ray, exactly like the ground material with
 `height_center = 0`: the first hit of the ray with the height field does not depend on where the
 proxy geometry was rasterized. The geometry adds what POM cannot: pixels the flat ground would
-not cover (silhouettes), real depth for SSAO and for props, and the coarse relief. At the field's
-edge the geometry is flat, the shading is the ground's, and the two meet seamlessly (render test:
-1 % mean difference in the last metre, zero beyond).
+not cover (silhouettes), real depth for SSAO and for props, and the coarse relief. The relief is
+measured from the ground, as the ground material measures it (`lift` raises only the proxy
+geometry), so the field shades like the parallax ground it covers (render test: 0.15 % mean
+difference inside the grid, 0.08 % in the last metre, zero beyond) and its edge is invisible.
 
 The march's mip level and the texture gradients come from the footprint on the ground plane under
 the proxy (the view ray's point at relief height 0), not from the proxy's own screen derivatives:
 those jump at the proxy's bumps and silhouettes and would blur the relief there. A render test
-checks the field's hits against the CPU ray tracer like the surfaces' (90th percentile 0.16 mm)
-and its self-shadow against the CPU height-field shadow (99.7 %).
+checks the field's hits against the CPU ray tracer like the surfaces' (90th percentile 0.10 mm)
+and its self-shadow against the CPU height-field shadow (99.8 %).
 
 ### 4.5 What the field costs, and why
 

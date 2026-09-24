@@ -272,7 +272,7 @@ func test_field_pom() -> void:
 	var tile := 1.0
 	var amp := 0.05
 	var field := Harness.make_stone_field(512, 70, 7)
-	var surface := {"point": Vector3(0.0, 0.002, 0.0), "normal": Vector3.UP, "axis": Vector3.UP, "amp": amp, "center": 0.0, "field": field,
+	var surface := {"point": Vector3.ZERO, "normal": Vector3.UP, "axis": Vector3.UP, "amp": amp, "center": 0.0, "field": field,
 			"uv": func(p: Vector3) -> Vector2: return Vector2(p.x, p.z) / tile}
 	var views := {"steep": Vector3(0.25, 1.0, 0.35), "45 deg": Vector3(0.3, 0.75, 0.75), "grazing": Vector3(0.2, 0.42, 1.0)}
 	# Mip 0 forced (LOD bias -10) like the surfaces' test: the reference traces the full-size map.
@@ -496,7 +496,11 @@ func test_edge_seam() -> void:
 	print("  inside the grid (2 m to the fade, %d px): mean luminance difference %.2f %%, median %.2f %%" % [inner.size(), inner_mean * 100.0, percentile(inner, 0.5) * 100.0])
 	print("  %d pixels in the last metre before the relief fades out: mean luminance difference %.2f %%; beyond the grid (%d px): 99.9th percentile %.3f %%, largest %.3f %%" % [
 			band_n, mean_band * 100.0, beyond.size(), percentile(beyond, 0.999) * 100.0, percentile(beyond, 1.0) * 100.0])
-	check(band_n > 1000 and mean_band < 0.02, "at its edge the field looks like the parallax ground it covers (within 2 %)")
+	# The field marches the same relief from the same ground as the ground material: they differ
+	# only by float rounding and the proxy's coverage (0.15 % / 0.08 % measured; with the relief
+	# shifted up by `lift` it was 16 % / 3 %).
+	check(inner.size() > 10000 and inner_mean < 0.01, "inside the grid the field shades like the parallax ground (within 1 %)")
+	check(band_n > 1000 and mean_band < 0.005, "at its edge the field looks like the parallax ground it covers (within 0.5 %)")
 	check(beyond.size() > 10000 and percentile(beyond, 0.999) < 0.001, "beyond the grid nothing changes")
 
 

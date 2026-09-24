@@ -204,7 +204,7 @@ void fragment() {
 	// ray, so its derivatives are smooth across the proxy's bumps and silhouettes (the proxy's own
 	// derivatives jump there and would blur the march and the textures), and equal the ground
 	// material's around the field.
-	vec2 plane_xz = wpos.xz - v.xz * (n.y / max(dot(n, v), SD_MIN_NDOTV)) * (wpos.y - (f_ground + lift));
+	vec2 plane_xz = wpos.xz - v.xz * (n.y / max(dot(n, v), SD_MIN_NDOTV)) * (wpos.y - f_ground);
 	vec2 dpdx = dFdx(plane_xz);
 	vec2 dpdy = dFdy(plane_xz);
 	float pix_m = max(length(dpdx), length(dpdy));
@@ -216,8 +216,10 @@ void fragment() {
 		}
 	}
 	vec2 xz_hit = wpos.xz;
-	// Height of this fragment above the ground (the proxy's relief).
-	float z_hit = wpos.y - (f_ground + lift);
+	// Height of this fragment above the ground. The relief is measured from the ground itself, as
+	// the ground material measures it: `lift` only raises the proxy geometry (so the ground mesh
+	// cannot poke through), it does not shift the marched surface.
+	float z_hit = wpos.y - f_ground;
 	vec3 hit = wpos;
 	float steps_used = 0.0;
 #ifdef SD_POM
