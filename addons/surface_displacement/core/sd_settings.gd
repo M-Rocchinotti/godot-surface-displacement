@@ -79,12 +79,12 @@ static func create_preset(preset: Preset) -> SDSettings:
 			# 7.7 m) and the pebbles. The field's fragments march the relief too, so Epic pays for
 			# it with slightly fewer parallax steps and a shorter fade than High (tests/benchmark.gd).
 			s.pom_min_steps = 8
-			s.pom_max_steps = 24
+			s.pom_max_steps = 20
 			s.pom_refine_steps = 3
 			s.pom_fade_start = 20.0
 			s.pom_fade_end = 35.0
 			s.self_shadow = SelfShadow.SOFT
-			s.self_shadow_steps = 12
+			s.self_shadow_steps = 8
 			s.self_shadow_distance = 20.0
 			s.near_field_enabled = true
 			s.scatter_enabled = true

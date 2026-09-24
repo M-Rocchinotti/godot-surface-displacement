@@ -95,7 +95,7 @@ func test_presets() -> void:
 			and high.self_shadow == SDSettings.SelfShadow.SOFT and med.self_shadow == SDSettings.SelfShadow.HARD,
 			"steps, fade distance, refinement and self-shadow quality grow from Low to High")
 	check(epic.self_shadow == SDSettings.SelfShadow.SOFT and epic.pom_max_steps >= med.pom_max_steps and epic.pom_fade_end >= med.pom_fade_end
-			and epic.pom_refine_steps >= med.pom_refine_steps and epic.self_shadow_steps == high.self_shadow_steps,
+			and epic.pom_refine_steps >= med.pom_refine_steps and epic.self_shadow_steps >= med.self_shadow_steps,
 			"Epic keeps soft self-shadowing and at least Medium's parallax next to its geometry")
 	var budgets := [0.5, 1.2, 2.0, 3.0]
 	var ok := true
