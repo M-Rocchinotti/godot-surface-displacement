@@ -210,7 +210,9 @@ func test_pom_vs_reference() -> void:
 			worst_p90 = maxf(worst_p90, p90)
 			print("  %-26s %-8s %4d px  median %.3f mm  p90 %.3f mm  max %.3f mm" % [surface[0], view_name, e.size(), p50, p90, percentile(e, 1.0) * 1000.0])
 			check(e.size() >= 150, "%s, %s: enough pixels compared (%d)" % [surface[0], view_name, e.size()])
-			check(p50 < 0.25 and p90 < 1.0, "%s, %s: hit within 0.25 mm (median) / 1 mm (90 %%) of the traced height field" % [surface[0], view_name])
+			# 0.4 mm: the full march stays near 0.13 mm; without the bisection (secant only) grazing
+			# views reach 0.8-1.0 mm (mutation "no binary refinement").
+			check(p50 < 0.2 and p90 < 0.4, "%s, %s: hit within 0.2 mm (median) / 0.4 mm (90 %%) of the traced height field" % [surface[0], view_name])
 	print("  worst 90th percentile: %.3f mm (relief %.0f mm)" % [worst_p90, amp * 1000.0])
 
 
