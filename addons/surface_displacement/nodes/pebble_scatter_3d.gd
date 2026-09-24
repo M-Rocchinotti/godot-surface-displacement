@@ -56,6 +56,7 @@ var _particles: GPUParticles3D
 var _process_material: ShaderMaterial
 var _pebble_material: ShaderMaterial
 var _dirty := true
+var _copied_version := -1
 
 
 func _enter_tree() -> void:
@@ -104,7 +105,7 @@ func get_particles() -> GPUParticles3D:
 
 func _process(_delta: float) -> void:
 	var field := get_parent() as DisplacementField3D
-	if field == null or _particles == null:
+	if field == null or _particles == null or not is_visible_in_tree():
 		return
 	var cam := field._find_camera()
 	if cam == null:
@@ -120,11 +121,14 @@ func _process(_delta: float) -> void:
 		_process_material.set_shader_parameter("size_range", size_range)
 		_process_material.set_shader_parameter("valley_bias", valley_bias)
 		_process_material.set_shader_parameter("layer_density", layer_density)
-	var source := field.get_material()
-	for name: String in COPIED_FROM_FIELD:
-		_process_material.set_shader_parameter(name, source.get_shader_parameter(name))
-	for name: String in COPIED_TO_PEBBLES:
-		_pebble_material.set_shader_parameter(name, source.get_shader_parameter(name))
+	if field.get_params_version() != _copied_version:
+		# The field's layers, ground or grid changed (or this is the first frame): copy them.
+		_copied_version = field.get_params_version()
+		var source := field.get_material()
+		for name: String in COPIED_FROM_FIELD:
+			_process_material.set_shader_parameter(name, source.get_shader_parameter(name))
+		for name: String in COPIED_TO_PEBBLES:
+			_pebble_material.set_shader_parameter(name, source.get_shader_parameter(name))
 	var p := cam.global_position
 	var half := ceili(radius / cell_size)
 	var first := Vector2(floorf(p.x / cell_size) - half, floorf(p.z / cell_size) - half)

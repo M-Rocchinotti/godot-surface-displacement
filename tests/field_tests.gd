@@ -755,6 +755,20 @@ func test_pebbles() -> void:
 	print("  pebble pixels %d; pixels that changed when the camera moved 1.24 m: %d" % [pebble_px, changed])
 	check(pebble_px > 500, "pebbles are drawn around the camera")
 	check(changed == 0, "they stay exactly where they are when the camera (and the cell window) moves")
+	# The scatter copies the field's parameters only when they change: nothing while the scene
+	# stands still, a layer's new relief depth as soon as the field applies it.
+	var version := f.get_params_version()
+	await h.frames(10)
+	var still := f.get_params_version() == version
+	var layer := f.layers[0]
+	layer.set_shader_parameter("height_m", 0.031)
+	f.sync_layers()
+	await h.frames(3)
+	var copied: Array = pebbles.get_particles().process_material.get_shader_parameter("layer_a")
+	print("  field parameter version %d -> %d after a layer change; the scatter's layer 0 depth %.3f m" % [
+			version, f.get_params_version(), (copied[0] as Vector4).x])
+	check(still and f.get_params_version() > version and is_equal_approx((copied[0] as Vector4).x, 0.031),
+			"the scatter copies the field's parameters when they change, not every frame")
 
 
 # --- 7. Lifetime --------------------------------------------------------------------------------

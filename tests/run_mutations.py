@@ -31,6 +31,7 @@ FIELD = "addons/surface_displacement/nodes/displacement_field_3d.gd"
 MANAGER = "addons/surface_displacement/nodes/surface_displacement.gd"
 BAKE = "addons/surface_displacement/core/sd_ground_bake.gd"
 MATERIALS = "addons/surface_displacement/core/sd_materials.gd"
+SCATTER = "addons/surface_displacement/nodes/pebble_scatter_3d.gd"
 HEIGHT_IMPORT = "demo/textures/clean_pebbles/clean_pebbles_height.exr.import"
 
 # (name, what it breaks, [(file, old, new)], [(suite, name filter)]); suite is "logic",
@@ -160,6 +161,9 @@ MUTATIONS = [
     ("field bakes while hidden", "the field bakes its ground at startup although the preset hides it (Medium)",
      [(FIELD, "		_start_pending_bake.call_deferred()", "		bake_ground.call_deferred()")],
      [("field", "demo_scenes")]),
+    ("pebbles never re-copy", "the pebble scatter copies the field's parameters once and misses later layer changes",
+     [(SCATTER, "	if field.get_params_version() != _copied_version:", "	if _copied_version == -1 and field.get_params_version() >= 0:")],
+     [("field", "pebbles")]),
     ("feature switch adds features", "a feature switch turns on what the preset leaves out",
      [(MANAGER, "	base.near_field_enabled = base.near_field_enabled and near_field", "	base.near_field_enabled = near_field")],
      [("logic", "")]),

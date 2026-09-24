@@ -101,6 +101,7 @@ var _ground_texture: ImageTexture
 var _flat_height := NAN
 var _height_range := Vector2(-1.0, 1.0)
 var _origin := Vector3.ZERO
+var _params_version := 0
 
 
 func _enter_tree() -> void:
@@ -257,6 +258,12 @@ func get_material() -> ShaderMaterial:
 	return _material
 
 
+## Grows whenever the field writes its layer, ground or grid parameters into its material (not
+## the per-frame camera position): what a [PebbleScatter3D] copies only when it changes.
+func get_params_version() -> int:
+	return _params_version
+
+
 func _process(_delta: float) -> void:
 	if _mesh_instance == null:
 		return
@@ -323,6 +330,7 @@ func _field_shader(quality: SDMaterials.Quality) -> Shader:
 
 
 func _apply_params() -> void:
+	_params_version += 1
 	_material.set_shader_parameter("base_spacing", base_spacing)
 	_material.set_shader_parameter("lift", lift)
 	var morph: Array[Vector4] = []
@@ -343,6 +351,7 @@ func _apply_params() -> void:
 
 
 func _apply_ground() -> void:
+	_params_version += 1
 	if ground_bake != null and ground_bake.data != null:
 		_ground_texture = ImageTexture.create_from_image(ground_bake.data)
 		_material.set_shader_parameter("ground_mode", 1)
@@ -366,6 +375,7 @@ static func _param(material: ShaderMaterial, name: String) -> Variant:
 
 
 func _apply_layers() -> void:
+	_params_version += 1
 	var count := mini(layers.size(), MAX_LAYERS)
 	var heights: Array[Texture2D] = []
 	var albedos: Array[Texture2D] = []
