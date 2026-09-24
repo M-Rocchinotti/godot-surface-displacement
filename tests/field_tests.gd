@@ -499,6 +499,26 @@ func test_lifetime() -> void:
 
 # --- 8. Demo scenes -----------------------------------------------------------------------------
 
+## Triangles of [param mesh] whose front face (clockwise, Godot's convention) looks down: the
+## camera above culls them, only the cull-disabled ground bake would see them.
+static func count_back_facing_up(mesh: Mesh) -> int:
+	var count := 0
+	for s in mesh.get_surface_count():
+		var arrays := mesh.surface_get_arrays(s)
+		var v: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+		var idx: PackedInt32Array = arrays[Mesh.ARRAY_INDEX]
+		if idx.is_empty():
+			idx.resize(v.size())
+			for i in v.size():
+				idx[i] = i
+		for i in range(0, idx.size(), 3):
+			var a := v[idx[i]]
+			var front := (v[idx[i + 2]] - a).cross(v[idx[i + 1]] - a)
+			if front.y <= 0.0:
+				count += 1
+	return count
+
+
 func test_demo_scenes() -> void:
 	h.clear_scene()
 	h.make_viewport(SIZE, false)
@@ -507,6 +527,11 @@ func test_demo_scenes() -> void:
 		h.viewport.add_child(scene)
 		(scene.get_node("Camera") as Camera3D).current = true
 		var sd := scene.get_node("SurfaceDisplacement") as SurfaceDisplacement
+		var back_facing := 0
+		for node in scene.find_children("*", "MeshInstance3D", true, false):
+			if node.is_in_group(&"sd_ground"):
+				back_facing += count_back_facing_up((node as MeshInstance3D).mesh)
+		check(back_facing == 0, "%s: every ground triangle faces up (%d do not)" % [Builder.SCENE_NAMES[index], back_facing])
 		var ok := true
 		for preset in [SDSettings.Preset.OFF, SDSettings.Preset.LOW, SDSettings.Preset.MEDIUM, SDSettings.Preset.HIGH, SDSettings.Preset.EPIC]:
 			sd.preset = preset

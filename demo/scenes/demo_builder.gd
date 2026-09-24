@@ -248,7 +248,8 @@ static func build_gravel_path() -> Node3D:
 			var b := a + 1
 			var c := a + across + 2
 			var d := a + across + 1
-			for i in [a, c, b, a, d, c]:
+			# Clockwise seen from above: Godot's front faces.
+			for i in [a, b, c, a, c, d]:
 				st.add_index(i)
 	st.generate_normals()
 	st.generate_tangents()
