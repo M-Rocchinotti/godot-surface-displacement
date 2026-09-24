@@ -27,8 +27,11 @@ First version. Requires Godot 4.7+ with the Forward+ renderer.
   shaders, slope-based step detection, `from_arrays()` for procedural terrain); its fragments
   march the full-resolution relief so the grid blends into POM.
 - `PebbleScatter3D`: camera-following GPU-particle cells of pebbles, placed by world cell.
-- `SurfaceDisplacement` node and `SDSettings`: Off / Low / Medium / High / Epic presets,
-  feature switches, runtime variant switching, debug views, a script API for settings menus.
+- `SurfaceDisplacement` node and `SDSettings`: Off / Low / Medium / High / Epic presets
+  (0.47 / 1.15 / 1.58 / 2.86 ms added on a GTX 1080 at 1080p, `tools/run_benchmark.py`), feature
+  switches, runtime variant switching, debug views, a script API for settings menus.
+- Showcase videos (`tools/make_videos.py`): eye-level and low sweeps over the demo scenes, and
+  labelled flat vs displacement comparisons.
 - Editor tools: add nodes, convert materials (undoable), bake the ground (undoable), prepare
   height maps as 16-bit EXR, validate the setup.
 - Repository tools: Poly Haven texture fetch (EXR heights, md5-checked, license records) and

@@ -11,8 +11,9 @@ scattered stones, cobblestones as real stones, brick walls with deep joints.
   crack-free, draped over your ground mesh by a top-down bake; collision unchanged), blending
   seamlessly into POM.
 - **PebbleScatter3D**: loose pebbles as real meshes in camera-following GPU particle cells.
-- **SurfaceDisplacement** node: Low / Medium / High / Epic presets (targets on a GTX 1080 at
-  1080p: 0.5 / 1.2 / 2.0 / 3.0 ms added), feature switches, a script API for settings menus.
+- **SurfaceDisplacement** node: Low / Medium / High / Epic presets (measured on a GTX 1080 at
+  1080p: 0.47 / 1.15 / 1.58 / 2.86 ms added; near-camera geometry and pebbles only at Epic),
+  feature switches, a script API for settings menus.
 
 ## Quick start
 

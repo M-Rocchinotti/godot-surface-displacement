@@ -50,8 +50,9 @@ props whose silhouette POM cannot give into real triangles.
 - Triplanar that marches only the planes with weight (1 plane on a floor, 2 on a 45-degree roof).
 - Near-camera geometry with geomorphing between rings: zero cracks, no swimming, heights exact
   to 0.03 mm against the height map.
-- Presets Low / Medium / High / Epic with budgets for a GTX 1080 at 1080p, plus per-feature
-  switches and a small script API for settings menus.
+- Presets Low / Medium / High / Epic, measured on a GTX 1080 at 1080p at 0.47 / 1.15 / 1.58 /
+  2.86 ms added (budgets 0.5 / 1.2 / 2.0 / 3.0 ms), plus per-feature switches and a small script
+  API for settings menus.
 - Editor tools: add nodes, convert StandardMaterial3D / ORMMaterial3D with a height map (undoable),
   bake the ground under a field, turn 8-bit height maps into 16-bit EXR, validate the setup.
 - A demo with four scenes (gravel path, cobblestone street, rocky ground, brick wall and
@@ -178,7 +179,30 @@ slightly fewer parallax steps and a shorter fade than High: the near-camera geom
 march the relief too (twice, see [ARCHITECTURE.md](docs/ARCHITECTURE.md#45-what-the-field-costs-and-why)),
 and the budget goes there.
 
-<!-- BENCHMARK -->
+Measured with `python tools/run_benchmark.py --allow-idle-unreal` (it runs `tests/benchmark.gd`
+once the GPU has been idle for 3 minutes and no other rendering engine runs; an open, idle Unreal
+editor was tolerated and the run was checked for engines starting during it). NVIDIA GeForce GTX
+1080, Vulkan 1.4.312, Godot 4.7.2, 1920 x 1080, V-Sync off. Scene: open ground of the demo's
+gravel (Poly Haven clean_pebbles) under a shadowed sun with SSAO, seen from eye level so the
+ground covers about 60 % of the frame, the camera panning along a fixed path. Each row: median of
+3 runs of 300 frames after 150 warm-up frames; "added" is the viewport GPU time minus the same
+ground with an ORMMaterial3D (same textures and texel density, normal mapping only; 1.408 ms,
+measured before and after the rows). Full output: [docs/benchmark_results.md](docs/benchmark_results.md).
+
+| Preset | Added GPU time | Target | Spread of the 3 runs |
+|---|---|---|---|
+| Off | 0.09 ms | - | 0.010 ms |
+| Low | **0.47 ms** | 0.5 ms | 0.003 ms |
+| Medium | **1.15 ms** | 1.2 ms | 0.025 ms |
+| High | **1.58 ms** | 2.0 ms | 0.004 ms |
+| Epic | **2.86 ms** | 3.0 ms | 0.014 ms |
+
+What the features cost (same run): Epic without pebbles 2.84 ms (the pebbles cost about
+0.02 ms), without the near-camera geometry 1.24 ms (so the geometry costs 1.6 ms), and without
+geometry and self-shadowing 0.90 ms. Opt-in depth write on the Medium ground: 1.52 ms (+0.37 ms).
+Off costs 0.09 ms more than ORMMaterial3D (the flat variant's own normal-map frame). The costs
+scale with the screen area the relief covers; walls and props at a distance cost little, and
+everything beyond the fade distance is plain normal mapping.
 
 ### DisplacementField3D
 
