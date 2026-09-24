@@ -24,6 +24,7 @@ rendering engine started during the benchmark (the numbers are not clean; run it
 from __future__ import annotations
 
 import argparse
+import json
 import subprocess
 import sys
 import threading
@@ -45,23 +46,34 @@ def gpu_utilisation() -> int | None:
 
 
 def _process_list() -> list[tuple[str, str]] | None:
-    """(name, command line) of every process, or None when the list cannot be read."""
+    """(name, command line) of the Godot and Unreal processes (elsewhere: of every process), or
+    None when the list cannot be read."""
     try:
         if sys.platform == "win32":
-            script = ("Get-CimInstance Win32_Process | ForEach-Object { $_.Name + [char]9 + $_.CommandLine }")
+            # Filtered in the query (every process's command line takes over a minute to list on a
+            # loaded machine) and returned as JSON (command lines can contain line breaks).
+            wql = "Name like 'Godot%' or Name like 'Unreal%' or Name like 'UE4%' or Name like 'UE5%'"
+            script = (f'@(Get-CimInstance Win32_Process -Filter "{wql}" | Select-Object Name, CommandLine)'
+                      " | ConvertTo-Json -Compress")
             proc = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
                                   capture_output=True, text=True, timeout=90)
-        else:
-            proc = subprocess.run(["ps", "-eo", "comm=,args="], capture_output=True, text=True, timeout=60)
-    except (OSError, subprocess.SubprocessError):
+            if proc.returncode != 0:
+                return None
+            text = proc.stdout.strip()
+            data = json.loads(text) if text else []
+            if isinstance(data, dict):
+                data = [data]
+            return [(str(d.get("Name") or ""), str(d.get("CommandLine") or "")) for d in data]
+        proc = subprocess.run(["ps", "-eo", "comm=,args="], capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError, ValueError):
         return None
     if proc.returncode != 0:
         return None
     rows = []
     for line in proc.stdout.splitlines():
-        name, _, cmd = line.partition("\t" if sys.platform == "win32" else " ")
-        if name.strip():
-            rows.append((name.strip(), cmd.strip()))
+        name, _, cmd = line.strip().partition(" ")
+        if name:
+            rows.append((name, cmd.strip()))
     return rows or None
 
 
