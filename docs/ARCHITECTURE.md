@@ -144,7 +144,7 @@ snapping moves ring boundaries, the geometry does not pop either (render test: u
   height). The bake renders the ground group's meshes top-down in their own `World3D` with a
   capture shader that writes the world height as 16-bit fixed point split over two channels
   (exact in the half-float target), the layer index and coverage, and stores the captured image
-  as it is: nothing runs per texel on the CPU (0.3 s for the demo's 90 x 90 m at 5 cm, most of it
+  as it is: nothing runs per texel on the CPU (0.2-0.3 s for the demo's 90 x 90 m at 5 cm, most of it
   waiting for frames). `sd_ground.gdshaderinc`, shared by the field and the pebbles, decodes the
   4 x 4 texels around a point: a texel is displaceable when it and its four neighbours are
   covered and no neighbour differs by more than `step_limit` (0.8 x the texel size: slopes up to
