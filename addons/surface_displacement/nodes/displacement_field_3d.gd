@@ -4,7 +4,7 @@ class_name DisplacementField3D
 extends Node3D
 ## Real displaced ground geometry around the camera: a geometry clipmap whose vertices take their
 ## height from the ground's height maps, fading into the ground material's parallax occlusion
-## mapping at its edge (about 13-15 m out).
+## mapping at its edge (7.7 m out with the default 3 rings of 96 quads at 4 cm).
 ##
 ## The field draws ON TOP of the original ground ("up only" relief plus [member lift]); the ground
 ## mesh and its collision stay. Its layers are the ground's own Surface Displacement materials
@@ -40,21 +40,21 @@ signal baked
 @export var bake_on_ready := true
 @export_group("Quality")
 ## Nested rings (clipmap levels); each doubles the vertex spacing.
-@export_range(2, 6) var levels := 4:
+@export_range(2, 6) var levels := 3:
 	set(value):
 		value = clampi(value, 2, 6)
 		if value != levels:
 			levels = value
 			_mesh_dirty = true
 ## Quads per ring side (a multiple of 4).
-@export_range(16, 512, 4) var resolution := 160:
+@export_range(16, 512, 4) var resolution := 96:
 	set(value):
 		value = maxi(16, value - value % 4)
 		if value != resolution:
 			resolution = value
 			_mesh_dirty = true
 ## Vertex spacing of the innermost ring (m).
-@export_range(0.005, 0.2, 0.0005, "suffix:m") var base_spacing := 0.02:
+@export_range(0.005, 0.2, 0.0005, "suffix:m") var base_spacing := 0.04:
 	set(value):
 		value = maxf(value, 0.001)
 		if value != base_spacing:

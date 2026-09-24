@@ -35,9 +35,12 @@ enum SelfShadow { OFF, HARD, SOFT }
 @export_range(1.0, 200.0, 1.0) var self_shadow_softness := 24.0
 @export_group("Near-camera geometry")
 @export var near_field_enabled := false
-@export_range(2, 6) var near_field_levels := 4
-@export_range(16, 512, 4) var near_field_resolution := 160
-@export_range(0.005, 0.1, 0.0005, "suffix:m") var near_field_spacing := 0.02
+## Rings, quads per ring side and finest vertex spacing of [DisplacementField3D]. The defaults
+## (3 x 96 at 4 cm, reaching 7.7 m) are Epic's: denser grids cost more than they show, because
+## the field's fragments march the full relief anyway (tests/benchmark.gd --explore).
+@export_range(2, 6) var near_field_levels := 3
+@export_range(16, 512, 4) var near_field_resolution := 96
+@export_range(0.005, 0.1, 0.0005, "suffix:m") var near_field_spacing := 0.04
 @export_group("Pebble scatter")
 @export var scatter_enabled := false
 ## Fraction of the scatter's pebbles that are drawn (0-1).
@@ -61,26 +64,21 @@ static func create_preset(preset: Preset) -> SDSettings:
 			s.self_shadow = SelfShadow.OFF
 		Preset.MEDIUM:
 			pass
-		Preset.HIGH:
+		Preset.HIGH, Preset.EPIC:
+			s.pom_min_steps = 10
+			s.pom_max_steps = 28
+			s.pom_refine_steps = 4
+			s.pom_fade_start = 25.0
+			s.pom_fade_end = 40.0
+			s.pom_max_lod = 6.5
 			s.self_shadow = SelfShadow.SOFT
 			s.self_shadow_steps = 12
-			s.near_field_enabled = true
-			s.near_field_resolution = 160
-			s.near_field_spacing = 0.02
-		Preset.EPIC:
-			s.pom_min_steps = 12
-			s.pom_max_steps = 32
-			s.pom_refine_steps = 4
-			s.pom_fade_start = 30.0
-			s.pom_fade_end = 50.0
-			s.pom_max_lod = 7.0
-			s.self_shadow = SelfShadow.SOFT
-			s.self_shadow_steps = 16
-			s.self_shadow_distance = 30.0
-			s.near_field_enabled = true
-			s.near_field_resolution = 256
-			s.near_field_spacing = 0.015
-			s.scatter_enabled = true
+			s.self_shadow_distance = 25.0
+			if preset == Preset.EPIC:
+				# Epic is High plus real geometry: the near-camera field (3 rings of 96 x 96 quads
+				# at 4 cm, reaching 7.7 m) and the pebbles.
+				s.near_field_enabled = true
+				s.scatter_enabled = true
 	return s
 
 

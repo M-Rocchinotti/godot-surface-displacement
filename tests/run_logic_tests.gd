@@ -87,14 +87,18 @@ func test_presets() -> void:
 	var epic := SDSettings.create_preset(SDSettings.Preset.EPIC)
 	check(off.get_quality() == SDMaterials.Quality.FLAT and low.get_quality() == SDMaterials.Quality.POM
 			and med.get_quality() == SDMaterials.Quality.POM_SELF_SHADOW, "Off = flat, Low = POM, Medium and up = POM with self-shadowing")
-	check(not low.near_field_enabled and not med.near_field_enabled and high.near_field_enabled and epic.near_field_enabled,
-			"near-camera geometry only at High and Epic")
+	check(not low.near_field_enabled and not med.near_field_enabled and not high.near_field_enabled and epic.near_field_enabled,
+			"near-camera geometry only at Epic")
 	check(epic.scatter_enabled and not high.scatter_enabled, "pebble scatter only at Epic")
-	check(low.pom_max_steps <= med.pom_max_steps and med.pom_max_steps <= epic.pom_max_steps and low.pom_fade_end <= med.pom_fade_end
-			and med.pom_fade_end <= epic.pom_fade_end and low.pom_refine_steps < med.pom_refine_steps,
-			"steps, fade distance and refinement grow with the preset")
-	check(epic.near_field_resolution > high.near_field_resolution and epic.near_field_spacing < high.near_field_spacing,
-			"Epic's field is denser than High's")
+	check(low.pom_max_steps <= med.pom_max_steps and med.pom_max_steps <= high.pom_max_steps and low.pom_fade_end <= med.pom_fade_end
+			and med.pom_fade_end <= high.pom_fade_end and low.pom_refine_steps < med.pom_refine_steps and med.pom_refine_steps <= high.pom_refine_steps
+			and high.self_shadow == SDSettings.SelfShadow.SOFT and med.self_shadow == SDSettings.SelfShadow.HARD,
+			"steps, fade distance, refinement and self-shadow quality grow from Low to High")
+	var same := true
+	for property in ["pom_min_steps", "pom_max_steps", "pom_refine_steps", "pom_fade_start", "pom_fade_end", "pom_lod_bias", "pom_max_lod",
+			"self_shadow", "self_shadow_steps", "self_shadow_distance", "self_shadow_softness"]:
+		same = same and high.get(property) == epic.get(property)
+	check(same, "Epic is High plus the near-camera geometry and pebbles")
 	var budgets := [0.5, 1.2, 2.0, 3.0]
 	var ok := true
 	for p in 4:
@@ -152,8 +156,18 @@ func test_manager() -> void:
 
 func test_field_geometry() -> void:
 	print("\n== field geometry")
-	for preset in [SDSettings.Preset.HIGH, SDSettings.Preset.EPIC]:
-		var s := SDSettings.create_preset(preset)
+	# Epic's field, a node with its defaults, and a dense grid (4 rings of 256 at 1.5 cm).
+	var dense := SDSettings.create_preset(SDSettings.Preset.EPIC)
+	dense.near_field_levels = 4
+	dense.near_field_resolution = 256
+	dense.near_field_spacing = 0.015
+	var defaults := DisplacementField3D.new()
+	var configs := {"Epic": SDSettings.create_preset(SDSettings.Preset.EPIC), "dense": dense}
+	check(defaults.levels == configs["Epic"].near_field_levels and defaults.resolution == configs["Epic"].near_field_resolution
+			and is_equal_approx(defaults.base_spacing, configs["Epic"].near_field_spacing), "a new field's defaults are Epic's grid")
+	defaults.free()
+	for config_name: String in configs:
+		var s: SDSettings = configs[config_name]
 		var field := DisplacementField3D.new()
 		field.levels = s.near_field_levels
 		field.resolution = s.near_field_resolution
@@ -172,10 +186,10 @@ func test_field_geometry() -> void:
 				ok = ok and r.x >= sqrt(2.0) * (inner + delta) - 1e-6
 		var fade := field.get_fade_range()
 		ok = ok and fade.y <= field.get_reach() - delta and fade.x < fade.y
-		check(ok, "%s: morph bands fit inside their rings and the relief fades out inside the grid (reach %.1f m, snap %.2f m)" % [SDSettings.preset_name(preset), field.get_reach(), field.get_snap()])
+		check(ok, "%s: morph bands fit inside their rings and the relief fades out inside the grid (reach %.1f m, snap %.2f m)" % [config_name, field.get_reach(), field.get_snap()])
 		var o := field.snapped_origin(Vector3(1.234, 5.0, -7.777))
 		check(is_zero_approx(fposmod(o.x, field.get_snap())) or is_equal_approx(fposmod(o.x, field.get_snap()), field.get_snap()),
-				"%s: the origin snaps to the coarsest lattice" % SDSettings.preset_name(preset))
+				"%s: the origin snaps to the coarsest lattice" % config_name)
 		field.free()
 	var mesh := DisplacementField3D.build_mesh(4, 16)
 	var arrays := mesh.surface_get_arrays(0)
