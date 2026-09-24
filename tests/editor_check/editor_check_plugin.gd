@@ -142,10 +142,12 @@ func _finish() -> void:
 	print("EDITOR CHECK OK" if _failures.is_empty() else "EDITOR CHECK FAIL: %s" % ", ".join(_failures))
 	if _sd_plugin != null:
 		_sd_plugin.free()
-	# Quitting while the field is still selected, right after undoing and redoing its bake, makes
-	# the 4.7.2 editor report "Can't use get_node() with absolute paths from outside the active
-	# scene tree" during shutdown (after the scene was saved; nothing is lost). The cause was not
-	# found; with the selection cleared first it does not happen (README, Troubleshooting).
+	# Godot 4.7.2 engine issue, not the addon's: get_tree().quit() from an editor plugin while any
+	# Node3D is selected (here the field; the ground or a plain Camera3D do it too, with no bake and
+	# no undo) usually prints "Can't use get_node() with absolute paths from outside the active
+	# scene tree" during shutdown. It is reproducible with an empty project and no addon. The
+	# editor's own quit (window close, Scene > Quit) goes through EditorNode::_exit_editor() and
+	# does not print it. Clearing the selection first avoids it.
 	EditorInterface.get_selection().clear()
 	await _frames_wait(10)
 	get_tree().quit(0 if _failures.is_empty() else 1)
