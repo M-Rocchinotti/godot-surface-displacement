@@ -56,10 +56,10 @@ static func create_preset(preset: Preset) -> SDSettings:
 			s.self_shadow = SelfShadow.OFF
 		Preset.LOW:
 			s.pom_min_steps = 4
-			s.pom_max_steps = 12
+			s.pom_max_steps = 10
 			s.pom_refine_steps = 0
-			s.pom_fade_start = 10.0
-			s.pom_fade_end = 16.0
+			s.pom_fade_start = 8.0
+			s.pom_fade_end = 14.0
 			s.pom_max_lod = 5.0
 			s.self_shadow = SelfShadow.OFF
 		Preset.MEDIUM:

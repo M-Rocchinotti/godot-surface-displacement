@@ -168,7 +168,7 @@ sd.settings_changed.connect(_refresh_menu)
 | Preset | POM steps (min-max, bisection) | Relief fades out | Self-shadow | Near-camera geometry | Pebbles |
 |---|---|---|---|---|---|
 | Off | - (normal mapping) | - | - | - | - |
-| Low | 4-12, secant only | 10-16 m | - | - | - |
+| Low | 4-10, secant only | 8-14 m | - | - | - |
 | Medium | 8-20, 3 | 18-30 m | hard, 6 steps, to 15 m | - | - |
 | High | 10-28, 4 | 25-40 m | soft, 12 steps, to 25 m | - | - |
 | Epic | 8-20, 3 | 20-35 m | soft, 8 steps, to 20 m | 3 rings x 96 at 4 cm (to 7.7 m) | to 8 m |
