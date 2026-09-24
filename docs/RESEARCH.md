@@ -99,9 +99,9 @@ This is the specification for `sd_core.gdshaderinc`.
 - With `DEPTH`: about 2-3.5 ms.
 - Ground usually covers about 50-60 % of an FPS frame, so scale these by that share.
 
-#### A3.2 Review of `E:\crater-zombie-fps\assets\textures\pbr\triplanar_pom.gdshader`
+#### A3.2 Review of an existing game's triplanar POM shader
 
-It works and is readable. These findings should be fixed in the generalized addon shader, and the game's two materials (`concrete_floor.tres`, `concrete_wall.tres`) should then move to it.
+The starting point was a triplanar POM shader from an existing Godot 4 game (a concrete floor and wall material). It works and is readable. These findings should be fixed in the generalized addon shader, and such materials should then move to it.
 
 | # | Finding | Effect | Fix |
 |---|---|---|---|
@@ -134,8 +134,8 @@ It works and is readable. These findings should be fixed in the generalized addo
 - **Seam to POM.** In the outer band, the grid's amplitude fades to 0 while the *grid material's* POM strength fades in (`pom = amp·(1-fade)`). Beyond the grid, the ground material's own POM carries on.
   - The remaining mismatch: POM relief sits below the surface and the grid's relief sits above it. That is a constant offset equal to the amplitude (2-5 cm), at 10-15 m, inside a fade band.
 - **Base height source.**
-  - *Heightfield terrain* (the `.cmap` terrain rows): sample the map's own height grid directly. This is exact and cheap.
-  - *Arbitrary ground meshes* (the crater floor, the Havana streets): a **one-time bake**. Render only the meshes on a "displaceable ground" render layer into a top-down orthographic SubViewport in a *separate World3D*, with a capture material that writes world height and layer ID.
+  - *Heightfield terrain* (a terrain with its own height grid): sample that grid directly. This is exact and cheap.
+  - *Arbitrary ground meshes* (a sculpted floor, city streets made of imported meshes): a **one-time bake**. Render only the meshes on a "displaceable ground" render layer into a top-down orthographic SubViewport in a *separate World3D*, with a capture material that writes world height and layer ID.
     - The result is an RF height texture plus an R8 ID texture, for example 0.1 m texels: 2048² for a 200 m map is about 16 MB + 4 MB.
     - Save it as a resource from an editor tool; the runtime fallback bakes at load.
     - Prior art: Terrain3D bakes its displacement atlas with a viewport; forum and blog examples use orthographic depth captures to fit grass and snow.
@@ -152,7 +152,7 @@ It works and is readable. These findings should be fixed in the generalized addo
   - Epic: about 0.5-1.0 ms.
 - **Scope limits.**
   - Height-field-like ground only: no overhangs and no vertical walls.
-  - The grid uses world-planar mapping, so the original mesh's UV layout is **not** kept. Paving patterns need a per-area rotation and offset, and the Havana streets are UV-mapped GLB meshes, so their road and sidewalk materials must be replaced by name, as `havana_material_fix.gd` already does for glass.
+  - The grid uses world-planar mapping, so the original mesh's UV layout is **not** kept. Paving patterns need a per-area rotation and offset, and streets imported as UV-mapped GLB meshes need their road and sidewalk materials replaced by world-planar ones.
   - One field per rendering camera.
   - It must not be put over Terrain3D terrain. Terrain3D (MIT) already displaces its own clipmap: PR #747, subdivision levels 0-6 and a displacement atlas; about 15-45 % cost according to 80.lv, a secondary source. For Terrain3D users, the addon should document "use Terrain3D's displacement" and provide only POM for meshes.
 
@@ -165,7 +165,7 @@ It works and is readable. These findings should be fixed in the generalized addo
 - **Meshes:** 4-6 procedural pebbles (noise-displaced icospheres, 40-80 triangles, generated at load; no asset licence issue), triplanar rock material, no shadows, dithered visibility-range fade.
 - **Estimated cost:** 5-8k instances within about 10 m, about 0.4M triangles × 2 passes: about 0.3-0.6 ms.
 - **Value:** high for gravel and rubble, because it breaks the "painted on" read at grazing angles. None for cobblestones.
-- **ProtonScatter** (MIT, v4.2.0 in the game) is static placement with chunks and has no camera-following mode. It is kept for authored scatter, not used for this.
+- **ProtonScatter** (MIT, v4.2.0) is static placement with chunks and has no camera-following mode. It is kept for authored scatter, not used for this.
 
 #### A3.5 Offline "hero" subdivision + displacement (Blender headless; optional tool, v0.2)
 
@@ -187,27 +187,27 @@ It works and is readable. These findings should be fixed in the generalized addo
 - **Precision.**
   - Every local height map is 8-bit JPG, and JPEG block artefacts show under self-shadowing and at grazing angles.
   - Godot 4.7 loads 16-bit PNG as 8-bit (A1).
-  - For the demo and the game's key surfaces, download **EXR displacement** from `https://api.polyhaven.com/files/<id>` (`Displacement` → `2k` → `exr`/`png`, also 1k-16k available), then import it lossless as RH, or convert to an `Image.FORMAT_R16` `.res`.
+  - For the demo's key surfaces, download **EXR displacement** from `https://api.polyhaven.com/files/<id>` (`Displacement` → `2k` → `exr`/`png`, also 1k-16k available), then import it lossless as RH, or convert to an `Image.FORMAT_R16` `.res`.
 - **Relief statistics (measured).** The script computed per-map 1st/99th percentiles and a high-frequency share (std of map minus 128² blur, divided by range; high means stone-scale relief, low means macro undulation).
-  - Script: `E:\dev\temp\...\scratchpad\disp_stats.py`.
+  - Computed by a one-off analysis script (not kept in the repository).
   - The addon's importer should compute the same p1/p99 and store them as the remap range.
 
 | Use | Recommended sets (tile size m · p1-p99 range · hf) | Notes |
 |---|---|---|
-| **Gravel path, "individual stones"** (demo hero, crater paths, Bastion `gravel`) | **gravel_stones** (2.0 · 0.42 · 0.13), **rocky_gravel** (1.81 · 0.40 · 0.12), **clean_pebbles** (2.0 · 0.55 · 0.13), gravel (2.0 · 0.35 · 0.17), gravel_floor_03 (2.5 · 0.35 · 0.19) | Clear stone separation. The game currently uses `bicolour_gravel` for `gravel`, which has only **0.15** range: fine aggregate, almost flat relief, good for POM only. Avoid `gravel_floor_04` (dust, as the game's own `SURFACE_SETS` note says), `pebbles` (0.14) and `river_small_rocks` (0.19). |
+| **Gravel path, "individual stones"** (the demo's hero surface) | **gravel_stones** (2.0 · 0.42 · 0.13), **rocky_gravel** (1.81 · 0.40 · 0.12), **clean_pebbles** (2.0 · 0.55 · 0.13), gravel (2.0 · 0.35 · 0.17), gravel_floor_03 (2.5 · 0.35 · 0.19) | Clear stone separation. `bicolour_gravel` has only **0.15** range: fine aggregate, almost flat relief, good for POM only. Avoid `gravel_floor_04` (mostly dust), `pebbles` (0.14) and `river_small_rocks` (0.19). |
 | Larger pebbles and river stones | ganges_river_pebbles (2.16 · 0.64), dry_river_pebbles (2.0 · 0.63), large_pebbles (2.0 · 0.65) | Big, rounded; strong displacement candidates. |
-| **Cobblestone** (Havana streets, demo) | **cobblestone_floor_08** (2.0 · 0.80), cobblestone_floor_03 (2.4 · 0.80), cobblestone_floor_07 (2.0 · 0.75), cobblestone_floor_13 (2.0 · 0.84), cobblestone_01 (2.4 · 0.76), cobblestone_large_01 (4.0 · 0.64); rectangular setts (Havana *adoquines*): square_cobblestone (2.0 · 0.35), cobblestone_square (1.0 · 0.47) | High range, low hf: large rounded setts. They need world-planar rotation to follow the street. The game's own `cobblestone` texture is StableMaterials-generated with **no height map**. |
-| Sidewalk and pavers (Havana) | pavement_01 (1.5 · 0.67), pavement_04 (3.1 · 0.71, brick), concrete_pavers (1.92 · 0.44), herringbone_pavement (2.0 · 0.41) | |
-| Rocky ground (crater floor, `rock`) | rocks_ground_02/04/05/06 (2-3 · 0.75-0.86), rock_path (2.0 · 0.54), brown_mud_rocks_01 (0.53, already the game's `dirt`), stony_dirt_path (2.17 · 0.32) | rocks_ground_* are large rocks, with hf about 0.01: grid displacement shows them best. |
+| **Cobblestone** (old-town streets, demo) | **cobblestone_floor_08** (2.0 · 0.80), cobblestone_floor_03 (2.4 · 0.80), cobblestone_floor_07 (2.0 · 0.75), cobblestone_floor_13 (2.0 · 0.84), cobblestone_01 (2.4 · 0.76), cobblestone_large_01 (4.0 · 0.64); rectangular setts: square_cobblestone (2.0 · 0.35), cobblestone_square (1.0 · 0.47) | High range, low hf: large rounded setts. They need world-planar rotation to follow the street. Generated texture sets often come with **no height map**: nothing to displace. |
+| Sidewalk and pavers | pavement_01 (1.5 · 0.67), pavement_04 (3.1 · 0.71, brick), concrete_pavers (1.92 · 0.44), herringbone_pavement (2.0 · 0.41) | |
+| Rocky ground | rocks_ground_02/04/05/06 (2-3 · 0.75-0.86), rock_path (2.0 · 0.54), brown_mud_rocks_01 (0.53), stony_dirt_path (2.17 · 0.32) | rocks_ground_* are large rocks, with hf about 0.01: grid displacement shows them best. |
 | Rubble | rubble (2.0 · 0.45), concrete_debris (2.0 · 0.47), broken_brick_wall (1.8 · 0.57), castle_brick_broken_06 (2.5 · 0.55) | |
 | Brick walls (POM + self-shadow; hero bake candidates) | brick_wall_001 (3.0 · 0.59), brick_wall_10 (1.9 · 0.55), medieval_red_brick (2.0 · 0.55), brick_wall_04 (0.51) | Avoid red_brick (0.25), red_bricks_04 (0.15) and mixed_brick_wall (0.16). |
-| Avoid for displacement | embedded_rock_floor (0.07), floor_pavement (0.07), damaged_concrete_floor (0.12, the crater's current POM floor, which explains why it needed a 16 cm height scale) | |
+| Avoid for displacement | embedded_rock_floor (0.07), floor_pavement (0.07), damaged_concrete_floor (0.12: so little relief that a POM floor made from it needs an exaggerated height scale, as in A3.2) | |
 
-- Nothing is missing for the demo or the game. The only reason to download is **16-bit EXR** height for the chosen sets.
+- Nothing is missing for the demo. The only reason to download is **16-bit EXR** height for the chosen sets.
 - Backup CC0 source: ambientCG (Gravel0xx, PavingStones0xx, Rocks0xx), with 16-bit PNG displacement. It needs EXR conversion for Godot, because of the 8-bit PNG loader.
 - Check each set visually before use; the statistics rank the candidates, they do not choose for you.
 
-### A5. Architecture (mirrors `godot-hybrid-gi`)
+### A5. Architecture (planned)
 
 ```
 addons/surface_displacement/
@@ -225,7 +225,7 @@ addons/surface_displacement/
   shaders/variants/*.gdshader    #define-generated variants (self-shadow, depth-write) -> precompiled at load
   tools/material_converter.gd    StandardMaterial3D (+heightmap) -> SD material, undoable
   tools/height_analyser.gd       p1/p99, suggested height_m, EXR -> FORMAT_R16 .res
-demo/  gravel path, Havana-like cobble street + sidewalk, brick wall, rubble; fly/orbit camera; bench camera path
+demo/  gravel path, cobble street + sidewalk, brick wall, rubble; fly/orbit camera; bench camera path
 tests/ logic (headless), render (headed), benchmark (1080p budgets), mutations, shipped archive, editor check
 tools/ godot.py runner, capture_screenshots, reference mesh builder, bake_displaced_mesh.py (Blender, not shipped)
 docs/  ARCHITECTURE.md, RESEARCH.md (this file, trimmed), images/
@@ -304,5 +304,5 @@ Measurement convention, as in Hybrid GI: time added against the same scene with 
   - Guertin et al. (2014)
   - Jimenez, "Next Generation Post Processing in Call of Duty: AW" (2014)
   - Mitchell, GPU Gems 3 ch. 13 (2007)
-- Poly Haven API: `api.polyhaven.com/files/<id>`, `api.polyhaven.com/info/<id>` (formats and real dimensions); local texture statistics from `disp_stats.py` (scratchpad)
-- Game code: every file listed in §C1, `assets/textures/pbr/*`, `tools/build_materials.gd`, `docs/reports/map_environment.md`, and `E:\godot-hybrid-gi` (README, ARCHITECTURE, layout) as the template
+- Poly Haven API: `api.polyhaven.com/files/<id>`, `api.polyhaven.com/info/<id>` (formats and real dimensions); local texture statistics from a one-off analysis script
+- The existing game shader reviewed in A3.2, and a sibling addon's layout (README, ARCHITECTURE, tests) as the template

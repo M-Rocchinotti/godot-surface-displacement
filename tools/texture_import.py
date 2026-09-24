@@ -1,8 +1,8 @@
 """Write Godot `.import` files with explicit settings for Surface Displacement textures.
 
 Godot decides import settings on first import. Without an explicit `.import`, a texture used only
-by a ShaderMaterial is imported as a 2D texture WITHOUT mipmaps (the bug that made the crater's
-POM shimmer), and "Detect 3D" may later recompress a height map to lossy BC6H. Writing the
+by a ShaderMaterial is imported as a 2D texture WITHOUT mipmaps (a common cause of shimmering
+POM), and "Detect 3D" may later recompress a height map to lossy BC6H. Writing the
 `.import` file before the first import pins the settings; Godot fills in the remaining keys.
 
 Kinds:

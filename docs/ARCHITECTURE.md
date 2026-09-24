@@ -65,8 +65,8 @@ global shader uniforms, so they change without recompiling anything.
 1. **Level of detail first.** The mip level is computed once, from the rasterized uv's
    derivatives, before any divergent control flow (`sd_march_lod`); every sample inside the loop is
    `textureLod` at that level. Implicit derivatives inside a data-dependent loop are undefined,
-   and a missing mip chain makes every sample read the full-size map (the crater bug the research
-   found). If the level is at or above `sd_pom_range.w`, the relief is below a pixel and the march
+   and a missing mip chain makes every sample read the full-size map (a common POM bug, found in
+   the shader the research reviewed). If the level is at or above `sd_pom_range.w`, the relief is below a pixel and the march
    is skipped.
 2. **Adaptive linear search** from the top of the relief slab `(1 - c) * amp` down to its bottom
    `-c * amp`, with `mix(max_steps, min_steps, N.V) * pom_steps_scale * fade` steps.
