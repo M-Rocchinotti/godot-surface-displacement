@@ -119,7 +119,28 @@ func add_tracked_camera(pos: Vector3) -> Camera3D:
 ## Top-down orthographic view with one pixel per innermost vertex, pixel centres on the lattice:
 ## every pixel on a vertex of its ring (away from morph bands) must show exactly
 ## lift + relief(height map at the ring's mip), computed here from the height image itself.
+## Twice: without a mip limit, and with the relief fading out by mip level 1 (1.5-2.7 m from
+## the tracked camera), where the relief is also scaled by the mip fade of the pixel footprint
+## the tracked camera will have there.
 func test_vertex_heights() -> void:
+	for max_lod: float in [99.0, 1.0]:
+		print("  -- mip limit %s" % ("none" if max_lod > 50.0 else "%.0f" % max_lod))
+		SDGlobals.set_value(SDGlobals.POM_RANGE, Vector4(1000, 2000, 0, max_lod))
+		await _vertex_heights_case(max_lod)
+
+
+## The mip fade (sd_mip_fade) of the relief at ground point [param xz] (ground at y = 0) seen by
+## [param cam] (perspective, rendering into the test viewport), for [param texel] m texels.
+static func vertex_mip_fade(xz: Vector2, cam: Camera3D, texel: float, max_lod: float) -> float:
+	var d := Vector3(xz.x, 0.0, xz.y).distance_to(cam.global_position)
+	var pixel := 2.0 * tan(deg_to_rad(cam.fov) * 0.5) / float(SIZE.y)
+	var footprint := pixel * d / maxf(cam.global_position.y / d, 0.05)
+	var lod := log(footprint / texel) / log(2.0)
+	var s := clampf(lod - (max_lod - 1.0), 0.0, 1.0)
+	return 1.0 - s * s * (3.0 - 2.0 * s)
+
+
+func _vertex_heights_case(max_lod: float) -> void:
 	var tile := 1.28 # 256 px -> 5 mm texels; S0 = 2 cm -> ring k samples mip 2 + k
 	var amp := 0.04
 	var field := Harness.make_wave_field(256)
@@ -142,6 +163,8 @@ func test_vertex_heights() -> void:
 	var fade := f.get_fade_range()
 	var errors := []
 	var per_ring := [0, 0, 0, 0]
+	var partly_faded := 0
+	var faded_out := 0
 	for py in range(0, SIZE.y, 3):
 		for px in range(0, SIZE.x, 3):
 			var xz := pixel_to_xz(Vector2i(px, py), centre, S0)
@@ -159,14 +182,21 @@ func test_vertex_heights() -> void:
 			if d >= f.get_morph_range(k).x or d >= fade.x:
 				continue # morphing or fading
 			var hm: float = Harness.sample_field(mips[k], xz / tile)
-			var want := f.lift + amp * hm
+			var mip_fade := vertex_mip_fade(xz, tracked, tile / 256.0, max_lod)
+			partly_faded += 1 if mip_fade > 0.05 and mip_fade < 0.95 else 0
+			faded_out += 1 if mip_fade == 0.0 else 0
+			var want := f.lift + amp * hm * mip_fade
 			var got := img.get_pixel(px, py).r * scale
 			errors.append(absf(got - want))
 			per_ring[k] += 1
 	var worst := percentile(errors, 1.0)
-	print("  %d vertices checked (per ring %s), largest error %.4f mm" % [errors.size(), per_ring, worst * 1000.0])
+	print("  %d vertices checked (per ring %s; %d partly faded by the mip fade, %d faded out), largest error %.4f mm" % [
+			errors.size(), per_ring, partly_faded, faded_out, worst * 1000.0])
 	check(per_ring[0] > 300 and per_ring[1] > 300 and per_ring[2] > 100, "vertices of the inner three rings are checked")
-	check(worst < 0.00005, "every vertex is at lift + relief of the height map at its ring's mip (within 0.05 mm)")
+	if max_lod < 50.0:
+		check(partly_faded > 100 and faded_out > 100, "the mip fade covers part of the checked vertices")
+	check(worst < 0.00005, "every vertex is at lift + relief of the height map at its ring's mip%s (within 0.05 mm)" % (
+			", scaled by the mip fade" if max_lod < 50.0 else ""))
 	SDGlobals.set_value(SDGlobals.DEBUG, Vector4(0, 0.1, 0, 0))
 
 
@@ -440,6 +470,16 @@ func test_no_swimming() -> void:
 ## hidden: around the field's edge, where its relief has faded out, both must look the same,
 ## and beyond it they must be identical.
 func test_edge_seam() -> void:
+	# Once without a mip limit, once with the relief fading out by mip level 5 (3.2-4.5 m from this
+	# camera at 960 x 540 on the 1 mm texels of the gravel) inside the grid: the field's fragments
+	# and vertices must fade exactly like the ground material's parallax.
+	for max_lod: float in [99.0, 5.0]:
+		print("  -- mip limit %s" % ("none" if max_lod > 50.0 else "%.0f" % max_lod))
+		SDGlobals.set_value(SDGlobals.POM_RANGE, Vector4(1000, 2000, 0, max_lod))
+		await _edge_seam_case()
+
+
+func _edge_seam_case() -> void:
 	var results := []
 	for with_field in [true, false]:
 		h.new_lit_scene(Color(0.2, 0.21, 0.24))

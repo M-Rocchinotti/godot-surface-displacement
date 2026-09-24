@@ -25,13 +25,14 @@ void vertex() {
 }
 
 // Marches one projection. Frame space: view space for UV mapping, world space otherwise.
+// amp and fade already include the distance and mip fades (see the callers).
 // Returns the hit's offset from the rasterized point (frame space) and writes its uv and height.
 vec3 sd_resolve_plane(SDPlane p, vec3 n, vec3 v, float amp, float fade, float lod, out vec2 uv_hit,
 		out float z_hit, inout float steps_used) {
 	uv_hit = p.uv;
 	z_hit = 0.0;
 #ifdef SD_POM
-	if (amp > 1e-5 && lod < sd_pom_range.w && !IN_SHADOW_PASS) {
+	if (amp > 1e-5 && !IN_SHADOW_PASS) {
 		vec2 duv_dz = sd_duv_dz(p, n, v);
 		float z_top = (1.0 - height_center) * amp;
 		float z_bot = -height_center * amp;
@@ -60,6 +61,7 @@ void fragment() {
 	vec2 main_uv = vec2(0.0);
 	float main_z = 0.0;
 	float main_lod = 0.0;
+	float main_amp = 0.0;     // its relief depth after the distance and mip fades
 	vec3 main_n = vec3(0.0, 1.0, 0.0);
 
 #ifdef SD_MAPPING_UV
@@ -82,10 +84,11 @@ void fragment() {
 	p.axis = n;
 	p.weight = 1.0;
 	float lod = sd_march_lod(p);
+	float mip_fade = sd_mip_fade(lod);
 	vec2 uv_hit;
 	float z_hit;
-	float amp_uv = inv_det != 0.0 ? amp : 0.0;
-	offset_view = sd_resolve_plane(p, n, v, amp_uv, fade, lod, uv_hit, z_hit, steps_used);
+	float amp_uv = inv_det != 0.0 ? amp * mip_fade : 0.0;
+	offset_view = sd_resolve_plane(p, n, v, amp_uv, fade * mip_fade, lod, uv_hit, z_hit, steps_used);
 	planes_marched = steps_used > 0.0 ? 1.0 : 0.0;
 	albedo_sum = SD_SAMPLE(albedo_texture, uv_hit, p.ddx, p.ddy).rgb;
 	orm_sum = SD_SAMPLE(orm_texture, uv_hit, p.ddx, p.ddy).rgb;
@@ -96,6 +99,7 @@ void fragment() {
 	main_uv = uv_hit;
 	main_z = z_hit;
 	main_lod = lod;
+	main_amp = amp_uv;
 	main_n = n;
 #endif
 
@@ -110,9 +114,10 @@ void fragment() {
 	p.ddx = vec2(dot(p.gu, dpdx), dot(p.gv, dpdx));
 	p.ddy = vec2(dot(p.gu, dpdy), dot(p.gv, dpdy));
 	float lod = sd_march_lod(p);
+	float mip_fade = sd_mip_fade(lod);
 	vec2 uv_hit;
 	float z_hit;
-	vec3 offset_world = sd_resolve_plane(p, n, v, amp, fade, lod, uv_hit, z_hit, steps_used);
+	vec3 offset_world = sd_resolve_plane(p, n, v, amp * mip_fade, fade * mip_fade, lod, uv_hit, z_hit, steps_used);
 	planes_marched = steps_used > 0.0 ? 1.0 : 0.0;
 	offset_view = world_to_view * offset_world;
 	albedo_sum = SD_SAMPLE(albedo_texture, uv_hit, p.ddx, p.ddy).rgb;
@@ -124,6 +129,7 @@ void fragment() {
 	main_uv = uv_hit;
 	main_z = z_hit;
 	main_lod = lod;
+	main_amp = amp * mip_fade;
 	main_n = n;
 #endif
 
@@ -147,10 +153,11 @@ void fragment() {
 		p.ddx = vec2(dot(p.gu, dpdx), dot(p.gv, dpdx));
 		p.ddy = vec2(dot(p.gu, dpdy), dot(p.gv, dpdy));
 		float lod = sd_march_lod(p);
+		float mip_fade = sd_mip_fade(lod);
 		vec2 uv_hit;
 		float z_hit;
 		float before = steps_used;
-		offset_world += wa * sd_resolve_plane(p, n, v, amp, fade, lod, uv_hit, z_hit, steps_used);
+		offset_world += wa * sd_resolve_plane(p, n, v, amp * mip_fade, fade * mip_fade, lod, uv_hit, z_hit, steps_used);
 		planes_marched += steps_used > before ? 1.0 : 0.0;
 		albedo_sum += wa * SD_SAMPLE(albedo_texture, uv_hit, p.ddx, p.ddy).rgb;
 		orm_sum += wa * SD_SAMPLE(orm_texture, uv_hit, p.ddx, p.ddy).rgb;
@@ -162,6 +169,7 @@ void fragment() {
 			main_uv = uv_hit;
 			main_z = z_hit;
 			main_lod = lod;
+			main_amp = amp * mip_fade;
 		}
 	}
 	main_n = n;
@@ -211,7 +219,9 @@ void fragment() {
 		sd_ss_gv = to_view * main_plane.gv;
 		sd_ss_n = normalize(to_view * main_n);
 		sd_ss_axis = normalize(to_view * main_plane.axis);
-		sd_ss_params = vec4(main_lod, steps_used > 0.0 ? amp : 0.0, height_center, sd_shadow.w * self_shadow_strength * in_range);
+		// The shadow is marched over the faded relief (main_amp), so it fades with it: the flatter
+		// relief casts shorter and fewer shadows (render test relief_fades_with_mip_level).
+		sd_ss_params = vec4(main_lod, steps_used > 0.0 ? main_amp : 0.0, height_center, sd_shadow.w * self_shadow_strength * in_range);
 	}
 #endif
 
@@ -235,7 +245,7 @@ void fragment() {
 		} else if (debug_view == 2) {
 			debug_color = vec3(steps_used / 64.0, planes_marched / 3.0, main_lod / 8.0);
 		} else if (debug_view == 3) {
-			debug_color = vec3(amp > 0.0 ? main_z / amp + height_center : 0.0);
+			debug_color = vec3(main_amp > 0.0 ? main_z / main_amp + height_center : 0.0);
 		} else {
 			debug_color = normal_world * 0.5 + 0.5;
 		}

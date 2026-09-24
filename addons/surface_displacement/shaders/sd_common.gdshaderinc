@@ -14,7 +14,7 @@
 // Quality, set by the SurfaceDisplacement node (Project Settings > Shader Globals; the plugin
 // registers them). x/y/z/w meanings are listed in core/sd_globals.gd.
 global uniform vec4 sd_pom_steps;   // min steps, max steps, bisection steps, unused
-global uniform vec4 sd_pom_range;   // fade start (m), fade end (m), LOD bias, highest LOD that is marched
+global uniform vec4 sd_pom_range;   // fade start (m), fade end (m), LOD bias, mip level where the relief has faded out
 global uniform vec4 sd_shadow;      // steps, max distance (m), softness (0 = hard), strength
 global uniform vec4 sd_debug;       // view (0 = off), scale (m), reference height (m) of the field's world-height view, unused
 global uniform sampler2D sd_dfg;    // Godot's multiple-scattering term, see tools/make_dfg_lut.py
@@ -22,6 +22,15 @@ global uniform sampler2D sd_dfg;    // Godot's multiple-scattering term, see too
 // Distance fade of the relief (1 near, 0 beyond the fade end).
 float sd_fade(float view_distance) {
 	return 1.0 - smoothstep(sd_pom_range.x, max(sd_pom_range.y, sd_pom_range.x + 1e-3), view_distance);
+}
+
+// Fade of the relief with the mip level the march samples: 1 up to one level below
+// sd_pom_range.w, 0 from sd_pom_range.w on, where no march runs. The limit bounds the cost where
+// the height map is strongly minified (grazing views, fine textures; the presets set it, see
+// SDSettings.pom_max_lod). Fading over a whole level keeps its end from showing as an edge that
+// moves with the camera.
+float sd_mip_fade(float lod) {
+	return 1.0 - smoothstep(sd_pom_range.w - 1.0, sd_pom_range.w, lod);
 }
 
 // Height map value h remapped so remap.x -> 0 and remap.y -> 1, clamped; remap.x > remap.y inverts

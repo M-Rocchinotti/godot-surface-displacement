@@ -35,6 +35,9 @@
 // Set every frame / on change by DisplacementField3D.
 uniform vec3 field_origin;        // world position of lattice (0, 0) (snapped)
 uniform vec3 field_camera;        // tracked camera, world
+// Tracked camera's pixel: x = radians per pixel (perspective), y = metres per pixel (orthogonal,
+// else 0). The vertices fade their relief with the mip level the fragments will march there.
+uniform vec2 pixel_size = vec2(0.0012, 0.0);
 uniform float base_spacing = 0.02;
 uniform vec4 level_morph[SD_FIELD_MAX_LEVELS]; // per ring: morph start (m), morph end (m)
 uniform vec2 amp_fade = vec2(10.0, 12.0);      // relief fades out between these distances (m)
@@ -128,6 +131,15 @@ float sd_field_fade(vec2 xz) {
 #define SD_RELIEF_ARG vec4
 #include "res://addons/surface_displacement/shaders/sd_march.gdshaderinc"
 
+// Mip fade (sd_mip_fade) of each layer at `lod` (log2 of metres per pixel).
+vec4 sd_field_mip_fades(float lod) {
+	vec4 f = vec4(0.0);
+	for (int i = 0; i < SD_FIELD_LAYERS; i++) {
+		f[i] = i < layer_count ? sd_mip_fade(lod + layer_e[i].w) : 0.0;
+	}
+	return f;
+}
+
 // Linear steps: the surfaces' formula (sd_step_count) with the layers' steps scale.
 int sd_field_step_count(float n_dot_v, float fade, vec4 w) {
 	float scale = 0.0;
@@ -175,10 +187,15 @@ void vertex() {
 	float displaceable;
 	vec4 w = sd_field_weights(g.weights, displaceable);
 	float ground = g.height;
-	// The field's own fade towards its edge, times the parallax distance fade the materials use,
-	// so the geometry never shows more relief than the parallax shading around it.
+	// The field's own fade towards its edge, times the parallax distance and mip fades the
+	// materials use, so the geometry never shows more relief than the parallax shading around it.
+	// The mip level is the fragments' (see fragment()): the camera's pixel over the distance,
+	// stretched by the angle to the ground; like the fragments, the larger screen axis.
 	float view_distance = distance(vec3(xz.x, ground, xz.y), field_camera);
-	float y = ground + lift + sd_field_fade(xz) * sd_fade(view_distance) * sd_field_relief(xz, lod, w);
+	vec3 to_camera = (field_camera - vec3(xz.x, ground, xz.y)) / max(view_distance, 1e-4);
+	float footprint = (pixel_size.y > 0.0 ? pixel_size.y : pixel_size.x * view_distance) / max(dot(g.normal, to_camera), SD_MIN_NDOTV);
+	vec4 w_relief = w * sd_field_mip_fades(log2(max(footprint, 1e-6)) + sd_pom_range.z);
+	float y = ground + lift + sd_field_fade(xz) * sd_fade(view_distance) * sd_field_relief(xz, lod, w_relief);
 	y = mix(ground - push_down, y, displaceable);
 	VERTEX = vec3(local_xz.x, y - field_origin.y, local_xz.y);
 	f_base_normal = g.normal;
@@ -198,7 +215,6 @@ void fragment() {
 	float displaceable = f_displaceable;
 	vec4 w = f_weights;
 	float pom_fade = sd_fade(length(VERTEX));
-	float amp = sd_field_amp(w) * pom_fade;
 	// log2 of metres per pixel on the ground (uniform control flow). The footprint is taken on the
 	// ground plane under the proxy: the view ray's point there is the same for every point of the
 	// ray, so its derivatives are smooth across the proxy's bumps and silhouettes (the proxy's own
@@ -209,12 +225,11 @@ void fragment() {
 	vec2 dpdy = dFdy(plane_xz);
 	float pix_m = max(length(dpdx), length(dpdy));
 	float lod = log2(max(pix_m, 1e-6)) + sd_pom_range.z;
-	int main_layer = 0;
-	for (int i = 1; i < SD_FIELD_LAYERS; i++) {
-		if (i < layer_count && w[i] > w[main_layer]) {
-			main_layer = i;
-		}
-	}
+	// Each layer's relief fades with the distance and with its own mip level, as the ground
+	// materials' does; the march and the self-shadow see the faded relief.
+	vec4 mip_fades = sd_field_mip_fades(lod);
+	vec4 w_relief = w * mip_fades * pom_fade;
+	float amp = sd_field_amp(w_relief);
 	vec2 xz_hit = wpos.xz;
 	// Height of this fragment above the ground. The relief is measured from the ground itself, as
 	// the ground material measures it: `lift` only raises the proxy geometry (so the ground mesh
@@ -225,13 +240,20 @@ void fragment() {
 #ifdef SD_POM
 	// March the full-resolution relief over the whole slab [0, amp] along the true view ray,
 	// parameterised by the height z above the ground; the ray passes this fragment at z_hit.
-	if (amp > 1e-5 && displaceable > 0.5 && lod + layer_e[main_layer].w < sd_pom_range.w && !IN_SHADOW_PASS) {
+	if (displaceable > 0.5 && !IN_SHADOW_PASS) {
 		float nv = max(dot(n, v), SD_MIN_NDOTV);
 		vec2 dxz_dz = v.xz * (n.y / nv);
-		int steps = sd_field_step_count(dot(n, v), pom_fade, w);
 		vec2 base_xz = wpos.xz - dxz_dz * z_hit;
 		float z_proxy = z_hit;
-		z_hit = sd_march(base_xz, dxz_dz, amp, 0.0, w * pom_fade, lod, steps, int(sd_pom_steps.z), xz_hit, steps_used);
+		if (amp > 1e-5) {
+			int steps = sd_field_step_count(dot(n, v), pom_fade * dot(w, mip_fades), w);
+			z_hit = sd_march(base_xz, dxz_dz, amp, 0.0, w_relief, lod, steps, int(sd_pom_steps.z), xz_hit, steps_used);
+		} else {
+			// The relief has faded out (distance or mip level): the ray meets the ground itself,
+			// as on the ground material, not the proxy that `lift` holds above it.
+			z_hit = 0.0;
+			xz_hit = base_xz;
+		}
 		// The hit on the view ray (on sloped ground the ground height under xz_hit differs from
 		// f_ground, so it is not rebuilt from xz_hit and z_hit).
 		hit = wpos + v * ((z_hit - z_proxy) * n.y / nv);
@@ -279,12 +301,12 @@ void fragment() {
 		}
 		// The shadow starts on the full relief (the true surface), not on the interpolated mesh.
 		f_ss_xz = xz_hit;
-		f_ss_z = steps_used > 0.0 ? z_hit : sd_field_relief(xz_hit, lod, w * pom_fade);
+		f_ss_z = steps_used > 0.0 ? z_hit : sd_field_relief(xz_hit, lod, w_relief);
 		f_ss_n = normalize(world_to_view * n);
 		f_ss_x = world_to_view * vec3(1.0, 0.0, 0.0);
 		f_ss_z_axis = world_to_view * vec3(0.0, 0.0, 1.0);
 		f_ss_up = world_to_view * vec3(0.0, 1.0, 0.0);
-		f_ss_weights = w * pom_fade;
+		f_ss_weights = w_relief;
 		f_ss_params = vec4(lod, amp * displaceable, sd_shadow.w * strength * in_range, spec);
 	}
 #endif

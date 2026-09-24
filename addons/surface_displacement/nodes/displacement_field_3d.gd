@@ -267,6 +267,21 @@ func _process(_delta: float) -> void:
 	_mesh_instance.global_transform = Transform3D(Basis.IDENTITY, _origin)
 	_material.set_shader_parameter("field_origin", _origin)
 	_material.set_shader_parameter("field_camera", p)
+	_material.set_shader_parameter("pixel_size", camera_pixel_size(cam))
+
+
+## Size of a pixel of [param cam] at its render resolution: x = radians (perspective), y = metres
+## (orthogonal; x is then 0). The field's vertices use it to fade their relief with the mip level
+## the fragments will march.
+static func camera_pixel_size(cam: Camera3D) -> Vector2:
+	var vp := cam.get_viewport()
+	var size := Vector2(1920.0, 1080.0)
+	if vp != null:
+		size = vp.get_visible_rect().size * vp.scaling_3d_scale
+	var pixels := maxf(size.x if cam.keep_aspect == Camera3D.KEEP_WIDTH else size.y, 1.0)
+	if cam.projection == Camera3D.PROJECTION_ORTHOGONAL:
+		return Vector2(0.0, cam.size / pixels)
+	return Vector2(2.0 * tan(deg_to_rad(cam.fov) * 0.5) / pixels, 0.0)
 
 
 func _find_camera() -> Camera3D:

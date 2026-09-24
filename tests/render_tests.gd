@@ -37,6 +37,7 @@ func _run() -> void:
 	await _test("depth_write_opt_in", test_depth_write)
 	await _test("mip_shimmer_at_distance", test_mip_shimmer)
 	await _test("relief_fades_with_distance", test_distance_fade)
+	await _test("relief_fades_with_mip_level", test_mip_fade)
 	print("\nrender tests: %d passed, %d failed" % [_passed, _failed])
 	h.clear_scene()
 	h.viewport.queue_free()
@@ -835,6 +836,135 @@ func test_distance_fade() -> void:
 	check(near_max > 0.02, "the full relief is there before the fade starts")
 	check(far_n > 1000 and far_max < 0.0002, "beyond the fade end the offset is zero (plain normal mapping)")
 
+
+
+## The relief fades out over the last mip level before sd_pom_range.w. It used to end there: the
+## march stopped, and the image changed by about 8 levels (of 255) from one screen row to the
+## next, an edge that moved with the camera. Demo gravel at eye level under a low sun (its
+## self-shadows reach into the fade: at 30 degrees the relief at these mip levels is too gentle to
+## shadow itself), POM with hard self-shadowing, three renders: with the mip limit, without it
+## (limit 99) and without relief (height_m 0: the same shader and texture filtering, while the
+## flat variant's implicit derivatives filter the albedo slightly differently at grazing
+## distances). Per screen row, f = how much of the unlimited relief's effect is left =
+## 1 - |limited - unlimited| / |no relief - unlimited| (row means): 1 before the fade, 0 after it,
+## and at a hard end it drops from 1 to 0 within a row.
+func test_mip_fade() -> void:
+	const MAX_LOD := 5.0
+	h.new_lit_scene(Color(0.2, 0.21, 0.24))
+	var mat := SDMaterials.from_texture_set("res://demo/textures/clean_pebbles", SDMaterials.Mapping.WORLD, {"height_center": 0.0})
+	var plane := PlaneMesh.new()
+	plane.size = Vector2(300, 300)
+	var mi := MeshInstance3D.new()
+	mi.mesh = plane
+	mi.material_override = mat
+	h.scene.add_child(mi)
+	# No shadow map: at 10 degrees it shows acne on the flat plane, which LIGHT_VERTEX moves.
+	var sun := h.add_sun(10.0, 160.0, false)
+	sun.light_energy = 1.4
+	h.add_camera(Vector3(0.0, 1.7, 0.0), Vector3(0.0, 0.2, -20.0), 75.0)
+	# No distance fade, the mip level the hardware would pick, hard self-shadowing everywhere.
+	SDGlobals.set_value(SDGlobals.SHADOW, Vector4(8, 1000, 0, 1))
+	SDGlobals.set_value(SDGlobals.POM_RANGE, Vector4(1000, 2000, 0, MAX_LOD))
+	await h.frames(5)
+	var limited := await h.capture()
+	debug_view(Harness.DEBUG_COST)
+	await h.frames(3)
+	var cost := await h.capture()
+	debug_view(Harness.DEBUG_SELF_SHADOW)
+	SDGlobals.set_value(SDGlobals.POM_RANGE, Vector4(1000, 2000, 0, 99))
+	await h.frames(3)
+	var shadow := await h.capture()
+	debug_view(Harness.DEBUG_OFF)
+	await h.frames(5)
+	var unlimited := await h.capture()
+	mat.set_shader_parameter("height_m", 0.0)
+	await h.frames(5)
+	var flat := await h.capture()
+	# Per row (the middle half of the columns): mip level and f.
+	var rows_lod := PackedFloat32Array()
+	var rows_f := PackedFloat32Array()
+	var rows_relief := PackedFloat32Array()
+	var past_fade := []
+	rows_lod.resize(SIZE.y)
+	rows_f.resize(SIZE.y)
+	rows_relief.resize(SIZE.y)
+	for py in SIZE.y:
+		var lod_sum := 0.0
+		var missing := 0.0
+		var relief := 0.0
+		var n := 0
+		for px in range(SIZE.x / 4, 3 * SIZE.x / 4):
+			var c := cost.get_pixel(px, py)
+			if c.b <= 0.0:
+				continue # sky
+			var u := Harness.luminance(unlimited.get_pixel(px, py))
+			lod_sum += c.b * 8.0
+			missing += absf(Harness.luminance(limited.get_pixel(px, py)) - u)
+			relief += absf(Harness.luminance(flat.get_pixel(px, py)) - u)
+			if c.b * 8.0 > MAX_LOD + 0.01:
+				# Past the fade (this pixel's own mip level; a row's levels spread by a few tenths).
+				past_fade.append(absf(Harness.luminance(limited.get_pixel(px, py)) - Harness.luminance(flat.get_pixel(px, py))))
+			n += 1
+		var ground := n > SIZE.x / 4
+		rows_lod[py] = lod_sum / n if ground else -1.0
+		rows_f[py] = 1.0 - missing / relief if ground and relief > 0.0 else -1.0
+		rows_relief[py] = relief / n if ground else 0.0
+	# Self-shadowed pixels in the fade band without the limit (the factor is 1 + ambient where lit).
+	var lit_level := 0.0
+	var shadowed := 0
+	var band_px := 0
+	for py in SIZE.y:
+		if rows_lod[py] >= MAX_LOD - 1.0 and rows_lod[py] <= MAX_LOD:
+			for px in range(SIZE.x / 4, 3 * SIZE.x / 4):
+				lit_level = maxf(lit_level, shadow.get_pixel(px, py).r)
+	for py in SIZE.y:
+		if rows_lod[py] >= MAX_LOD - 1.0 and rows_lod[py] <= MAX_LOD:
+			for px in range(SIZE.x / 4, 3 * SIZE.x / 4):
+				band_px += 1
+				shadowed += 1 if shadow.get_pixel(px, py).r < lit_level - 0.5 else 0
+	var before := []
+	var relief_at_band := 0.0
+	var relief_at_band_n := 0
+	var band_rows := 0
+	var largest_step := 0.0
+	var step_lod := 0.0
+	for py in range(3, SIZE.y - 3):
+		var lod := rows_lod[py]
+		if lod < 0.0 or rows_f[py] < -0.5:
+			continue
+		if lod >= MAX_LOD - 2.0 and lod < MAX_LOD - 1.1:
+			before.append(rows_f[py])
+		if lod >= MAX_LOD - 1.0 and lod <= MAX_LOD:
+			band_rows += 1
+			relief_at_band += rows_relief[py]
+			relief_at_band_n += 1
+		# The change between the means of 3 rows and of the next 3 rows, around the fade.
+		if lod > MAX_LOD - 1.5 and lod < MAX_LOD + 0.5 and rows_lod[py - 3] > 0.0 and rows_lod[py + 2] > 0.0:
+			var above := (rows_f[py - 3] + rows_f[py - 2] + rows_f[py - 1]) / 3.0
+			var below := (rows_f[py] + rows_f[py + 1] + rows_f[py + 2]) / 3.0
+			if absf(above - below) > largest_step:
+				largest_step = absf(above - below)
+				step_lod = lod
+	var before_mean := 0.0
+	for v: float in before:
+		before_mean += v
+	before_mean /= maxf(before.size(), 1.0)
+	var past_mean := 0.0
+	for v: float in past_fade:
+		past_mean += v
+	past_mean /= maxf(past_fade.size(), 1.0)
+	relief_at_band /= maxf(relief_at_band_n, 1.0)
+	print("  relief effect left: %.3f before the fade (%d rows, mip %.1f-%.1f); the fade spans %d rows, where the unlimited relief changes the image by %.4f (row mean)" % [
+			before_mean, before.size(), MAX_LOD - 2.0, MAX_LOD - 1.1, band_rows, relief_at_band])
+	print("  past the fade (%d px) the image differs from the one without relief by %.5f on average (%.2f %% of that), 99th percentile %.5f" % [
+			past_fade.size(), past_mean, past_mean / maxf(relief_at_band, 1e-9) * 100.0, percentile(past_fade, 0.99)])
+	print("  largest change between neighbouring 3-row means: %.3f (at mip %.2f; a hard end changes by about 1)" % [largest_step, step_lod])
+	print("  %.1f %% of the fade band's pixels are self-shadowed without the limit" % [100.0 * shadowed / maxf(band_px, 1.0)])
+	check(before.size() >= 10 and before_mean > 0.97, "before the fade the relief is all there")
+	check(shadowed > band_px / 50, "the relief shadows itself in the fade band (so the test sees the self-shadow fade too)")
+	check(band_rows >= 10, "the fade spans many screen rows")
+	check(largest_step < 0.3, "no edge where the relief ends: 3-row means of what is left change by less than 0.3")
+	check(past_fade.size() >= 10000 and past_mean < 0.001 * relief_at_band, "past the fade the image is the one without relief")
 
 ## Mean over pixels (ground 10-60 m away) of the standard deviation of luminance over frames.
 func _flicker(frames: Array[Image], cam: Camera3D) -> float:
