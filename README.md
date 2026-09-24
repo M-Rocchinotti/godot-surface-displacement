@@ -30,7 +30,7 @@ what the engine allows:
    contact-hardening self-shadowing with a `light()` that reproduces Godot's own shading, and
    opt-in depth write so props sink into the relief. UV, world-planar and triplanar mapping.
 2. **Real displaced geometry near the camera** for ground (`DisplacementField3D`): a
-   camera-centred grid of LOD rings reaching 12.8-15.4 m from the camera, crack-free, displaced by the same height
+   camera-centred grid of LOD rings (15.4 m across at Epic), crack-free, displaced by the same height
    maps, draped over any ground mesh via a top-down bake. Stones get silhouettes and real
    depth; the ground's collision is unchanged. It blends seamlessly into POM beyond the grid.
 3. **Pebble scatter** (`PebbleScatter3D`): loose pebbles as real little meshes in camera-following
@@ -170,8 +170,8 @@ sd.settings_changed.connect(_refresh_menu)
 | Off | - (normal mapping) | - | - | - | - |
 | Low | 6-16, secant only | 12-20 m | - | - | - |
 | Medium | 8-24, 3 | 20-35 m | hard, 8 steps, to 20 m | - | - |
-| High | 8-24, 3 | 20-35 m | soft, 12 steps, to 20 m | 4 rings x 160 at 2 cm (12.8 m) | - |
-| Epic | 12-32, 4 | 30-50 m | soft, 16 steps, to 30 m | 4 rings x 256 at 1.5 cm (15.4 m) | to 8 m |
+| High | 10-28, 4 | 25-40 m | soft, 12 steps, to 25 m | - | - |
+| Epic | 10-28, 4 | 25-40 m | soft, 12 steps, to 25 m | 3 rings x 96 at 4 cm (to 7.7 m) | to 8 m |
 
 (`core/sd_settings.gd`; Custom takes an `SDSettings` resource with every value.)
 
@@ -184,7 +184,7 @@ sd.settings_changed.connect(_refresh_menu)
 | `layers` | - | Up to four SD ground materials (world-planar mapping, `height_center` 0). The field copies their textures and parameters (`sync_layers()` after changing them in code). |
 | `ground_bake` | - | An `SDGroundBake`. Without one the field bakes at runtime (`bake_on_ready`), or displaces a flat plane at its own height. |
 | `ground_group`, `bake_texel_size` | `sd_ground`, 5 cm | What is baked, and how finely. |
-| `levels`, `resolution`, `base_spacing` | 4, 160, 2 cm | Rings, quads per ring side, finest vertex spacing. The preset sets them (High 4 x 160 at 2 cm: reaches 12.8 m from the camera; Epic 4 x 256 at 1.5 cm: 15.4 m). |
+| `levels`, `resolution`, `base_spacing` | 3, 96, 4 cm | Rings, quads per ring side, finest vertex spacing (the defaults are Epic's: the geometry reaches 7.7 m from the camera). Denser grids cost much more than they show, see [Presets and measured cost](#presets-and-measured-cost). |
 | `lift`, `fade_band` | 2 mm, 0.25 | Height above the ground mesh; outer fraction of the grid where the relief fades to flat. |
 | `cast_shadows` | off | Shadows of the displaced geometry (the POM self-shadow already shadows the relief). |
 | `camera` | active | The camera the grid follows. |
@@ -261,12 +261,13 @@ Details in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). In short:
   flat plates), a refined intersection (stones keep their round tops and sharp contacts instead
   of the stair steps of a plain linear search), self-shadowing (each stone shadows its
   neighbours in the direction of the sun, contact-hardening like real shadows) and, near the
-  camera, geometry: stones rise above the ground plane, stick out against what lies behind them
-  at grazing views and get real depth for SSAO. Loose pebbles on top are real meshes.
-- **The field** is a geometry clipmap of 4 rings, snapped to the camera so vertices never slide
-  over the height map, with CDLOD-style geomorphing so each ring's outer edge matches the next
-  ring exactly. Its fragments still march the full-resolution relief (a 2 cm grid cannot carry
-  2 cm stones), so geometry and POM agree and the grid's edge is invisible.
+  camera, geometry (Epic): cobbles and rocks rise above the ground plane, stick out against what
+  lies behind them at grazing views and get real depth for SSAO; gravel stones smaller than the
+  grid's 4 cm stay parallax, with loose pebbles on top as real meshes.
+- **The field** is a geometry clipmap of LOD rings, snapped to the camera so vertices never
+  slide over the height map, with CDLOD-style geomorphing so each ring's outer edge matches the
+  next ring exactly. Its fragments still march the full-resolution relief (a 4 cm grid cannot
+  carry 2 cm stones), so geometry and POM agree and the grid's edge is invisible.
 
 ## Project structure
 

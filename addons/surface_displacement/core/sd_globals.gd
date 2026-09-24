@@ -29,9 +29,9 @@ const DFG_PATH := "res://addons/surface_displacement/textures/sd_dfg_lut.exr"
 ## Medium preset, so materials look right before any SurfaceDisplacement node runs.
 static func definitions() -> Dictionary:
 	return {
-		POM_STEPS: [RenderingServer.GLOBAL_VAR_TYPE_VEC4, "vec4", Vector4(8, 24, 3, 0)],
-		POM_RANGE: [RenderingServer.GLOBAL_VAR_TYPE_VEC4, "vec4", Vector4(20, 35, 0, 6)],
-		SHADOW: [RenderingServer.GLOBAL_VAR_TYPE_VEC4, "vec4", Vector4(8, 20, 0, 1)],
+		POM_STEPS: [RenderingServer.GLOBAL_VAR_TYPE_VEC4, "vec4", Vector4(8, 20, 3, 0)],
+		POM_RANGE: [RenderingServer.GLOBAL_VAR_TYPE_VEC4, "vec4", Vector4(18, 30, 0, 6)],
+		SHADOW: [RenderingServer.GLOBAL_VAR_TYPE_VEC4, "vec4", Vector4(6, 15, 0, 1)],
 		DEBUG: [RenderingServer.GLOBAL_VAR_TYPE_VEC4, "vec4", Vector4(0, 0.1, 0, 0)],
 		DFG: [RenderingServer.GLOBAL_VAR_TYPE_SAMPLER2D, "sampler2D", DFG_PATH],
 	}

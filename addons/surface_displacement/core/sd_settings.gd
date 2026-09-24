@@ -14,13 +14,13 @@ enum SelfShadow { OFF, HARD, SOFT }
 ## Linear steps when looking straight at a surface.
 @export_range(1, 64) var pom_min_steps := 8
 ## Linear steps at grazing angles.
-@export_range(1, 64) var pom_max_steps := 24
+@export_range(1, 64) var pom_max_steps := 20
 ## Bisection steps after the linear search (a final secant step always follows).
 @export_range(0, 8) var pom_refine_steps := 3
 ## The relief starts fading into plain normal mapping here (m from the camera)...
-@export_range(0.0, 500.0, 0.5, "suffix:m") var pom_fade_start := 20.0
+@export_range(0.0, 500.0, 0.5, "suffix:m") var pom_fade_start := 18.0
 ## ...and is gone here.
-@export_range(0.0, 500.0, 0.5, "suffix:m") var pom_fade_end := 35.0
+@export_range(0.0, 500.0, 0.5, "suffix:m") var pom_fade_end := 30.0
 ## Added to the mip level the march samples (positive = blurrier, cheaper).
 @export_range(-2.0, 4.0, 0.25) var pom_lod_bias := 0.0
 ## Height-map mip level at and beyond which the march is skipped (the relief is below a pixel).
@@ -29,8 +29,8 @@ enum SelfShadow { OFF, HARD, SOFT }
 ## Height-field shadows from directional lights, computed in a light() that reproduces Godot's
 ## own direct lighting. OFF uses Godot's built-in lighting.
 @export var self_shadow := SelfShadow.HARD
-@export_range(1, 32) var self_shadow_steps := 8
-@export_range(0.0, 200.0, 0.5, "suffix:m") var self_shadow_distance := 20.0
+@export_range(1, 32) var self_shadow_steps := 6
+@export_range(0.0, 200.0, 0.5, "suffix:m") var self_shadow_distance := 15.0
 ## Contact-hardening strength for SOFT (larger = harder).
 @export_range(1.0, 200.0, 1.0) var self_shadow_softness := 24.0
 @export_group("Near-camera geometry")
@@ -55,16 +55,16 @@ static func create_preset(preset: Preset) -> SDSettings:
 			s.pom_enabled = false
 			s.self_shadow = SelfShadow.OFF
 		Preset.LOW:
-			s.pom_min_steps = 6
-			s.pom_max_steps = 16
+			s.pom_min_steps = 4
+			s.pom_max_steps = 12
 			s.pom_refine_steps = 0
-			s.pom_fade_start = 12.0
-			s.pom_fade_end = 20.0
+			s.pom_fade_start = 10.0
+			s.pom_fade_end = 16.0
 			s.pom_max_lod = 5.0
 			s.self_shadow = SelfShadow.OFF
 		Preset.MEDIUM:
-			pass
-		Preset.HIGH, Preset.EPIC:
+			pass # the defaults
+		Preset.HIGH:
 			s.pom_min_steps = 10
 			s.pom_max_steps = 28
 			s.pom_refine_steps = 4
@@ -74,11 +74,20 @@ static func create_preset(preset: Preset) -> SDSettings:
 			s.self_shadow = SelfShadow.SOFT
 			s.self_shadow_steps = 12
 			s.self_shadow_distance = 25.0
-			if preset == Preset.EPIC:
-				# Epic is High plus real geometry: the near-camera field (3 rings of 96 x 96 quads
-				# at 4 cm, reaching 7.7 m) and the pebbles.
-				s.near_field_enabled = true
-				s.scatter_enabled = true
+		Preset.EPIC:
+			# Real geometry near the camera: the field (3 rings of 96 x 96 quads at 4 cm, reaching
+			# 7.7 m) and the pebbles. The field's fragments march the relief too, so Epic pays for
+			# it with slightly fewer parallax steps and a shorter fade than High (tests/benchmark.gd).
+			s.pom_min_steps = 8
+			s.pom_max_steps = 24
+			s.pom_refine_steps = 3
+			s.pom_fade_start = 20.0
+			s.pom_fade_end = 35.0
+			s.self_shadow = SelfShadow.SOFT
+			s.self_shadow_steps = 12
+			s.self_shadow_distance = 20.0
+			s.near_field_enabled = true
+			s.scatter_enabled = true
 	return s
 
 

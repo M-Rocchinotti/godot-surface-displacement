@@ -94,11 +94,9 @@ func test_presets() -> void:
 			and med.pom_fade_end <= high.pom_fade_end and low.pom_refine_steps < med.pom_refine_steps and med.pom_refine_steps <= high.pom_refine_steps
 			and high.self_shadow == SDSettings.SelfShadow.SOFT and med.self_shadow == SDSettings.SelfShadow.HARD,
 			"steps, fade distance, refinement and self-shadow quality grow from Low to High")
-	var same := true
-	for property in ["pom_min_steps", "pom_max_steps", "pom_refine_steps", "pom_fade_start", "pom_fade_end", "pom_lod_bias", "pom_max_lod",
-			"self_shadow", "self_shadow_steps", "self_shadow_distance", "self_shadow_softness"]:
-		same = same and high.get(property) == epic.get(property)
-	check(same, "Epic is High plus the near-camera geometry and pebbles")
+	check(epic.self_shadow == SDSettings.SelfShadow.SOFT and epic.pom_max_steps >= med.pom_max_steps and epic.pom_fade_end >= med.pom_fade_end
+			and epic.pom_refine_steps >= med.pom_refine_steps and epic.self_shadow_steps == high.self_shadow_steps,
+			"Epic keeps soft self-shadowing and at least Medium's parallax next to its geometry")
 	var budgets := [0.5, 1.2, 2.0, 3.0]
 	var ok := true
 	for p in 4:

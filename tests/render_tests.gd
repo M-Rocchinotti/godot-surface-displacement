@@ -289,13 +289,19 @@ func test_world_planar_walls() -> void:
 
 
 func test_globals_and_defaults() -> void:
-	SDSettings.create_preset(SDSettings.Preset.EPIC).apply_globals()
+	SDSettings.create_preset(SDSettings.Preset.HIGH).apply_globals()
 	var steps: Vector4 = SDGlobals.get_value(SDGlobals.POM_STEPS)
 	var shadow: Vector4 = SDGlobals.get_value(SDGlobals.SHADOW)
-	check(steps == Vector4(12, 32, 4, 0) and shadow.z > 0.0 and shadow.w == 1.0, "a preset writes its steps and soft self-shadow into the globals")
+	check(steps == Vector4(10, 28, 4, 0) and shadow.z > 0.0 and shadow.w == 1.0, "a preset writes its steps and soft self-shadow into the globals")
 	SDSettings.create_preset(SDSettings.Preset.MEDIUM).apply_globals()
 	shadow = SDGlobals.get_value(SDGlobals.SHADOW)
 	check(shadow.z == 0.0 and shadow.w == 1.0, "Medium: hard self-shadow")
+	# The globals' registered defaults are Medium's, so materials look right before any node runs.
+	var medium_ok := true
+	for name: StringName in [SDGlobals.POM_STEPS, SDGlobals.POM_RANGE, SDGlobals.SHADOW]:
+		medium_ok = medium_ok and SDGlobals.definitions()[name][2] == SDGlobals.get_value(name)
+		medium_ok = medium_ok and ProjectSettings.get_setting("shader_globals/" + String(name))["value"] == SDGlobals.get_value(name)
+	check(medium_ok, "the registered defaults and this project's shader globals are the Medium preset")
 	var shader := SDMaterials.get_shader(SDMaterials.Mapping.WORLD, SDMaterials.Quality.POM)
 	var mismatches := []
 	for name: String in SDMaterials.PARAMETER_DEFAULTS:

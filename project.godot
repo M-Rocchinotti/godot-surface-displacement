@@ -30,15 +30,15 @@ enabled=PackedStringArray("res://addons/surface_displacement/plugin.cfg")
 
 sd_pom_steps={
 "type": "vec4",
-"value": Vector4(8, 24, 3, 0)
+"value": Vector4(8, 20, 3, 0)
 }
 sd_pom_range={
 "type": "vec4",
-"value": Vector4(20, 35, 0, 6)
+"value": Vector4(18, 30, 0, 6)
 }
 sd_shadow={
 "type": "vec4",
-"value": Vector4(8, 20, 0, 1)
+"value": Vector4(6, 15, 0, 1)
 }
 sd_debug={
 "type": "vec4",

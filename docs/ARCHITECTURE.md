@@ -12,7 +12,7 @@ from three layers that each do what the engine allows:
 | Layer | Where | What it gives | Code |
 |---|---|---|---|
 | Parallax occlusion mapping (POM) | every SD material, any distance up to the fade | per-pixel relief at the height map's full resolution, occlusion between stones, shadows received on the relief (`LIGHT_VERTEX`), self-shadowing | `shaders/sd_core.gdshaderinc`, `sd_march.gdshaderinc`, `sd_surface.gdshaderinc` |
-| Near-camera geometry | ground within 12.8 m (High) / 15.4 m (Epic) of the camera | real vertices displaced by the height map: silhouettes, real depth (SSAO, intersections), coarse relief | `nodes/displacement_field_3d.gd`, `shaders/sd_field.gdshaderinc` |
+| Near-camera geometry | ground within 7.7 m of the camera (Epic) | real vertices displaced by the height map: silhouettes, real depth (SSAO, intersections), coarse relief | `nodes/displacement_field_3d.gd`, `shaders/sd_field.gdshaderinc` |
 | Pebble scatter | gravel layers within ~8 m | loose stones as real little meshes | `nodes/pebble_scatter_3d.gd`, `shaders/sd_pebble*.gdshader` |
 
 Plus an offline Blender tool (`tools/bake_displaced_mesh.py`, not shipped) for the few props whose
@@ -131,7 +131,7 @@ at `m = 0`; the shared edges are identical and the rasterizer leaves no gaps. Ed
 flags that force `m = 1` (outer edge) and `m = 0` (inner edge). The morph ranges are chosen so
 the distance-based morph agrees with the flags for every camera position inside a snap cell:
 it ends before `R_k - delta` and starts after `sqrt(2) * (R_(k-1) + delta)` (`delta` = half the
-snap); the logic tests check this for the High and Epic presets, and the validator warns when a
+snap); the logic tests check this for Epic's grid and a dense one, and the validator warns when a
 custom resolution makes it impossible. Because the fine ring is fully morphed where the grid's
 snapping moves ring boundaries, the geometry does not pop either (render test: under 1 mm per
 1 cm camera step in the morph band). No skirts are needed.
@@ -161,9 +161,9 @@ snapping moves ring boundaries, the geometry does not pop either (render test: u
 
 ### 4.4 Why the fragments still march
 
-The geometry can only carry relief down to its vertex spacing (2 cm at High, 1.5 cm at Epic).
-A gravel's stones are about that size, so the geometry alone shows soft lumps (this was
-measured and looked worse than POM). Each field fragment therefore marches the full-resolution
+The geometry can only carry relief down to its vertex spacing (4 cm at Epic; the denser grids
+measured in 4.5 cost up to 2.2 ms more). A gravel's stones are smaller than
+that, so the geometry alone shows soft lumps. Each field fragment therefore marches the full-resolution
 relief over the whole slab along its true view ray, exactly like the ground material with
 `height_center = 0`: the first hit of the ray with the height field does not depend on where the
 proxy geometry was rasterized. The geometry adds what POM cannot: pixels the flat ground would
@@ -176,6 +176,18 @@ the proxy (the view ray's point at relief height 0), not from the proxy's own sc
 those jump at the proxy's bumps and silhouettes and would blur the relief there. A render test
 checks the field's hits against the CPU ray tracer like the surfaces' (90th percentile 0.16 mm)
 and its self-shadow against the CPU height-field shadow (99.7 %).
+
+### 4.5 What the field costs, and why
+
+In Forward+ the depth pre-pass runs a material's fragment shader when its vertex shader moves
+the vertices (to get the normal-roughness buffer right), so the field's fragments march the relief
+twice per frame, where the ground's POM runs once. Its triangles are small on screen (a few pixels,
+thin at grazing angles), and the GPU shades 2 x 2 pixel quads, so part of that work is thrown away.
+`tests/benchmark.gd --explore` measured the field on top of High's POM at 1080p on the GTX 1080:
+1.4 ms for 3 rings of 96 quads at 4 cm, 1.5 ms for 4 x 96 at 4 cm, 1.9 ms for 3 x 128 at 3 cm,
+2.1 ms for 4 x 160 at 2 cm and 3.6 ms for 4 x 256 at 1.5 cm. Epic therefore uses the 3 x 96 grid
+at 4 cm: it lifts cobbles and rocks, and the parallax (identical on and off the field) carries the
+gravel.
 
 ## 5. `PebbleScatter3D`
 
