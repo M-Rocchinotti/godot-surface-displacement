@@ -3,15 +3,23 @@
 
 The development GPU is shared with other work. A benchmark taken while another process renders
 measures that process too, so this waits until, for a whole observation window, `nvidia-smi`
-reports low GPU utilisation AND no other Godot or Unreal process runs; it re-checks right
-before starting, watches for other engines while the benchmark runs, and records the GPU state
-next to the results. It never stops other processes.
+reports low GPU utilisation AND no other rendering engine runs: no Godot process that renders
+(Godot started with --headless uses a dummy renderer and does not touch the GPU) and no Unreal
+editor. It re-checks right before starting, watches for other engines while the benchmark runs,
+and records the GPU state next to the results. It never stops other processes.
 
-    python tools/run_benchmark.py                 # wait up to 2 hours for an idle GPU
-    python tools/run_benchmark.py --max-wait 0    # check once, give up if busy
+    python tools/run_benchmark.py                       # wait up to 2 hours for an idle GPU
+    python tools/run_benchmark.py --max-wait 0          # check once, give up if busy
+    python tools/run_benchmark.py --allow-idle-unreal   # an open but idle Unreal editor is
+                                                        # tolerated (see below)
+
+--allow-idle-unreal: an Unreal editor that is open but not rendering (GPU utilisation at or below
+the threshold for the whole, then longer, observation window) does not block the run. The results
+file says so. Its viewport could start rendering during the run; the three repeats per row and
+their spread are the check for that.
 
 Exit code: the benchmark's (1 = a preset over budget), 3 = the GPU never became idle, 4 = another
-Godot or Unreal process ran during the benchmark (the numbers are not clean; run it again).
+rendering engine started during the benchmark (the numbers are not clean; run it again).
 """
 from __future__ import annotations
 
@@ -23,7 +31,8 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-BUSY_PROCESSES = ("godot", "unrealeditor", "unrealengine", "ue4editor", "ue5editor")
+UNREAL = ("unrealeditor", "unrealengine", "ue4editor", "ue5editor")
+UNKNOWN = "<process list unavailable>"
 
 
 def gpu_utilisation() -> int | None:
@@ -35,46 +44,67 @@ def gpu_utilisation() -> int | None:
         return None
 
 
-UNKNOWN = "<process list unavailable>"
-
-
-def engine_processes() -> list[str]:
-    """Names of the running Godot / Unreal processes, one entry per process. When the process
-    list cannot be read, [UNKNOWN]: an unreadable list must count as busy, never as idle."""
+def _process_list() -> list[tuple[str, str]] | None:
+    """(name, command line) of every process, or None when the list cannot be read."""
     try:
         if sys.platform == "win32":
-            proc = subprocess.run(["tasklist", "/fo", "csv", "/nh"], capture_output=True, text=True, timeout=60)
-            names = [line.split('","')[0].strip('"') for line in proc.stdout.splitlines() if line.startswith('"')]
+            script = ("Get-CimInstance Win32_Process | ForEach-Object { $_.Name + [char]9 + $_.CommandLine }")
+            proc = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+                                  capture_output=True, text=True, timeout=90)
         else:
-            proc = subprocess.run(["ps", "-eo", "comm"], capture_output=True, text=True, timeout=60)
-            names = proc.stdout.split()
+            proc = subprocess.run(["ps", "-eo", "comm=,args="], capture_output=True, text=True, timeout=60)
     except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    rows = []
+    for line in proc.stdout.splitlines():
+        name, _, cmd = line.partition("\t" if sys.platform == "win32" else " ")
+        if name.strip():
+            rows.append((name.strip(), cmd.strip()))
+    return rows or None
+
+
+def rendering_engines() -> list[str]:
+    """The Godot processes that render (not --headless) and the Unreal editors, one entry per
+    process; [UNKNOWN] when the process list cannot be read (that must count as busy)."""
+    rows = _process_list()
+    if rows is None:
         return [UNKNOWN]
-    if proc.returncode != 0 or not names:
-        return [UNKNOWN]
-    return [n for n in names if any(b in n.lower() for b in BUSY_PROCESSES)]
+    out = []
+    for name, cmd in rows:
+        low = name.lower()
+        if "godot" in low and "--headless" not in cmd:
+            out.append(name)
+        elif any(u in low for u in UNREAL):
+            out.append(name)
+    return out
 
 
-def busy_processes() -> list[str]:
-    """Names of the running Godot / Unreal processes, each once."""
-    return sorted(set(engine_processes()))
+def is_unreal(name: str) -> bool:
+    return any(u in name.lower() for u in UNREAL)
 
 
-def idle_for(seconds: int, threshold: int) -> tuple[bool, str]:
-    """True when utilisation stays at or below threshold and no busy process runs for [seconds]."""
+def idle_for(seconds: int, threshold: int, allow_unreal: bool) -> tuple[bool, str]:
+    """True when utilisation stays at or below threshold and no other rendering engine runs for
+    [seconds]."""
     samples = []
+    tolerated = set()
     for _ in range(max(seconds // 2, 1)):
-        procs = busy_processes()
+        engines = rendering_engines()
+        blocking = [e for e in engines if not (allow_unreal and is_unreal(e))]
+        tolerated.update(e for e in engines if e not in blocking)
         util = gpu_utilisation()
-        if procs:
-            return False, f"busy processes: {', '.join(procs)}"
+        if blocking:
+            return False, f"rendering engines: {', '.join(sorted(set(blocking)))}"
         if util is None:
             return False, "nvidia-smi not available"
         samples.append(util)
         if util > threshold:
             return False, f"GPU utilisation {util} %"
         time.sleep(2)
-    return True, f"GPU utilisation {max(samples)} % max over {seconds} s, no other Godot/Unreal process"
+    note = f"; tolerated while idle: {', '.join(sorted(tolerated))}" if tolerated else ""
+    return True, f"GPU utilisation {max(samples)} % max over {seconds} s, no other rendering Godot/Unreal process{note}"
 
 
 def main() -> int:
@@ -82,10 +112,13 @@ def main() -> int:
     parser.add_argument("--max-wait", type=int, default=7200, help="seconds to wait for an idle GPU")
     parser.add_argument("--window", type=int, default=60, help="seconds the GPU must stay idle")
     parser.add_argument("--threshold", type=int, default=8, help="max utilisation %% counted as idle")
+    parser.add_argument("--allow-idle-unreal", action="store_true",
+                        help="an open Unreal editor does not block the run while the GPU stays idle (window x 3)")
     args = parser.parse_args()
+    window = args.window * 3 if args.allow_idle_unreal else args.window
     deadline = time.time() + args.max_wait
     while True:
-        ok, state = idle_for(args.window, args.threshold)
+        ok, state = idle_for(window, args.threshold, args.allow_idle_unreal)
         print(f"[run_benchmark] {time.strftime('%H:%M:%S')} {state}", flush=True)
         if ok:
             break
@@ -94,19 +127,27 @@ def main() -> int:
             return 3
         time.sleep(30)
 
-    # The benchmark itself is at most two Godot processes (the console wrapper and the engine);
-    # a third Godot or any Unreal process while it runs is someone else's work on the GPU.
+    # The benchmark itself is two rendering Godot processes (the console wrapper and the engine);
+    # a third one, or an Unreal editor that was not there before, is someone else's work.
+    before = rendering_engines()
+    unreal_before = sum(1 for e in before if is_unreal(e))
     intruders: set[str] = set()
+    unreadable = 0
     done = threading.Event()
 
     def watch() -> None:
+        nonlocal unreadable
         while not done.wait(5):
-            procs = engine_processes()
-            godots = [n for n in procs if "godot" in n.lower()]
-            others = [n for n in procs if "godot" not in n.lower() and n != UNKNOWN]
+            engines = rendering_engines()
+            if engines == [UNKNOWN]:
+                unreadable += 1
+                continue
+            godots = [e for e in engines if "godot" in e.lower()]
+            unreals = [e for e in engines if is_unreal(e)]
             if len(godots) > 2:
-                intruders.add(f"{len(godots)} Godot processes")
-            intruders.update(others)
+                intruders.add(f"{len(godots)} rendering Godot processes")
+            if len(unreals) > unreal_before:
+                intruders.update(unreals)
 
     watcher = threading.Thread(target=watch, daemon=True)
     watcher.start()
@@ -115,13 +156,13 @@ def main() -> int:
     done.set()
     watcher.join()
     after_util = gpu_utilisation()
-    after_procs = busy_processes()
     during = ", ".join(sorted(intruders)) or "none"
     results = ROOT / "build" / "benchmark_results.md"
     if results.exists():
         with results.open("a", encoding="utf-8") as f:
-            f.write(f"\nGPU state: before: {state}; during: other Godot/Unreal processes: {during}; "
-                    f"after: utilisation {after_util} %, other Godot/Unreal processes: {', '.join(after_procs) or 'none'}.\n")
+            f.write(f"\nGPU state: before: {state}. During: other rendering engines started: {during}"
+                    f"{f' (process list unreadable {unreadable} times)' if unreadable else ''}. "
+                    f"After: utilisation {after_util} %.\n")
     if intruders:
         print(f"[run_benchmark] another engine ran during the benchmark ({during}); the numbers are not clean, run it again")
         return 4
