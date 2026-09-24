@@ -168,12 +168,15 @@ sd.settings_changed.connect(_refresh_menu)
 | Preset | POM steps (min-max, bisection) | Relief fades out | Self-shadow | Near-camera geometry | Pebbles |
 |---|---|---|---|---|---|
 | Off | - (normal mapping) | - | - | - | - |
-| Low | 6-16, secant only | 12-20 m | - | - | - |
-| Medium | 8-24, 3 | 20-35 m | hard, 8 steps, to 20 m | - | - |
+| Low | 4-12, secant only | 10-16 m | - | - | - |
+| Medium | 8-20, 3 | 18-30 m | hard, 6 steps, to 15 m | - | - |
 | High | 10-28, 4 | 25-40 m | soft, 12 steps, to 25 m | - | - |
-| Epic | 10-28, 4 | 25-40 m | soft, 12 steps, to 25 m | 3 rings x 96 at 4 cm (to 7.7 m) | to 8 m |
+| Epic | 8-24, 3 | 20-35 m | soft, 12 steps, to 20 m | 3 rings x 96 at 4 cm (to 7.7 m) | to 8 m |
 
-(`core/sd_settings.gd`; Custom takes an `SDSettings` resource with every value.)
+(`core/sd_settings.gd`; Custom takes an `SDSettings` resource with every value.) Epic has
+slightly fewer parallax steps and a shorter fade than High: the near-camera geometry's fragments
+march the relief too (twice, see [ARCHITECTURE.md](docs/ARCHITECTURE.md#45-what-the-field-costs-and-why)),
+and the budget goes there.
 
 <!-- BENCHMARK -->
 
