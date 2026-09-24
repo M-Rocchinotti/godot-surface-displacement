@@ -107,7 +107,8 @@ default "Export all resources", or with "Export selected scenes/resources" tick 
      ```
 3. For ground you walk on: select the ground mesh and run **Add DisplacementField3D**. The field
    takes the ground's material as its layer, puts the ground into the `sd_ground` group, and
-   bakes it at runtime (or run **Bake Ground** once in the editor to save `<scene>_ground.res`;
+   bakes it at runtime once a preset shows the field (or run **Bake Ground** once in the editor
+   to save `<scene>_ground.res`;
    baking again overwrites that file, so undo cannot bring an earlier bake back).
    Set the ground material's `height_center` to 0 (relief above the ground; see below).
    Add a **PebbleScatter3D** as the field's child for loose pebbles.

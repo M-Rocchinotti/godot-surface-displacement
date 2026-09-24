@@ -159,8 +159,11 @@ snapping moves ring boundaries, the geometry does not pop either (render test: u
   height). The bake renders the ground group's meshes top-down in their own `World3D` with a
   capture shader that writes the world height as 16-bit fixed point split over two channels
   (exact in the half-float target), the layer index and coverage, and stores the captured image
-  as it is: nothing runs per texel on the CPU (0.2-0.3 s for the demo's 90 x 90 m at 5 cm, most of it
-  waiting for frames). `sd_ground.gdshaderinc`, shared by the field and the pebbles, decodes the
+  as it is: nothing runs per texel on the CPU (13-40 ms for the demo's grounds, up to 90 x 90 m
+  at 5 cm, most of it waiting for frames). A bake has at most 4096 x 4096 texels (128 MB): a
+  larger ground gets coarser texels (`SDGroundBake.fit_texel()`, with a warning), one bake for
+  the whole ground rather than re-bakes around a moving camera. A field bakes at runtime the
+  first time it is shown, so under a preset without near-camera geometry nothing is baked. `sd_ground.gdshaderinc`, shared by the field and the pebbles, decodes the
   4 x 4 texels around a point: a texel is displaceable when it and its four neighbours are
   covered and no neighbour differs by more than `step_limit` (0.8 x the texel size: slopes up to
   39 degrees are ground, kerbs and steps are not, whatever the texel size); uncovered texels take
@@ -223,10 +226,11 @@ processed again until it is re-emitted and could not come back when the window m
 ## 6. `SurfaceDisplacement` and presets
 
 `SDSettings.create_preset()` defines Off / Low / Medium / High / Epic; the node combines the
-preset with four feature switches (a switch can remove a feature, never add one), writes the
+preset with five feature switches (a switch can remove a feature, never add one), writes the
 globals, swaps the variants of every registered SD material at runtime (materials entering the
-tree later are registered through `SceneTree.node_added`), and sets the fields' ring count,
-resolution and spacing and the scatters' density and radius. In the editor it only writes the
+tree later are registered through `SceneTree.node_added`; the depth-write switch keeps each
+material's opt-in in its metadata, so a material switched off gets exactly its shader back), and
+sets the fields' ring count, resolution and spacing and the scatters' density and radius. In the editor it only writes the
 globals, so saved materials keep their variant (editor check).
 
 ## 7. Resource lifetime
