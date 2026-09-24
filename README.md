@@ -478,7 +478,9 @@ are named next to each figure.
 
 ## License
 
-MIT, see [LICENSE](LICENSE). Copyright (c) 2026 M-Rocchinotti and contributors. The demo's
+MIT, see [LICENSE](LICENSE). Copyright (c) 2026 M-Rocchinotti and contributors. The ported
+Godot lighting and DFG table carry Godot's MIT notice
+([addons/surface_displacement/LICENSE.md](addons/surface_displacement/LICENSE.md)). The demo's
 textures are CC0 (Poly Haven); each set keeps its license record.
 
 ## Credits and sources
@@ -495,8 +497,9 @@ textures are CC0 (Poly Haven); each set keeps its license record.
   (reimplemented, no code copied).
 - Epic Games' UE5 documentation (Nanite displacement, "Displacement Center") for the target
   look and the height convention.
-- The Godot Engine source (`scene_forward_clustered.glsl`, `light_compute`, the DFG table) -
-  the custom `light()` reproduces Godot's shading; no engine code is shipped.
+- The Godot Engine source (MIT; `scene_forward_clustered.glsl`, `light_compute`, the DFG table) -
+  the custom `light()` is a port of Godot's direct lighting and `sd_dfg_lut.exr` is the engine's
+  DFG table, recomputed; Godot's licence notice is in the addon's `LICENSE.md`.
 - Poly Haven (CC0) for every demo texture. Research notes: [docs/RESEARCH.md](docs/RESEARCH.md).
 
 ## Version
