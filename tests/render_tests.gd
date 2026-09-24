@@ -27,6 +27,8 @@ func _run() -> void:
 	await _test("emission_passthrough", test_emission_passthrough)
 	await _test("globals_and_parameter_defaults", test_globals_and_defaults)
 	await _test("pom_matches_ray_traced_height_field", test_pom_vs_reference)
+	await _test("inverted_height_remap", test_height_remap)
+	await _test("world_planar_on_walls_stays_finite", test_world_planar_walls)
 	await _test("pom_relief_does_not_swim", test_pom_no_swimming)
 	await _test("triplanar_skips_zero_weight_planes", test_triplanar_planes)
 	await _test("light_function_matches_godot", test_brdf_parity)
@@ -218,6 +220,74 @@ func test_pom_vs_reference() -> void:
 
 # --- 3. Globals and parameter defaults --------------------------------------------------------
 
+## height_remap = (1, 0) inverts the height map: the inverted map with the inverted remap must
+## march to the same hits as the original (hit-offset debug view).
+func test_height_remap() -> void:
+	var field := Harness.make_stone_field(256, 40, 5)
+	var inverted_data := PackedFloat32Array()
+	for v: float in field["data"]:
+		inverted_data.append(1.0 - v)
+	var inverted := Harness.field_from_data(inverted_data, 256)
+	var images := []
+	for pair: Array in [[field, Vector2(0.0, 1.0)], [inverted, Vector2(1.0, 0.0)]]:
+		var tex := ImageTexture.create_from_image((pair[0] as Dictionary)["image"])
+		var mat := SDMaterials.create(SDMaterials.Mapping.WORLD, {"height": tex},
+				{"height_m": 0.05, "height_center": 0.0, "texture_size_m": Vector2(1.0, 1.0), "height_remap": pair[1]}, SDMaterials.Quality.POM)
+		h.new_debug_scene()
+		h.add_quad(Vector3(-2, 0, 2), Vector3(2, 0, 2), Vector3(2, 0, -2), Vector3(-2, 0, -2),
+				[Vector2(0, 1), Vector2(1, 1), Vector2(1, 0), Vector2(0, 0)], mat)
+		h.add_camera(Vector3(0.3, 0.9, 1.0), Vector3.ZERO)
+		debug_view(Harness.DEBUG_HIT_OFFSET)
+		await h.frames(3)
+		images.append(await h.capture())
+	debug_view(Harness.DEBUG_OFF)
+	var errors := []
+	var moved := 0
+	for py in range(2, SIZE.y, 6):
+		for px in range(2, SIZE.x, 6):
+			var a := Harness.decode_offset(images[0], Vector2i(px, py), OFFSET_SCALE)
+			var b := Harness.decode_offset(images[1], Vector2i(px, py), OFFSET_SCALE)
+			if a.length() > 0.002:
+				moved += 1
+			errors.append((a - b).length())
+	print("  %d pixels, %d with more than 2 mm of parallax; difference p99 %.3f mm, largest %.3f mm" % [errors.size(), moved, percentile(errors, 0.99) * 1000.0, percentile(errors, 1.0) * 1000.0])
+	check(moved > errors.size() / 4 and percentile(errors, 0.99) < 0.0002, "an inverted map with height_remap (1, 0) draws the same relief (99 % within 0.2 mm)")
+
+
+## World-planar mapping on walls: seen edge-on the planar texture has no frame on the surface;
+## normal mapping must still give finite, lit pixels (no NaN, which glows and smears with TAA).
+## A smoke test: normalize() of the zero vector the frame had there is undefined in GLSL, and the
+## GTX 1080 happens to return a finite value, so this test cannot tell the fallback is missing.
+func test_world_planar_walls() -> void:
+	var base := "res://demo/textures/gravel_stones/gravel_stones"
+	var textures := {"albedo": load(base + "_albedo.jpg"), "normal": load(base + "_normal.jpg"), "orm": load(base + "_arm.jpg"),
+			"height": load(base + "_height.exr")}
+	var bad := 0
+	var lit := 0
+	var total := 0
+	for quality in [SDMaterials.Quality.FLAT, SDMaterials.Quality.POM_SELF_SHADOW]:
+		h.new_lit_scene(Color(0.2, 0.2, 0.2))
+		var mat := SDMaterials.create(SDMaterials.Mapping.WORLD, textures, {"height_m": 0.03, "height_center": 0.0}, quality)
+		var box := MeshInstance3D.new()
+		box.mesh = BoxMesh.new()
+		box.material_override = mat
+		h.scene.add_child(box)
+		h.add_sun(40.0, 30.0, false)
+		h.add_camera(Vector3(1.6, 0.9, 1.9), Vector3.ZERO)
+		await h.frames(4)
+		var img := await h.capture()
+		for py in range(0, SIZE.y, 3):
+			for px in range(0, SIZE.x, 3):
+				var c := img.get_pixel(px, py)
+				if is_nan(c.r) or is_nan(c.g) or is_nan(c.b) or is_inf(c.r) or is_inf(c.g) or is_inf(c.b):
+					bad += 1
+				elif Harness.luminance(c) > 0.01:
+					lit += 1
+				total += 1
+	print("  %d pixels: %d not finite, %d lit" % [total, bad, lit])
+	check(bad == 0 and lit > total / 20, "a world-planar material on a box's walls gives finite, lit pixels (flat and self-shadowing variants)")
+
+
 func test_globals_and_defaults() -> void:
 	SDSettings.create_preset(SDSettings.Preset.EPIC).apply_globals()
 	var steps: Vector4 = SDGlobals.get_value(SDGlobals.POM_STEPS)
@@ -377,18 +447,23 @@ func test_brdf_parity() -> void:
 	var textures := {"albedo": load(base + "_albedo.jpg"), "normal": load(base + "_normal.jpg"), "orm": load(base + "_arm.jpg"),
 			"height": load(base + "_height.exr")}
 	SDGlobals.set_value(SDGlobals.SHADOW, Vector4(8, 20, 0, 0))
-	var cases := [["dielectric", {"height_m": 0.0}], ["metal", {"height_m": 0.0, "metallic_scale": 1.0, "roughness_scale": 0.45}]]
+	# The grazing metal case reads the energy-compensation table where it varies most (low n.v,
+	# roughness 0.2-0.45); it caught a table integrated without the engine's sample rotation.
+	var steep := Vector3(0.3, 1.4, 2.0)
+	var grazing := Vector3(0.3, 0.22, 2.2)
+	var cases := [["dielectric", {"height_m": 0.0}, steep], ["metal", {"height_m": 0.0, "metallic_scale": 1.0, "roughness_scale": 0.45}, steep],
+			["metal, grazing view", {"height_m": 0.0, "metallic_scale": 1.0, "roughness_scale": 0.35}, grazing]]
 	for case: Array in cases:
 		var images := []
 		for quality in [SDMaterials.Quality.POM, SDMaterials.Quality.POM_SELF_SHADOW]:
-			images.append(await _render_lit_plane(SDMaterials.create(SDMaterials.Mapping.UV, textures, case[1], quality), true))
+			images.append(await _render_lit_plane(SDMaterials.create(SDMaterials.Mapping.UV, textures, case[1], quality), true, case[2]))
 		var diff := _relative_difference(images[0], images[1])
 		print("  %s: light() vs built-in: mean %.3f %%, p99 %.3f %%, max %.3f %% (%d px)" % [case[0], diff["mean"] * 100.0, diff["p99"] * 100.0, diff["max"] * 100.0, diff["count"]])
-		# Dielectrics (what ground and walls are): the energy-compensation look-up is the only
-		# approximation and changes a few thousandths of the specular. Metals are all specular,
-		# so it shows more there.
-		var limits: Array = [0.005, 0.01]
-		check(diff["count"] > 20000 and diff["p99"] < limits[0] and diff["max"] < limits[1], "%s: within %.1f %% (99th percentile) and %.0f %% (max) of Godot's own lighting" % [case[0], limits[0] * 100.0, limits[1] * 100.0])
+		# What remains is float rounding and the soft-light size term that light() cannot see
+		# (measured: 99th percentile at most 0.07 %, maximum 0.17 %). The table integrated without
+		# the engine's sample rotation gave 0.20 % / 0.37 % in the grazing metal case.
+		var limits: Array = [0.0012, 0.003]
+		check(diff["count"] > 20000 and diff["p99"] < limits[0] and diff["max"] < limits[1], "%s: within %.2f %% (99th percentile) and %.1f %% (max) of Godot's own lighting" % [case[0], limits[0] * 100.0, limits[1] * 100.0])
 	var orm := ORMMaterial3D.new()
 	orm.albedo_texture = textures["albedo"]
 	orm.normal_enabled = true
@@ -405,7 +480,7 @@ func test_brdf_parity() -> void:
 	check(d2["max"] < 0.001, "the flat variant samples and normal-maps exactly like ORMMaterial3D")
 
 
-func _render_lit_plane(material: Material, all_lights: bool) -> Image:
+func _render_lit_plane(material: Material, all_lights: bool, camera_position := Vector3(0.3, 1.4, 2.0)) -> Image:
 	h.new_lit_scene(Color(0.15, 0.17, 0.2))
 	var s := 2.0
 	h.add_quad(Vector3(-s, 0, s), Vector3(s, 0, s), Vector3(s, 0, -s), Vector3(-s, 0, -s),
@@ -433,7 +508,7 @@ func _render_lit_plane(material: Material, all_lights: bool) -> Image:
 			area.rotation_degrees = Vector3(-60, 0, 0)
 			area.light_energy = 1.5
 			h.scene.add_child(area)
-	h.add_camera(Vector3(0.3, 1.4, 2.0), Vector3(0.0, 0.0, -0.2))
+	h.add_camera(camera_position, Vector3(0.0, 0.0, -0.2))
 	await h.frames(4)
 	return await h.capture()
 
@@ -573,7 +648,7 @@ func test_self_shadow() -> void:
 	var share := float(agree) / maxf(total, 1.0)
 	print("  %d pixels, %.1f %% in traced shadow, classification agrees on %.1f %%" % [total, 100.0 * shadowed / maxf(total, 1.0), share * 100.0])
 	check(shadowed > total / 10, "the sun is low enough to cast relief shadows")
-	check(share > 0.93, "hard self-shadow agrees with a traced height-field shadow on more than 93 % of pixels")
+	check(share > 0.98, "hard self-shadow agrees with a traced height-field shadow on more than 98 % of pixels")
 	SDGlobals.set_value(SDGlobals.SHADOW, Vector4(16, 20, 0, 0))
 	await h.frames(2)
 	var off := await h.capture()

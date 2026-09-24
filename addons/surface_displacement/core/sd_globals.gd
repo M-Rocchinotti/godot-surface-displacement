@@ -13,7 +13,8 @@ extends RefCounted
 ##     beyond which the march is skipped (the relief is below a pixel there).
 ## [code]sd_shadow[/code]  x: self-shadow steps, y: maximum distance (m), z: softness (0 = hard,
 ##     k > 0 = contact-hardening), w: strength (0 = off).
-## [code]sd_debug[/code]  x: debug view (0 = off), y: offset scale in metres for view 1.
+## [code]sd_debug[/code]  x: debug view (0 = off), y: scale in metres (hit offset, world height),
+##     z: reference height in metres of the field's world-height view (tests), w: unused.
 ## [code]sd_dfg[/code]  the multiple-scattering term of Godot's BRDF (tools/make_dfg_lut.py).
 
 const POM_STEPS := &"sd_pom_steps"

@@ -83,7 +83,7 @@ struct SDPlane {
 };
 
 float sd_remap(float h) {
-	return clamp((h - height_remap.x) / max(height_remap.y - height_remap.x, 1e-5), 0.0, 1.0);
+	return sd_remap_height(h, height_remap);
 }
 
 // Relief height (m) at uv for amplitude amp, on an explicit mip level.

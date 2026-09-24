@@ -16,12 +16,20 @@
 global uniform vec4 sd_pom_steps;   // min steps, max steps, bisection steps, unused
 global uniform vec4 sd_pom_range;   // fade start (m), fade end (m), LOD bias, highest LOD that is marched
 global uniform vec4 sd_shadow;      // steps, max distance (m), softness (0 = hard), strength
-global uniform vec4 sd_debug;       // view (0 = off), offset scale (m), unused, unused
+global uniform vec4 sd_debug;       // view (0 = off), scale (m), reference height (m) of the field's world-height view, unused
 global uniform sampler2D sd_dfg;    // Godot's multiple-scattering term, see tools/make_dfg_lut.py
 
 // Distance fade of the relief (1 near, 0 beyond the fade end).
 float sd_fade(float view_distance) {
 	return 1.0 - smoothstep(sd_pom_range.x, max(sd_pom_range.y, sd_pom_range.x + 1e-3), view_distance);
+}
+
+// Height map value h remapped so remap.x -> 0 and remap.y -> 1, clamped; remap.x > remap.y inverts
+// the map.
+float sd_remap_height(float h, vec2 remap) {
+	float span = remap.y - remap.x;
+	span = abs(span) < 1e-5 ? 1e-5 : span;
+	return clamp((h - remap.x) / span, 0.0, 1.0);
 }
 
 // Unpacks an OpenGL-convention normal map sample exactly like BaseMaterial3D (z rebuilt from xy,
@@ -30,9 +38,16 @@ float sd_fade(float view_distance) {
 vec3 sd_apply_normal_map(vec3 sample_rgb, vec3 t, vec3 image_up, vec3 n, float strength) {
 	vec2 xy = sample_rgb.xy * 2.0 - 1.0;
 	float z = sqrt(max(0.0, 1.0 - dot(xy, xy)));
-	// Tangent frame on the surface (Gram-Schmidt against the geometric normal).
-	vec3 tt = normalize(t - n * dot(n, t));
-	vec3 bb = normalize(image_up - n * dot(n, image_up) - tt * dot(tt, image_up));
+	// Tangent frame on the surface (Gram-Schmidt against the geometric normal). A planar mapping
+	// seen edge-on (a world-planar texture on a vertical face) has no frame on the surface: any
+	// tangent will do there, the texture is a smear anyway, but it must not become NaN.
+	vec3 tt = t - n * dot(n, t);
+	if (dot(tt, tt) < 1e-12) {
+		tt = abs(n.y) < 0.999 ? cross(vec3(0.0, 1.0, 0.0), n) : vec3(1.0, 0.0, 0.0);
+	}
+	tt = normalize(tt);
+	vec3 bb = image_up - n * dot(n, image_up) - tt * dot(tt, image_up);
+	bb = dot(bb, bb) < 1e-12 ? cross(n, tt) : normalize(bb);
 	return normalize(mix(n, tt * xy.x + bb * xy.y + n * z, strength));
 }
 

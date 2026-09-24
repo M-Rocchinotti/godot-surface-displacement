@@ -188,6 +188,11 @@ void fragment() {
 	float depth = clip.z / clip.w;
 	float depth_step = exp2(floor(log2(max(depth, 1e-30))) - 12.0);
 	DEPTH = round(depth / depth_step) * depth_step;
+	if (IN_SHADOW_PASS) {
+		// Shadow maps get the rasterized depth: the march does not run there (no offset), and
+		// the rounding would only quantize the caster (by centimetres over a long cascade).
+		DEPTH = FRAGCOORD.z;
+	}
 #endif
 
 #ifdef SD_SELF_SHADOW
