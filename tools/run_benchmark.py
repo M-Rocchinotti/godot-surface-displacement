@@ -35,17 +35,23 @@ def gpu_utilisation() -> int | None:
         return None
 
 
+UNKNOWN = "<process list unavailable>"
+
+
 def engine_processes() -> list[str]:
-    """Names of the running Godot / Unreal processes, one entry per process."""
+    """Names of the running Godot / Unreal processes, one entry per process. When the process
+    list cannot be read, [UNKNOWN]: an unreadable list must count as busy, never as idle."""
     try:
         if sys.platform == "win32":
-            out = subprocess.run(["tasklist", "/fo", "csv", "/nh"], capture_output=True, text=True, timeout=20).stdout
-            names = [line.split('","')[0].strip('"') for line in out.splitlines() if line]
+            proc = subprocess.run(["tasklist", "/fo", "csv", "/nh"], capture_output=True, text=True, timeout=60)
+            names = [line.split('","')[0].strip('"') for line in proc.stdout.splitlines() if line.startswith('"')]
         else:
-            out = subprocess.run(["ps", "-eo", "comm"], capture_output=True, text=True, timeout=20).stdout
-            names = out.split()
+            proc = subprocess.run(["ps", "-eo", "comm"], capture_output=True, text=True, timeout=60)
+            names = proc.stdout.split()
     except (OSError, subprocess.SubprocessError):
-        return []
+        return [UNKNOWN]
+    if proc.returncode != 0 or not names:
+        return [UNKNOWN]
     return [n for n in names if any(b in n.lower() for b in BUSY_PROCESSES)]
 
 
@@ -74,7 +80,7 @@ def idle_for(seconds: int, threshold: int) -> tuple[bool, str]:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--max-wait", type=int, default=7200, help="seconds to wait for an idle GPU")
-    parser.add_argument("--window", type=int, default=20, help="seconds the GPU must stay idle")
+    parser.add_argument("--window", type=int, default=60, help="seconds the GPU must stay idle")
     parser.add_argument("--threshold", type=int, default=8, help="max utilisation %% counted as idle")
     args = parser.parse_args()
     deadline = time.time() + args.max_wait
@@ -97,7 +103,7 @@ def main() -> int:
         while not done.wait(5):
             procs = engine_processes()
             godots = [n for n in procs if "godot" in n.lower()]
-            others = [n for n in procs if "godot" not in n.lower()]
+            others = [n for n in procs if "godot" not in n.lower() and n != UNKNOWN]
             if len(godots) > 2:
                 intruders.add(f"{len(godots)} Godot processes")
             intruders.update(others)
