@@ -13,8 +13,9 @@ extends SceneTree
 ## targets of SDSettings.get_budget_ms(). Exit code 1 if a preset is over budget.
 ## Results: stdout and build/benchmark_results.md.
 ##
-##     python tools/godot.py --script tests/benchmark.gd -- --explore
-## measures candidate near-camera geometry settings instead (build/benchmark_explore.md).
+##     python tools/godot.py --script tests/benchmark.gd -- --explore        (or --explore=pom)
+## measures candidate near-camera geometry settings (or parallax mip limits, pom_max_lod)
+## instead (build/benchmark_explore.md).
 
 const Builder := preload("res://demo/scenes/demo_builder.gd")
 const SIZE := Vector2i(1920, 1080)
@@ -129,6 +130,20 @@ func measure() -> Dictionary:
 	return {"gpu": s["gpu"], "spread": s["spread"], "frame": frame_runs[REPEATS / 2], "runs": runs}
 
 
+## Candidate parallax mip limits (pom_max_lod) per preset for --explore=pom: where the relief fades
+## out on fine textures at grazing views (tools/relief_range.gd) against what it costs.
+static func explore_pom_rows() -> Array:
+	var rows := []
+	var candidates := {SDSettings.Preset.LOW: [5.0, 5.5, 6.0, 6.5], SDSettings.Preset.MEDIUM: [6.0, 6.5, 7.0, 7.5],
+			SDSettings.Preset.HIGH: [6.5, 7.0, 7.5, 8.0], SDSettings.Preset.EPIC: [6.0, 6.5, 7.0, 7.5]}
+	for base: SDSettings.Preset in candidates:
+		for max_lod: float in candidates[base]:
+			var s := SDSettings.create_preset(base)
+			s.pom_max_lod = max_lod
+			rows.append([base, {"settings": s, "label": "pom_max_lod %.1f" % max_lod}])
+	return rows
+
+
 ## Candidate settings for the explore mode: a base preset with near-camera geometry changes.
 static func explore_rows() -> Array:
 	var rows := []
@@ -147,7 +162,8 @@ static func explore_rows() -> Array:
 
 
 func _run() -> void:
-	var explore := OS.get_cmdline_user_args().has("--explore")
+	var args := OS.get_cmdline_user_args()
+	var explore := args.has("--explore") or args.has("--explore=pom")
 	await process_frame
 	_log("# Surface Displacement benchmark" + (" (explore)" if explore else ""))
 	_log("")
@@ -156,7 +172,7 @@ func _run() -> void:
 		REPEATS, WARMUP, SAMPLES])
 	await build("baseline")
 	var base_first := await measure()
-	var rows := explore_rows() if explore else [
+	var rows := (explore_pom_rows() if args.has("--explore=pom") else explore_rows()) if explore else [
 		[SDSettings.Preset.OFF, {}], [SDSettings.Preset.LOW, {}], [SDSettings.Preset.MEDIUM, {}],
 		[SDSettings.Preset.HIGH, {}], [SDSettings.Preset.EPIC, {}],
 		[SDSettings.Preset.EPIC, {"scatter": false}], [SDSettings.Preset.EPIC, {"near_field": false}],

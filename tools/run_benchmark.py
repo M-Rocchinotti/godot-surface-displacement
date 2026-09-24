@@ -143,7 +143,8 @@ def main() -> int:
     parser.add_argument("--max-wait", type=int, default=7200, help="seconds to wait for an idle GPU")
     parser.add_argument("--window", type=int, default=60, help="seconds the GPU must stay idle")
     parser.add_argument("--threshold", type=int, default=8, help="max utilisation %% counted as idle")
-    parser.add_argument("--explore", action="store_true", help="measure candidate field settings (tests/benchmark.gd --explore)")
+    parser.add_argument("--explore", nargs="?", const="field", choices=["field", "pom"],
+                        help="measure candidate field settings, or with 'pom' candidate parallax mip limits (tests/benchmark.gd --explore)")
     parser.add_argument("--allow-idle-unreal", action="store_true",
                         help="an open Unreal editor does not block the run while the GPU stays idle (window x 3)")
     args = parser.parse_args()
@@ -184,7 +185,8 @@ def main() -> int:
     watcher = threading.Thread(target=watch, daemon=True)
     watcher.start()
     proc = subprocess.run([sys.executable, str(ROOT / "tools" / "godot.py"), "--timeout", "3600", "--log", "benchmark",
-                           "--script", "tests/benchmark.gd"] + (["--", "--explore"] if args.explore else []), cwd=ROOT)
+                           "--script", "tests/benchmark.gd"]
+                          + (["--", "--explore=pom" if args.explore == "pom" else "--explore"] if args.explore else []), cwd=ROOT)
     done.set()
     watcher.join()
     after_util = gpu_utilisation()
