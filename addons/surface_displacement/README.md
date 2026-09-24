@@ -33,9 +33,13 @@ Your own shaders: `render_mode diffuse_burley, specular_schlick_ggx;`, define `S
 `SD_DEPTH_WRITE`, then `#include "res://addons/surface_displacement/shaders/sd_surface.gdshaderinc"`
 (see the files in `shaders/variants/`).
 
+Exporting: the shader variants and the DFG table are loaded by path; export all resources, or
+tick the whole `addons/surface_displacement` folder when exporting selected resources.
+
 Requirements: Godot 4.7+, Forward+ (Vulkan tested).
 Limitations: POM gives no silhouettes on walls and props; the near-camera geometry needs
-height-field ground (world-planar ground materials); feet sink into the relief by
+height-field ground (world-planar ground materials) and its bake captures MeshInstance3D nodes
+only (terrain plugins: `SDGroundBake.from_arrays()`); feet sink into the relief by
 up to its depth; depth write is opt-in and costs early-Z; self-shadowing is from directional
 lights only; fields follow one camera. The project README on the repository page has the
 measured costs, accuracy figures, texture tools, an offline Blender bake tool, troubleshooting

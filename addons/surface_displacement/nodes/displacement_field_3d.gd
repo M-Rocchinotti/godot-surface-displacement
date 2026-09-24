@@ -15,7 +15,8 @@ extends Node3D
 ## Ground height and layers come from [member ground_bake] (a top-down capture of the meshes in
 ## [member ground_group], see [SDGroundBake]); without meshes in the group the ground is the
 ## plane at this node's height. Quality comes from [SurfaceDisplacement] presets or the
-## properties below.
+## properties below; at runtime a SurfaceDisplacement node shows or hides the field and sets
+## [member levels], [member resolution] and [member base_spacing] from its preset.
 
 signal baked
 
@@ -26,13 +27,17 @@ signal baked
 		layers = value
 		_layers_dirty = true
 ## Height and layers of the ground. Empty: baked at runtime from [member ground_group], or a flat
-## plane at this node's height when the group has no meshes.
+## plane at this node's height when the group has no meshes. Terrains that are not
+## MeshInstance3D nodes (drawn through the RenderingServer or displaced in a vertex shader, like
+## Terrain3D or HTerrain) are not captured: build this from their height data with
+## [method SDGroundBake.from_arrays].
 @export var ground_bake: SDGroundBake:
 	set(value):
 		ground_bake = value
 		_ground_dirty = true
 @export_group("Ground")
-## Group of the ground meshes (their descendants count too) that the bake captures.
+## Group of the ground meshes (their descendants count too) that the bake captures: MeshInstance3D
+## nodes only (see [member ground_bake] for other terrains).
 @export var ground_group := &"sd_ground"
 ## Size of a bake texel (m). A ground too large for it is baked with coarser texels (at most
 ## [constant SDGroundBake.MAX_TEXELS] texels; Validate Setup reports it).
@@ -42,6 +47,7 @@ signal baked
 @export var bake_on_ready := true
 @export_group("Quality")
 ## Nested rings (clipmap levels); each doubles the vertex spacing.
+## At runtime a [SurfaceDisplacement] node sets it from its preset's [member SDSettings.near_field_levels] (Custom: your [SDSettings]); in the editor the node leaves it alone.
 @export_range(2, 6) var levels := 3:
 	set(value):
 		value = clampi(value, 2, 6)
@@ -49,6 +55,7 @@ signal baked
 			levels = value
 			_mesh_dirty = true
 ## Quads per ring side (a multiple of 4).
+## At runtime a [SurfaceDisplacement] node sets it from its preset's [member SDSettings.near_field_resolution] (Custom: your [SDSettings]); in the editor the node leaves it alone.
 @export_range(16, 512, 4) var resolution := 96:
 	set(value):
 		value = maxi(16, value - value % 4)
@@ -56,6 +63,7 @@ signal baked
 			resolution = value
 			_mesh_dirty = true
 ## Vertex spacing of the innermost ring (m).
+## At runtime a [SurfaceDisplacement] node sets it from its preset's [member SDSettings.near_field_spacing] (Custom: your [SDSettings]); in the editor the node leaves it alone.
 @export_range(0.005, 0.2, 0.0005, "suffix:m") var base_spacing := 0.04:
 	set(value):
 		value = maxf(value, 0.001)

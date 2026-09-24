@@ -11,12 +11,14 @@ extends Node3D
 ## from the layer weights and a preference for the height map's valleys. Pebble meshes are
 ## generated here (noise-displaced icospheres, 80 triangles); pebbles cast no shadows.
 
-## Fraction of the slots used (0-1); [SurfaceDisplacement] presets set it.
+## Fraction of the slots used (0-1).
+## At runtime a [SurfaceDisplacement] node sets it from its preset's [member SDSettings.scatter_density] (Custom: your [SDSettings]); in the editor the node leaves it alone.
 @export_range(0.0, 1.0, 0.05) var density := 1.0:
 	set(value):
 		density = value
 		_dirty = true
 ## Pebbles fade out (shrink) towards this distance from the camera (m).
+## At runtime a [SurfaceDisplacement] node sets it from its preset's [member SDSettings.scatter_radius] (Custom: your [SDSettings]); in the editor the node leaves it alone.
 @export_range(2.0, 30.0, 0.5, "suffix:m") var radius := 8.0:
 	set(value):
 		radius = value

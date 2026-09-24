@@ -78,6 +78,11 @@ props whose silhouette POM cannot give into real triangles.
    Project Settings > Shader Globals. Keep them: every Surface Displacement shader reads them.
 3. If materials failed to compile before the plugin was enabled, reload the project once.
 
+**Exporting:** the addon loads its shader variants (switched at runtime) and the DFG table (a
+shader global) by path, so the exporter's dependency scan does not see them. Export with the
+default "Export all resources", or with "Export selected scenes/resources" tick the whole
+`addons/surface_displacement` folder in the export dialog's Resources tab.
+
 ## Quick start
 
 1. Add a **SurfaceDisplacement** node to your scene (Project > Tools > Surface Displacement: Add
@@ -219,7 +224,7 @@ everything beyond the fade distance is plain normal mapping.
 | `layers` | - | Up to four SD ground materials (world-planar mapping, `height_center` 0). The field copies their textures and parameters (`sync_layers()` after changing them in code). |
 | `ground_bake` | - | An `SDGroundBake`. Without one the field bakes at runtime (`bake_on_ready`) the first time it is shown, so a preset without near-camera geometry (Low to High) never bakes; or it displaces a flat plane at its own height. |
 | `ground_group`, `bake_texel_size` | `sd_ground`, 5 cm | What is baked, and how finely. A ground too large for the texel size is baked with coarser texels (see [Limitations](#limitations)). |
-| `levels`, `resolution`, `base_spacing` | 3, 96, 4 cm | Rings, quads per ring side, finest vertex spacing (the defaults are Epic's: the geometry reaches 7.7 m from the camera). Denser grids cost much more than they show, see [Presets and measured cost](#presets-and-measured-cost). |
+| `levels`, `resolution`, `base_spacing` | 3, 96, 4 cm | Rings, quads per ring side, finest vertex spacing (the defaults are Epic's: the geometry reaches 7.7 m from the camera). Denser grids cost much more than they show, see [Presets and measured cost](#presets-and-measured-cost). At runtime the SurfaceDisplacement node's preset sets them (and shows or hides the field); to use your own values, use the Custom preset with an `SDSettings`. |
 | `lift`, `fade_band` | 2 mm, 0.25 | Height above the ground mesh; outer fraction of the grid where the relief fades to flat. |
 | `cast_shadows` | off | Shadows of the displaced geometry (the POM self-shadow already shadows the relief). |
 | `camera` | active | The camera the grid follows. |
@@ -231,7 +236,8 @@ displaceable. Collision stays on the original ground.
 
 A child of a DisplacementField3D. `density`, `radius` (8 m), `per_cell` (24), `cell_size` (1 m),
 `size_range` (1.2-3.5 cm), `valley_bias` (preference for low points of the height map) and
-`layer_density` (per field layer, default only layer 0).
+`layer_density` (per field layer, default only layer 0). At runtime the SurfaceDisplacement
+node's preset sets `density` and `radius` (Custom: from your `SDSettings`).
 
 ### Debug views
 
@@ -382,6 +388,10 @@ pass because two errors cancel.
   terrain that is a function of XZ within the bake (no overhangs, caves, vertical walls). Slopes
   steeper than about 39 degrees between neighbouring bake texels (kerbs, steps) are left to POM:
   the field dives under the ground there. UV-mapped or triplanar ground cannot be a field layer.
+- **The bake captures MeshInstance3D nodes only.** Terrains drawn through the RenderingServer or
+  displaced in a vertex shader (Terrain3D, HTerrain) are invisible to it; build the field's
+  `ground_bake` from their height data with `SDGroundBake.from_arrays()` (heights in metres, a
+  field layer per cell).
 - **Where the ground ends** (beyond the bake, holes in the ground) the field dives under where
   the ground would be. With nothing there to hide it, a camera at such an edge sees the field as
   a flat sheet a few centimetres below the edge; keep ground under the field's reach wherever the
@@ -429,7 +439,7 @@ pass because two errors cancel.
 | The relief looks jagged or crawls at a distance | The height texture has no mipmaps. Reimport it with mipmaps (Validate Setup reports it). |
 | Stones look like stacked plates | The height map is 8-bit. Use a 16-bit / EXR height, or Prepare Height Maps. |
 | Relief goes the wrong way (stones look like holes) | `height_center` is 1 where 0 is meant, or the height map is inverted (`height_remap` = (1, 0)). |
-| The field is not visible | It needs a rendering device (not `--headless`), a ground layer that is displaceable at the camera's position (Field rings debug view), and a baked or flat ground under it. Ground materials must be world-planar with `height_center` 0. |
+| The field is not visible | It needs a rendering device (not `--headless`), a preset with near-camera geometry (Epic, or Custom), a ground layer that is displaceable at the camera's position (Field rings debug view), and a baked or flat ground under it. Ground materials must be world-planar with `height_center` 0. A terrain plugin's terrain (Terrain3D, HTerrain) is not captured by the bake: use `SDGroundBake.from_arrays()`. |
 | Props float above the relief or cut into it | Opt-in depth write on that surface; or place props on the relief's average height. |
 | After undoing and redoing Bake Ground, quitting the editor with the field selected prints "Can't use get_node() with absolute paths from outside the active scene tree" | Seen with Godot 4.7.2 at shutdown, after the scene was saved; nothing is lost. The cause was not found; deselecting the field before quitting avoids it. |
 

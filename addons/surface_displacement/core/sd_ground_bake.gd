@@ -165,6 +165,8 @@ static func ground_bounds(meshes: Array[MeshInstance3D]) -> AABB:
 
 
 ## The MeshInstance3D nodes of [param group] in [param tree] (members and their descendants).
+## Terrains drawn through the RenderingServer or displaced in a vertex shader (Terrain3D,
+## HTerrain) have none: use [method from_arrays] with their height data.
 static func collect_ground(tree: SceneTree, group: StringName) -> Array[MeshInstance3D]:
 	var out: Array[MeshInstance3D] = []
 	for node in tree.get_nodes_in_group(group):
