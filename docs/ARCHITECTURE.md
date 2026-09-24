@@ -197,7 +197,7 @@ and its self-shadow against the CPU height-field shadow (99.8 %).
 ### 4.5 What the field costs, and why
 
 The field's fragments march the relief like the ground material's (twice per pixel with SSAO and
-the other effects of 3.3). On top of that come its vertices - about 28 000 for 3 rings of 96
+the other effects of 3.3). On top of that come its vertices - about 24 000 for 3 rings of 96
 quads, each reading the ground bake and every layer's height map, in the pre-pass and again in the
 colour pass - and its triangles, which are small on screen (a few pixels, thin at grazing angles):
 the GPU shades 2 x 2 pixel quads, so part of that work is thrown away. Without SSAO, SSIL, SSR,
