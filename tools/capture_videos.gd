@@ -98,6 +98,9 @@ func _render(clip_name: String, scene_index: int, mode: String, seconds: float, 
 	sd.near_field = mode == "full"
 	sd.scatter = mode == "full"
 	_place(cam, pose.call(0.0))
+	# Two frames: the preset is applied at the end of the first, and a preset that shows the fields
+	# starts their runtime bake then.
+	await process_frame
 	await process_frame
 	for field: DisplacementField3D in scene.find_children("*", "DisplacementField3D", true, false):
 		if field.is_baking():

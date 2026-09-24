@@ -31,6 +31,11 @@ extends Resource
 
 const CAPTURE_SHADER := preload("res://addons/surface_displacement/shaders/sd_ground_capture.gdshader")
 const TILE_PX := 2048
+## Most texels a bake has: 4096 x 4096, 128 MB in memory and as much again on the GPU (8 bytes per
+## texel). A larger ground is baked with coarser texels ([method fit_texel]).
+const MAX_TEXELS := 4096 * 4096
+## Longest side of a bake (texels): the largest 2D texture every desktop GPU supports.
+const MAX_SIDE := 16384
 ## Default steepest slope (rise / run between neighbouring texels) that still counts as ground:
 ## 0.8 is 38.7 degrees, whatever the texel size.
 const STEP_SLOPE := 0.8
@@ -135,6 +140,30 @@ static func from_arrays(size: Vector2i, heights: PackedFloat32Array, layers: Pac
 	return result
 
 
+## The texel size (m) a bake of an area of [param size_m] metres uses when [param texel] is asked
+## for: [param texel] itself, or the smallest coarser size that keeps the bake within
+## [constant MAX_TEXELS] and [constant MAX_SIDE].
+static func fit_texel(size_m: Vector2, texel: float) -> float:
+	var t := maxf(texel, 1e-4)
+	t = maxf(t, sqrt(size_m.x * size_m.y / MAX_TEXELS))
+	t = maxf(t, maxf(size_m.x, size_m.y) / MAX_SIDE)
+	# ceil() can still add a row or column: widen until the texel count fits.
+	while maxi(ceili(size_m.x / t), 1) * maxi(ceili(size_m.y / t), 1) > MAX_TEXELS or maxi(ceili(size_m.x / t), ceili(size_m.y / t)) > MAX_SIDE:
+		t *= 1.001
+	return t
+
+
+## World-space bounds of [param meshes] (what [method bake] captures by default).
+static func ground_bounds(meshes: Array[MeshInstance3D]) -> AABB:
+	var aabb := AABB()
+	var first := true
+	for mi in meshes:
+		var box := mi.global_transform * mi.get_aabb()
+		aabb = box if first else aabb.merge(box)
+		first = false
+	return aabb
+
+
 ## The MeshInstance3D nodes of [param group] in [param tree] (members and their descendants).
 static func collect_ground(tree: SceneTree, group: StringName) -> Array[MeshInstance3D]:
 	var out: Array[MeshInstance3D] = []
@@ -171,6 +200,8 @@ static func surface_material(mi: MeshInstance3D, surface: int) -> Material:
 ## [param step_slope]: a height change between neighbouring texels steeper than this (rise / run)
 ## is a step (a kerb), not ground to displace; see [member step_limit].
 ## It renders a few frames per 2048 x 2048 tile; nothing is processed per texel on the CPU.
+## A ground too large for [param texel] ([constant MAX_TEXELS]) is baked with coarser texels
+## ([method fit_texel], with a warning); the result's [member texel_size] is the one used.
 static func bake(meshes: Array[MeshInstance3D], layers: Array, texel: float, bounds := Rect2(), step_slope := STEP_SLOPE) -> SDGroundBake:
 	if meshes.is_empty():
 		push_warning("SDGroundBake: nothing to bake (no ground meshes).")
@@ -179,17 +210,19 @@ static func bake(meshes: Array[MeshInstance3D], layers: Array, texel: float, bou
 		push_warning("SDGroundBake: baking needs a rendering device (the ground stays flat); not available with --headless.")
 		return null
 	var tree := meshes[0].get_tree()
-	var aabb := AABB()
-	var first := true
-	for mi in meshes:
-		var box := mi.global_transform * mi.get_aabb()
-		aabb = box if first else aabb.merge(box)
-		first = false
+	var aabb := ground_bounds(meshes)
 	if bounds.has_area():
 		aabb.position.x = bounds.position.x
 		aabb.position.z = bounds.position.y
 		aabb.size.x = bounds.size.x
 		aabb.size.z = bounds.size.y
+	var size_m := Vector2(aabb.size.x, aabb.size.z)
+	var fitted := fit_texel(size_m, texel)
+	if fitted > texel:
+		push_warning("SDGroundBake: %.0f x %.0f m of ground at %.3f m texels would take %.0f million texels (%d MB); baking at %.3f m texels instead, the most a bake has (%d x %d). Steps lower than %.2f m become ramps. Bake a smaller area, fewer ground meshes or a coarser bake_texel_size (README, Limitations)." % [
+				size_m.x, size_m.y, texel, size_m.x * size_m.y / (texel * texel) / 1e6, int(size_m.x * size_m.y / (texel * texel) * 8.0 / 1048576.0),
+				fitted, sqrt(MAX_TEXELS), sqrt(MAX_TEXELS), step_slope * fitted])
+		texel = fitted
 	var size := Vector2i(maxi(ceili(aabb.size.x / texel), 1), maxi(ceili(aabb.size.z / texel), 1))
 	var h_min := aabb.position.y - 0.01
 	var h_range := maxf(aabb.size.y + 0.02, 0.01)

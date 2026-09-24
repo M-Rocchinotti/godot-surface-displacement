@@ -33,6 +33,7 @@ func _run() -> void:
 	await _test("edge_blends_into_pom", test_edge_seam)
 	await _test("debug_views_ignore_lights", test_debug_views_unlit)
 	await _test("ground_bake_precision", test_ground_bake)
+	await _test("huge_ground_bake", test_huge_ground_bake)
 	await _test("pebbles_stay_put", test_pebbles)
 	await _test("lifetime_resize_viewports", test_lifetime)
 	await _test("demo_scenes_render", test_demo_scenes)
@@ -677,6 +678,34 @@ func test_ground_bake() -> void:
 	check(ground_ok, "ground that is not a layer carries no layer weight")
 
 
+## A ground far larger than a bake can hold at 5 cm (1 x 1 km would be 400 million texels, 3 GB;
+## above about 819 m Image.create() fails): baked with coarser texels, without an error.
+func test_huge_ground_bake() -> void:
+	h.new_debug_scene()
+	var ground := MeshInstance3D.new()
+	var plane := PlaneMesh.new()
+	plane.size = Vector2(1000, 1000)
+	ground.mesh = plane
+	ground.position = Vector3(0.0, 0.7, 0.0)
+	ground.add_to_group(&"sd_bake_huge")
+	h.scene.add_child(ground)
+	await h.frames(2)
+	var t0 := Time.get_ticks_msec()
+	var bake := await SDGroundBake.bake(SDGroundBake.collect_ground(self, &"sd_bake_huge"), [], 0.05)
+	var ms := Time.get_ticks_msec() - t0
+	check(bake != null, "a 1 x 1 km ground bakes (%d ms)" % ms)
+	if bake == null:
+		return
+	var size := bake.get_size()
+	print("  %s texels of %.4f m (%d MB)" % [size, bake.texel_size, size.x * size.y * 8 / 1048576])
+	check(size.x * size.y <= SDGroundBake.MAX_TEXELS and is_equal_approx(bake.texel_size, SDGroundBake.fit_texel(Vector2(1000, 1000), 0.05)),
+			"with the coarser texel of fit_texel(), within 4096 x 4096 texels")
+	var ok := true
+	for p: Vector2 in [Vector2(0, 0), Vector2(-300.3, 211.7), Vector2(420.0, -455.5)]:
+		ok = ok and absf(bake.sample_height(p) - 0.7) < 0.002
+	check(ok, "and still at the ground's height (within 2 mm)")
+
+
 # --- 6. Pebbles --------------------------------------------------------------------------------
 
 ## Pebbles are placed from their world cell, so moving the camera (and the cell window with it)
@@ -767,10 +796,11 @@ func test_lifetime() -> void:
 	# A scene change while a field bakes its ground: nothing may resume on the freed field (the
 	# log scan of tests/run_all.py fails the suite on the engine's "class instance is gone" error).
 	var baking := Builder.build(0)
+	(baking.get_node("SurfaceDisplacement") as SurfaceDisplacement).preset = SDSettings.Preset.EPIC
 	h.viewport.add_child(baking)
 	await h.frames(1)
 	var baking_field := baking.find_children("*", "DisplacementField3D", true, false)[0] as DisplacementField3D
-	check(baking_field.is_baking(), "the gravel path's field bakes its ground at runtime")
+	check(baking_field.is_baking(), "the gravel path's field bakes its ground at runtime at Epic")
 	baking.queue_free()
 	await h.frames(10)
 	check(root.find_children("*", "SubViewport", true, false).size() == 1, "the capture viewport of an abandoned bake is freed")
@@ -801,13 +831,23 @@ static func count_back_facing_up(mesh: Mesh) -> int:
 func test_demo_scenes() -> void:
 	h.clear_scene()
 	h.make_viewport(SIZE, false)
+	var idle_at_medium := true
 	for index in Builder.SCENE_NAMES.size():
 		var scene := Builder.build(index)
-		var start := Time.get_ticks_msec()
 		h.viewport.add_child(scene)
 		(scene.get_node("Camera") as Camera3D).current = true
 		var sd := scene.get_node("SurfaceDisplacement") as SurfaceDisplacement
-		for field: DisplacementField3D in scene.find_children("*", "DisplacementField3D", true, false):
+		var fields := scene.find_children("*", "DisplacementField3D", true, false)
+		# The default preset (Medium) has no near-camera geometry: nothing is baked.
+		await h.frames(20)
+		for field: DisplacementField3D in fields:
+			idle_at_medium = idle_at_medium and sd.preset == SDSettings.Preset.MEDIUM and field.ground_bake == null
+			idle_at_medium = idle_at_medium and not field.is_baking() and field.is_bake_pending()
+		# Epic shows the fields: they bake now.
+		sd.preset = SDSettings.Preset.EPIC
+		var start := Time.get_ticks_msec()
+		await h.frames(2)
+		for field: DisplacementField3D in fields:
 			if field.is_baking():
 				await field.baked
 			if field.ground_bake != null:
@@ -826,4 +866,5 @@ func test_demo_scenes() -> void:
 		check(ok, "%s renders at every preset" % Builder.SCENE_NAMES[index])
 		scene.queue_free()
 		await h.frames(3)
+	check(idle_at_medium, "at the default Medium no field bakes its ground (the bake waits until a preset shows the field)")
 	h.make_viewport(SIZE, true)

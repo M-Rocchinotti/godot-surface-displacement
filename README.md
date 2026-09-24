@@ -212,8 +212,8 @@ everything beyond the fade distance is plain normal mapping.
 | Property | Default | Meaning |
 |---|---|---|
 | `layers` | - | Up to four SD ground materials (world-planar mapping, `height_center` 0). The field copies their textures and parameters (`sync_layers()` after changing them in code). |
-| `ground_bake` | - | An `SDGroundBake`. Without one the field bakes at runtime (`bake_on_ready`), or displaces a flat plane at its own height. |
-| `ground_group`, `bake_texel_size` | `sd_ground`, 5 cm | What is baked, and how finely. |
+| `ground_bake` | - | An `SDGroundBake`. Without one the field bakes at runtime (`bake_on_ready`) the first time it is shown, so a preset without near-camera geometry (Low to High) never bakes; or it displaces a flat plane at its own height. |
+| `ground_group`, `bake_texel_size` | `sd_ground`, 5 cm | What is baked, and how finely. A ground too large for the texel size is baked with coarser texels (see [Limitations](#limitations)). |
 | `levels`, `resolution`, `base_spacing` | 3, 96, 4 cm | Rings, quads per ring side, finest vertex spacing (the defaults are Epic's: the geometry reaches 7.7 m from the camera). Denser grids cost much more than they show, see [Presets and measured cost](#presets-and-measured-cost). |
 | `lift`, `fade_band` | 2 mm, 0.25 | Height above the ground mesh; outer fraction of the grid where the relief fades to flat. |
 | `cast_shadows` | off | Shadows of the displaced geometry (the POM self-shadow already shadows the relief). |
@@ -400,10 +400,15 @@ pass because two errors cancel.
 - **One camera.** Fields and scatters follow one camera (the viewport's, or `camera`); split
   screen or a second viewport sees the same grid, displaced around the first camera.
 - **The ground bake** is a static height field: moving ground or ground edited at runtime needs
-  a new bake (`bake_ground()`, a few frames: 0.2-0.3 s for the demo's 90 x 90 m at 5 cm texels, as
-  printed by `tests/field_tests.gd`; the field is hidden meanwhile). Texels at the bake's edge
-  and next to no ground are not displaced. A bake takes 8 bytes per texel (26 MB for that
-  ground) in memory and on the GPU.
+  a new bake (`bake_ground()`, a few frames: 13-40 ms for the demo's grounds, up to 90 x 90 m at
+  5 cm texels, as printed by `tests/field_tests.gd`; the field is hidden meanwhile). Texels at the
+  bake's edge and next to no ground are not displaced. A bake takes 8 bytes per texel (26 MB for
+  that ground) in memory and as much on the GPU, and has at most 4096 x 4096 texels (128 MB): a
+  larger ground is baked with coarser texels, with a warning (Validate Setup reports it too). A
+  1 x 1 km ground gets 24 cm texels, so steps lower than about 20 cm become ramps. For large
+  worlds put only the ground the camera can reach into the ground group, or build the bake
+  from your terrain's height data with `SDGroundBake.from_arrays()` (keep it within the same
+  limit).
 - **Relief within one material only.** Each ground layer is displaced by its own height map and
   blended by the bake's weights; there is no height-based blending between layers.
 - **Height map precision.** 8-bit heights terrace. The Poly Haven EXRs used by the demo are

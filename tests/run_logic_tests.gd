@@ -22,6 +22,7 @@ func _run() -> void:
 	test_field_mesh_seams()
 	test_ground_bake_sampling()
 	test_demo_textures()
+	test_ground_bake_size()
 	await test_node_lifetime()
 	print("\nlogic tests: %d passed, %d failed" % [_passed, _failed])
 	quit(1 if _failed > 0 else 0)
@@ -300,6 +301,42 @@ func test_field_mesh_seams() -> void:
 
 
 # --- Ground bake ---------------------------------------------------------------------------------
+
+## The bake's size guard: the texel it uses for a ground, and what Validate Setup says.
+func test_ground_bake_size() -> void:
+	print("\n== ground bake size")
+	var demo := SDGroundBake.fit_texel(Vector2(90, 90), 0.05)
+	var km := SDGroundBake.fit_texel(Vector2(1000, 1000), 0.05)
+	var strip := SDGroundBake.fit_texel(Vector2(2000, 10), 0.05)
+	var km_side := ceili(1000.0 / km)
+	print("  texel for 90 x 90 m: %.4f m; 1 x 1 km: %.4f m (%d x %d texels); 2 km x 10 m: %.4f m (%d texels long)" % [
+			demo, km, km_side, km_side, strip, ceili(2000.0 / strip)])
+	check(is_equal_approx(demo, 0.05), "a ground within the limit keeps the texel asked for")
+	check(km_side * km_side <= SDGroundBake.MAX_TEXELS and km < 1000.0 / 4095.0 * 1.002,
+			"a 1 km ground gets the finest texel that fits 4096 x 4096 texels")
+	check(ceili(2000.0 / strip) <= SDGroundBake.MAX_SIDE and strip < 2000.0 / 16383.0 * 1.002,
+			"a 2 km strip gets the finest texel that fits a 16384-texel side")
+	var issues := []
+	for size: float in [1000.0, 60.0]:
+		var scene := Node3D.new()
+		var ground := MeshInstance3D.new()
+		var plane := PlaneMesh.new()
+		plane.size = Vector2(size, size)
+		ground.mesh = plane
+		ground.add_to_group(&"sd_ground")
+		scene.add_child(ground)
+		var field := DisplacementField3D.new()
+		field.bake_on_ready = false
+		scene.add_child(field)
+		root.add_child(scene)
+		var too_large := SDValidator.validate(scene).filter(func(i: Dictionary) -> bool: return i["message"].contains("too large for"))
+		issues.append(too_large)
+		scene.free()
+	if not issues[0].is_empty():
+		print("  %s" % issues[0][0]["message"])
+	check(issues[0].size() == 1 and issues[0][0]["level"] == "warning" and issues[1].is_empty(),
+			"Validate Setup warns about a 1 km ground at 5 cm texels, not about a 60 m one")
+
 
 func test_ground_bake_sampling() -> void:
 	print("\n== ground bake sampling")

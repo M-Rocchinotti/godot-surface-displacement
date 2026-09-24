@@ -69,6 +69,11 @@ func _run() -> void:
 			var shots: Array[Image] = []
 			for mode in MODES.size():
 				set_mode(sd, mode)
+				await frames(2)
+				# A preset that shows the fields starts their runtime bake now.
+				for f: DisplacementField3D in fields:
+					if f.is_baking():
+						await f.baked
 				await frames(40)
 				var img := await capture()
 				img.save_jpg(OUT + "%s_%s_%s.jpg" % [slugs[index], view_name.to_snake_case(), MODES[mode]], QUALITY)

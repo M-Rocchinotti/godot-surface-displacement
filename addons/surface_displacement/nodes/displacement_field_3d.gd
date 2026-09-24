@@ -34,9 +34,11 @@ signal baked
 @export_group("Ground")
 ## Group of the ground meshes (their descendants count too) that the bake captures.
 @export var ground_group := &"sd_ground"
-## Size of a bake texel (m).
+## Size of a bake texel (m). A ground too large for it is baked with coarser texels (at most
+## [constant SDGroundBake.MAX_TEXELS] texels; Validate Setup reports it).
 @export_range(0.01, 1.0, 0.005, "suffix:m") var bake_texel_size := 0.05
-## Bake at runtime when [member ground_bake] is empty and the group has meshes.
+## Bake at runtime when [member ground_bake] is empty and the group has meshes: the first time the
+## field is shown, so a preset without near-camera geometry (which hides the field) never bakes.
 @export var bake_on_ready := true
 @export_group("Quality")
 ## Nested rings (clipmap levels); each doubles the vertex spacing.
@@ -94,6 +96,7 @@ var _ground_dirty := true
 var _mesh_dirty := true
 var _params_dirty := true
 var _baking := false
+var _bake_pending := false
 var _ground_texture: ImageTexture
 var _flat_height := NAN
 var _height_range := Vector2(-1.0, 1.0)
@@ -118,7 +121,11 @@ func _enter_tree() -> void:
 func _ready() -> void:
 	set_process(true)
 	if not Engine.is_editor_hint() and ground_bake == null and bake_on_ready:
-		bake_ground()
+		# Decided after this frame: a SurfaceDisplacement node whose preset has no near-camera
+		# geometry hides the field in its own _ready() or in a deferred apply, and then nothing is
+		# baked until the field is shown.
+		_bake_pending = true
+		_start_pending_bake.call_deferred()
 
 
 func _exit_tree() -> void:
@@ -132,6 +139,20 @@ func _exit_tree() -> void:
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_VISIBILITY_CHANGED and _mesh_instance != null:
 		_mesh_instance.visible = is_visible_in_tree() and not _baking
+		_start_pending_bake()
+
+
+## Starts the runtime bake that [member bake_on_ready] asked for once the field is visible.
+func _start_pending_bake() -> void:
+	if _bake_pending and is_inside_tree() and is_visible_in_tree() and not _baking:
+		_bake_pending = false
+		if ground_bake == null:
+			bake_ground()
+
+
+## True while a runtime bake ([member bake_on_ready]) waits for the field to be shown.
+func is_bake_pending() -> bool:
+	return _bake_pending
 
 
 ## Starts baking the ground from [member ground_group]; [signal baked] is emitted when done
@@ -139,6 +160,7 @@ func _notification(what: int) -> void:
 func bake_ground() -> void:
 	if _baking or not is_inside_tree():
 		return
+	_bake_pending = false
 	var meshes := SDGroundBake.collect_ground(get_tree(), ground_group)
 	if meshes.is_empty():
 		_ground_dirty = true

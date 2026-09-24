@@ -98,8 +98,18 @@ static func _check_field(field: DisplacementField3D) -> Array:
 			issues.append(_issue("error", "%s: layer %s is not a world-planar SD material." % [label, layer.resource_name]))
 		elif not is_zero_approx(float(SDMaterials.get_param(layer, "height_center"))):
 			issues.append(_issue("warning", "%s: layer %s has height_center %.2f; the field's relief sits above the ground (0), so the parallax around it should too." % [label, layer.resource_name, SDMaterials.get_param(layer, "height_center")]))
-	if field.ground_bake == null and field.is_inside_tree() and SDGroundBake.collect_ground(field.get_tree(), field.ground_group).is_empty():
-		issues.append(_issue("info", "%s: no meshes in group '%s'; the ground is the flat plane at the field's height." % [label, field.ground_group]))
+	if field.ground_bake == null and field.is_inside_tree():
+		var meshes := SDGroundBake.collect_ground(field.get_tree(), field.ground_group)
+		if meshes.is_empty():
+			issues.append(_issue("info", "%s: no meshes in group '%s'; the ground is the flat plane at the field's height." % [label, field.ground_group]))
+		else:
+			var box := SDGroundBake.ground_bounds(meshes)
+			var size_m := Vector2(box.size.x, box.size.z)
+			var texel := SDGroundBake.fit_texel(size_m, field.bake_texel_size)
+			if texel > field.bake_texel_size:
+				issues.append(_issue("warning", "%s: the ground in group '%s' (%.0f x %.0f m) is too large for %.3f m bake texels; the bake will use %.3f m texels (at most %d texels, %d MB), so steps lower than %.2f m become ramps. Bake a smaller area or fewer meshes, or set bake_texel_size." % [
+						label, field.ground_group, size_m.x, size_m.y, field.bake_texel_size, texel, SDGroundBake.MAX_TEXELS,
+						SDGroundBake.MAX_TEXELS * 8 / 1048576, SDGroundBake.STEP_SLOPE * texel]))
 	for k in field.levels - 1:
 		var r := field.get_morph_range(k)
 		var spacing := field.base_spacing * pow(2.0, k)
