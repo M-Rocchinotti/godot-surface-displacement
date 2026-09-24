@@ -45,7 +45,11 @@ def directional_albedo(n_dot_v: float, roughness: float, xi: np.ndarray) -> floa
     phi = 2.0 * np.pi * xi[:, 0]
     cos_t = np.sqrt((1.0 - xi[:, 1]) / (1.0 + (a * a - 1.0) * xi[:, 1]))
     sin_t = np.sqrt(1.0 - cos_t * cos_t)
-    h = np.stack([np.cos(phi) * sin_t, np.sin(phi) * sin_t, cos_t], axis=1)
+    # importance_sample_ggx() takes H from its tangent frame to world space; for N = +Z its frame
+    # (tangent = normalize(cross((1, 0, 0), N)) = -Y, bitangent = cross(N, tangent) = +X) turns
+    # (x, y, z) into (y, -x, z). The integral does not change, the 1024-sample estimate does.
+    h = np.stack([np.sin(phi) * sin_t, -np.cos(phi) * sin_t, cos_t], axis=1)
+    h /= np.linalg.norm(h, axis=1)[:, None]
     v_dot_h_raw = h @ v
     l = 2.0 * v_dot_h_raw[:, None] * h - v
     l /= np.linalg.norm(l, axis=1)[:, None]
