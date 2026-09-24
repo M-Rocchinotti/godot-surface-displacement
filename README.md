@@ -135,8 +135,10 @@ SD_MAPPING_UV` (or `SD_MAPPING_WORLD`, `SD_MAPPING_TRIPLANAR`), optionally `SD_P
 Depth write is a separate shader variant (`..._depth.gdshader`, or
 `SDMaterials.set_depth_write(material, true)`): props then intersect the relief instead of the
 flat surface. It costs early-Z for the material and runs the POM march in the depth pre-pass
-too; use it on the few surfaces where objects stand close to deep relief (a wall with a crate
-against it). The preset decides whether the materials that opted in write depth: Low draws them
+also when no effect needs the normal-roughness buffer (with SSAO, SSIL, SSR, SDFGI or VoxelGI
+every POM material marches there anyway, see [ARCHITECTURE.md](docs/ARCHITECTURE.md#33-the-depth-pre-pass-and-the-opt-in-depth-write));
+use it on the few surfaces where objects stand close to deep relief (a wall with a crate against
+it). The preset decides whether the materials that opted in write depth: Low draws them
 without it, and the node's `depth_write` switch (`Feature.DEPTH_WRITE`) turns it off in any
 preset; each material keeps its opt-in for when it is on again. See [Limitations](#limitations).
 
@@ -179,8 +181,11 @@ sd.settings_changed.connect(_refresh_menu)
 
 (`core/sd_settings.gd`; Custom takes an `SDSettings` resource with every value.) Epic has
 slightly fewer parallax steps and a shorter fade than High: the near-camera geometry's fragments
-march the relief too (twice, see [ARCHITECTURE.md](docs/ARCHITECTURE.md#45-what-the-field-costs-and-why)),
-and the budget goes there.
+march the relief too, and its vertices and small triangles cost on top (see
+[ARCHITECTURE.md](docs/ARCHITECTURE.md#45-what-the-field-costs-and-why)); the budget goes there.
+With SSAO, SSIL, SSR, SDFGI or VoxelGI on, Godot's depth pre-pass runs every material's own
+shader to write normals and roughness, so each POM pixel marches twice (the benchmark scene has
+SSAO; without these effects POM costs less).
 
 Measured with `python tools/run_benchmark.py --allow-idle-unreal` (it runs `tests/benchmark.gd`
 once the GPU has been idle for 3 minutes and no other rendering engine runs; an open, idle Unreal
@@ -386,7 +391,8 @@ pass because two errors cancel.
   displaced geometry in front of their face.
 - **Feet sink** into the relief by up to its depth (a few centimetres): collision stays on the
   original ground. Characters' feet also cover pebbles rather than resting on them.
-- **Depth write** (opt-in) costs early-Z and runs the march in the depth pre-pass. The colour
+- **Depth write** (opt-in) costs early-Z and runs the march in the depth pre-pass (which, with
+  SSAO or another effect that reads the normal-roughness buffer, every POM material does). The colour
   pass keeps only fragments whose depth equals the pre-pass depth; the addon rounds the written
   depth so both separately compiled passes agree, but a few pixels per million can still
   disagree and show the background (measured: 4 of 318 484 in the render test). Disabling the

@@ -81,7 +81,7 @@ static func _check_material(m: ShaderMaterial, node: Node) -> Array:
 		if tex != null and tex.get_image() != null and not tex.get_image().has_mipmaps():
 			issues.append(_issue("warning", "%s: %s has no mipmaps." % [label, key]))
 	if info.get("depth_write", false) or m.get_meta(&"sd_depth_write", false):
-		issues.append(_issue("info", "%s writes depth: its march runs in the depth pre-pass too and early-Z is lost (see README)." % label))
+		issues.append(_issue("info", "%s writes depth: early-Z is lost, and its march runs in the depth pre-pass also without SSAO and the other effects that make every material run there (see README)." % label))
 	return issues
 
 

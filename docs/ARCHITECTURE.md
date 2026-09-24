@@ -100,12 +100,27 @@ exactly (render test).
   hard (any relief above the ray) or contact-hardening (Tatarchuk 2006: the largest
   `(relief - ray) * k / distance`), with a 1 % bias, fading out towards `sd_shadow.y` metres.
 
-### 3.3 Opt-in depth write
+### 3.3 The depth pre-pass, and the opt-in depth write
+
+Forward+ draws opaque geometry twice: a depth pre-pass, then the colour pass, which keeps a
+fragment only if its depth is EQUAL to the pre-pass depth. What the pre-pass runs depends on the
+environment (Godot 4.7.2, `render_forward_clustered.cpp`, `_render_scene` and
+`_render_list_template`):
+
+- **Without SSAO, SSIL, SSR, SDFGI and VoxelGI** (and nothing else that reads the
+  normal-roughness buffer) the pre-pass only writes depth. Materials that do not move vertices,
+  discard or write depth (`uses_shared_shadow_material()` in `scene_shader_forward_clustered.h`)
+  are drawn there with the engine's shared depth-only material: the parallax march does not run.
+  The field (its vertex shader moves the vertices) and the depth-write variants run their own
+  shader.
+- **With any of them** the pre-pass writes normal and roughness too, and every opaque material is
+  drawn there with its own shader. Normal and roughness are sampled at the hit, so the parallax
+  march runs twice per pixel: in the pre-pass and in the colour pass, for the surfaces and the
+  field alike. The benchmark scene has SSAO on; its figures include both.
 
 `DEPTH` at the hit makes props intersect the relief. Its costs: the material loses early-Z, and
-its depth pre-pass must run the fragment shader - the variant writes `VERTEX = VERTEX;` so the
-engine does not draw its pre-pass with the shared flat-depth material. With the pre-pass on, the
-colour pass keeps a fragment only if its depth is EQUAL to the pre-pass depth, and the two passes
+its march runs in the pre-pass in either case - the variant writes `VERTEX = VERTEX;` so the
+engine does not draw its plain depth pre-pass with the shared depth-only material. The two passes
 are separately compiled shaders: they disagreed in the last bit on 1.3 % of pixels, which showed
 as holes. The written depth is therefore rounded to 12 mantissa bits (0.25 mm at 2 m); a value that
 lands exactly on a rounding step can still disagree (0 to 13 per million pixels measured).
@@ -181,10 +196,13 @@ and its self-shadow against the CPU height-field shadow (99.8 %).
 
 ### 4.5 What the field costs, and why
 
-In Forward+ the depth pre-pass runs a material's fragment shader when its vertex shader moves
-the vertices (to get the normal-roughness buffer right), so the field's fragments march the relief
-twice per frame, where the ground's POM runs once. Its triangles are small on screen (a few pixels,
-thin at grazing angles), and the GPU shades 2 x 2 pixel quads, so part of that work is thrown away.
+The field's fragments march the relief like the ground material's (twice per pixel with SSAO and
+the other effects of 3.3). On top of that come its vertices - about 28 000 for 3 rings of 96
+quads, each reading the ground bake and every layer's height map, in the pre-pass and again in the
+colour pass - and its triangles, which are small on screen (a few pixels, thin at grazing angles):
+the GPU shades 2 x 2 pixel quads, so part of that work is thrown away. Without SSAO, SSIL, SSR,
+SDFGI and VoxelGI the field still runs its own shader in the pre-pass, because its vertex shader
+moves the vertices.
 `tests/benchmark.gd --explore` measured the field on top of High's POM at 1080p on the GTX 1080:
 1.4 ms for 3 rings of 96 quads at 4 cm, 1.5 ms for 4 x 96 at 4 cm, 1.9 ms for 3 x 128 at 3 cm,
 2.1 ms for 4 x 160 at 2 cm and 3.6 ms for 4 x 256 at 1.5 cm. Epic therefore uses the 3 x 96 grid
