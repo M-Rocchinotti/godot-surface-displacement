@@ -23,6 +23,7 @@ func _run() -> void:
 	test_ground_bake_sampling()
 	test_demo_textures()
 	test_ground_bake_size()
+	test_converter_reports()
 	await test_node_lifetime()
 	print("\nlogic tests: %d passed, %d failed" % [_passed, _failed])
 	quit(1 if _failed > 0 else 0)
@@ -298,6 +299,54 @@ func test_field_mesh_seams() -> void:
 		else:
 			flagged_ok = flagged_ok and int(info[i].y) == 0
 	check(flagged_ok, "edge vertices carry the seam flags, all others none")
+
+
+# --- Material converter ------------------------------------------------------------------------
+
+## The converter says what it cannot convert (every reason) and what a conversion loses.
+func test_converter_reports() -> void:
+	print("\n== material converter")
+	var height := ImageTexture.create_from_image(Image.create(4, 4, false, Image.FORMAT_RF))
+	var lossy := StandardMaterial3D.new()
+	lossy.resource_name = "lossy"
+	lossy.heightmap_enabled = true
+	lossy.heightmap_texture = height
+	lossy.rim_enabled = true
+	lossy.clearcoat_enabled = true
+	lossy.cull_mode = BaseMaterial3D.CULL_DISABLED
+	lossy.next_pass = StandardMaterial3D.new()
+	var clean := StandardMaterial3D.new()
+	clean.resource_name = "clean"
+	clean.heightmap_enabled = true
+	clean.heightmap_texture = height
+	var blocked := StandardMaterial3D.new()
+	blocked.resource_name = "blocked"
+	blocked.heightmap_enabled = true
+	blocked.heightmap_texture = height
+	blocked.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	blocked.emission_enabled = true
+	var scene := Node3D.new()
+	for m: BaseMaterial3D in [lossy, clean, blocked]:
+		var mi := MeshInstance3D.new()
+		mi.mesh = BoxMesh.new()
+		mi.material_override = m
+		scene.add_child(mi)
+	var planned := SDMaterialConverter.plan([scene] as Array[Node])
+	var dropped: Array = planned["dropped"]
+	var skipped: Array = planned["skipped"]
+	var lost: PackedStringArray = dropped[0]["properties"] if dropped.size() == 1 else PackedStringArray()
+	print("  converted %d; %s loses: %s; %s skipped: %s" % [planned["converted"], dropped[0]["material"].resource_name if dropped.size() == 1 else "-",
+			", ".join(lost), skipped[0]["material"].resource_name if skipped.size() == 1 else "-", skipped[0]["reason"] if skipped.size() == 1 else "-"])
+	check(planned["converted"] == 2 and dropped.size() == 1 and dropped[0]["material"] == lossy and lost.size() == 4
+			and lost.has("rim") and lost.has("clearcoat") and lost.has("cull_mode") and lost.has("next_pass"),
+			"a conversion lists every property it does not carry over (and none for a plain material)")
+	check(skipped.size() == 1 and skipped[0]["reason"].contains("transparent") and skipped[0]["reason"].contains("emission"),
+			"a skipped material lists every reason")
+	var all_known := true
+	for entry: Array in SDMaterialConverter.NOT_CARRIED:
+		all_known = all_known and entry[0] in clean and clean.get(entry[0]) == entry[1]
+	check(all_known, "every property the converter watches exists on BaseMaterial3D and has the listed default")
+	scene.free()
 
 
 # --- Ground bake ---------------------------------------------------------------------------------

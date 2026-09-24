@@ -32,6 +32,7 @@ MANAGER = "addons/surface_displacement/nodes/surface_displacement.gd"
 BAKE = "addons/surface_displacement/core/sd_ground_bake.gd"
 MATERIALS = "addons/surface_displacement/core/sd_materials.gd"
 SCATTER = "addons/surface_displacement/nodes/pebble_scatter_3d.gd"
+CONVERTER = "addons/surface_displacement/tools/material_converter.gd"
 HEIGHT_IMPORT = "demo/textures/clean_pebbles/clean_pebbles_height.exr.import"
 
 # (name, what it breaks, [(file, old, new)], [(suite, name filter)]); suite is "logic",
@@ -164,6 +165,12 @@ MUTATIONS = [
     ("pebbles never re-copy", "the pebble scatter copies the field's parameters once and misses later layer changes",
      [(SCATTER, "	if field.get_params_version() != _copied_version:", "	if _copied_version == -1 and field.get_params_version() >= 0:")],
      [("field", "pebbles")]),
+    ("converter: first reason only", "a skipped material reports only the first thing that blocks its conversion",
+     [(CONVERTER, '	return "; ".join(skip_reasons(m))', '	return skip_reasons(m)[0] if not skip_reasons(m).is_empty() else ""')],
+     [("logic", "")]),
+    ("converter: silent losses", "a conversion drops rim, clearcoat, cull mode ... without saying so",
+     [(CONVERTER, "				if not lost.is_empty():", "				if false and not lost.is_empty():")],
+     [("logic", "")]),
     ("feature switch adds features", "a feature switch turns on what the preset leaves out",
      [(MANAGER, "	base.near_field_enabled = base.near_field_enabled and near_field", "	base.near_field_enabled = near_field")],
      [("logic", "")]),

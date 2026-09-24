@@ -115,6 +115,8 @@ func convert_selection() -> void:
 	var assignments: Array = planned["assignments"]
 	for s: Dictionary in planned["skipped"]:
 		print("Surface Displacement: not converted %s on %s: %s" % [s["material"].resource_name, s["node"].name, s["reason"]])
+	for d: Dictionary in planned["dropped"]:
+		print("Surface Displacement: %s is converted without: %s" % [d["material"].resource_name, ", ".join(d["properties"])])
 	if assignments.is_empty():
 		print("Surface Displacement: no convertible materials.")
 		return
