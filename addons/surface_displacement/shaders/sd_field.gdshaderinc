@@ -375,8 +375,11 @@ float sd_field_self_shadow(vec3 l) {
 
 void light() {
 	// Debug view 5 shows the self-shadow factor alone (the fragment set a white, non-reflective
-	// ALBEDO); `return` is not allowed in light(), hence the branches.
-	bool shadow_view = int(sd_debug.x + 0.5) == 5;
+	// ALBEDO); `return` is not allowed in light(), hence the branches. The other debug views are
+	// EMISSION only: light() adds nothing there (it cannot read the fragment's SPECULAR = 0 and
+	// would add the material's specular highlight to the read-back values).
+	int debug_view = int(sd_debug.x + 0.5);
+	bool shadow_view = debug_view == 5;
 	float attenuation = ATTENUATION;
 	if (LIGHT_IS_DIRECTIONAL) {
 		float self_shadow = sd_field_self_shadow(LIGHT);
@@ -385,7 +388,7 @@ void light() {
 		}
 		attenuation *= self_shadow;
 	}
-	if (!shadow_view) {
+	if (debug_view == 0) {
 		sd_brdf(NORMAL, LIGHT, VIEW, LIGHT_COLOR, attenuation, LIGHT_IS_DIRECTIONAL, ALBEDO, ROUGHNESS, METALLIC,
 			f_ss_params.w, SPECULAR_AMOUNT, DIFFUSE_LIGHT, SPECULAR_LIGHT);
 	}

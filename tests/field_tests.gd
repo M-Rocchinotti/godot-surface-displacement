@@ -31,6 +31,7 @@ func _run() -> void:
 	await _test("no_cracks_between_rings", test_no_cracks)
 	await _test("geometry_does_not_swim", test_no_swimming)
 	await _test("edge_blends_into_pom", test_edge_seam)
+	await _test("debug_views_ignore_lights", test_debug_views_unlit)
 	await _test("ground_bake_precision", test_ground_bake)
 	await _test("pebbles_stay_put", test_pebbles)
 	await _test("lifetime_resize_viewports", test_lifetime)
@@ -503,6 +504,61 @@ func test_edge_seam() -> void:
 	check(band_n > 1000 and mean_band < 0.005, "at its edge the field looks like the parallax ground it covers (within 0.5 %)")
 	check(beyond.size() > 10000 and percentile(beyond, 0.999) < 0.001, "beyond the grid nothing changes")
 
+
+## The debug views are EMISSION read-backs: the self-shadowing variants' light() must not add the
+## material's specular to them (it cannot read the fragment's SPECULAR = 0). A low sun facing the
+## camera, the cost view of a ground material and a field: the same with the sun on and off.
+func test_debug_views_unlit() -> void:
+	h.new_lit_scene(Color(0.0, 0.0, 0.0))
+	var mat := SDMaterials.from_texture_set("res://demo/textures/clean_pebbles", SDMaterials.Mapping.WORLD, {"height_center": 0.0})
+	var plane := PlaneMesh.new()
+	plane.size = Vector2(80, 80)
+	var mi := MeshInstance3D.new()
+	mi.mesh = plane
+	mi.material_override = mat
+	h.scene.add_child(mi)
+	var sun := h.add_sun(10.0, 160.0, false)
+	sun.light_energy = 2.0
+	var cam := h.add_camera(Vector3(0.0, 1.7, 0.0), Vector3(0.0, 0.2, -20.0), 70.0)
+	var f := DisplacementField3D.new()
+	f.layers = [mat]
+	f.bake_on_ready = false
+	f.camera = cam
+	h.scene.add_child(f)
+	f.set_quality(SDMaterials.Quality.POM_SELF_SHADOW)
+	var images := []
+	for sun_on in [true, false]:
+		sun.visible = sun_on
+		SDGlobals.set_value(SDGlobals.DEBUG, Vector4(Harness.DEBUG_COST, 0.1, 0, 0))
+		await h.frames(6)
+		images.append(await h.capture())
+	SDGlobals.set_value(SDGlobals.DEBUG, Vector4(0, 0.1, 0, 0))
+	var reach := f.get_reach()
+	var field_px := 0
+	var ground_px := 0
+	var differ := 0
+	var largest := 0.0
+	for py in range(0, SIZE.y, 2):
+		for px in range(0, SIZE.x, 2):
+			var o := cam.project_ray_origin(Vector2(px, py) + Vector2(0.5, 0.5))
+			var d := cam.project_ray_normal(Vector2(px, py) + Vector2(0.5, 0.5))
+			if d.y >= -0.01:
+				continue
+			var hit := o + d * (-o.y / d.y)
+			var in_grid := absf(hit.x) < reach * 0.9 and absf(hit.z) < reach * 0.9
+			var beyond := absf(hit.x) > reach + 0.5 or absf(hit.z) > reach + 0.5
+			if not in_grid and not beyond:
+				continue
+			field_px += 1 if in_grid else 0
+			ground_px += 1 if beyond else 0
+			var a: Color = (images[0] as Image).get_pixel(px, py)
+			var b: Color = (images[1] as Image).get_pixel(px, py)
+			var e := maxf(absf(a.r - b.r), maxf(absf(a.g - b.g), absf(a.b - b.b)))
+			largest = maxf(largest, e)
+			differ += 1 if e > 1e-3 else 0
+	print("  cost view with the sun on vs off: %d of %d field and %d ground pixels differ, largest difference %.4f" % [differ, field_px + ground_px, field_px, largest])
+	check(field_px > 10000 and ground_px > 10000, "the view covers the field and the ground material beyond it")
+	check(differ == 0, "no light reaches the debug read-back (field and surface shader)")
 
 # --- 5. Ground bake ----------------------------------------------------------------------------
 
