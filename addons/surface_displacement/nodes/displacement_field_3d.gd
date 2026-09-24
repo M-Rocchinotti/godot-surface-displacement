@@ -133,8 +133,8 @@ func _notification(what: int) -> void:
 		_mesh_instance.visible = is_visible_in_tree() and not _baking
 
 
-## Bakes the ground from [member ground_group] now (coroutine; emits [signal baked]). The field is
-## hidden meanwhile. Needs a rendering device (not --headless).
+## Starts baking the ground from [member ground_group]; [signal baked] is emitted when done
+## (await it). The field is hidden meanwhile. Needs a rendering device (not --headless).
 func bake_ground() -> void:
 	if _baking or not is_inside_tree():
 		return
@@ -145,7 +145,19 @@ func bake_ground() -> void:
 		return
 	_baking = true
 	_mesh_instance.visible = false
-	var result := await SDGroundBake.bake(meshes, layers, bake_texel_size)
+	_bake_and_apply(weakref(self), meshes, layers, bake_texel_size)
+
+
+## The bake's await runs in a static function: a field freed during the bake (a scene change)
+## must not be resumed.
+static func _bake_and_apply(field_ref: WeakRef, meshes: Array[MeshInstance3D], bake_layers: Array, texel: float) -> void:
+	var result := await SDGroundBake.bake(meshes, bake_layers, texel)
+	var field := field_ref.get_ref() as DisplacementField3D
+	if field != null:
+		field._finish_bake(result)
+
+
+func _finish_bake(result: SDGroundBake) -> void:
 	_baking = false
 	if not is_inside_tree():
 		return

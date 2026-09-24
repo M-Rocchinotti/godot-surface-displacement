@@ -146,6 +146,9 @@ func bake_selected_field() -> void:
 	var bake := await SDGroundBake.bake(meshes, field.layers, field.bake_texel_size)
 	if bake == null:
 		return
+	if not is_instance_valid(field) or not is_instance_valid(root) or EditorInterface.get_edited_scene_root() != root:
+		push_warning("Surface Displacement: the scene changed during the bake; nothing was saved.")
+		return
 	var scene_path := root.scene_file_path
 	var path := (scene_path.get_basename() if not scene_path.is_empty() else "res://" + root.name.to_snake_case()) + "_ground.res"
 	var err := ResourceSaver.save(bake, path)

@@ -479,6 +479,16 @@ func test_lifetime() -> void:
 	await h.frames(3)
 	check(get_nodes_in_group(&"surface_displacement_field").is_empty() and get_nodes_in_group(&"surface_displacement_scatter").is_empty()
 			and get_nodes_in_group(&"surface_displacement_manager").is_empty(), "freeing the scene leaves no field, scatter or manager behind")
+	# A scene change while a field bakes its ground: nothing may resume on the freed field (the
+	# log scan of tests/run_all.py fails the suite on the engine's "class instance is gone" error).
+	var baking := Builder.build(0)
+	h.viewport.add_child(baking)
+	await h.frames(1)
+	var baking_field := baking.find_children("*", "DisplacementField3D", true, false)[0] as DisplacementField3D
+	check(baking_field.is_baking(), "the gravel path's field bakes its ground at runtime")
+	baking.queue_free()
+	await h.frames(10)
+	check(root.find_children("*", "SubViewport", true, false).size() == 1, "the capture viewport of an abandoned bake is freed")
 
 
 # --- 8. Demo scenes -----------------------------------------------------------------------------
