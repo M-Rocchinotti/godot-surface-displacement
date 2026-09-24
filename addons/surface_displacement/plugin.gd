@@ -155,7 +155,9 @@ func bake_selected_field() -> void:
 	if err != OK:
 		push_error("Surface Displacement: cannot save %s (%s)" % [path, error_string(err)])
 		return
-	bake = load(path)
+	# The new bake becomes the resource at that path. load() would return the previous bake from
+	# the resource cache while it is still in use (a re-bake), and the field would keep it.
+	bake.take_over_path(path)
 	var ur := get_undo_redo()
 	ur.create_action("Bake DisplacementField3D ground")
 	ur.add_do_property(field, "ground_bake", bake)

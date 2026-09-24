@@ -175,23 +175,25 @@ func apply() -> void:
 	var s := get_effective_settings()
 	s.apply_globals()
 	SDGlobals.set_value(SDGlobals.DEBUG, Vector4(debug_view, 0.1, 0.0, 0.0))
-	var quality := s.get_quality()
+	# In the editor only the globals change: materials keep the variant they are saved with, and
+	# fields and scatters keep their saved properties (they are scene data).
 	if not Engine.is_editor_hint():
+		var quality := s.get_quality()
 		for m in get_registered_materials():
 			SDMaterials.set_quality(m, quality)
-	for node in get_tree().get_nodes_in_group(&"surface_displacement_field"):
-		var field := node as DisplacementField3D
-		field.visible = s.near_field_enabled
-		field.set_quality(quality)
-		if s.near_field_enabled:
-			field.levels = s.near_field_levels
-			field.resolution = s.near_field_resolution
-			field.base_spacing = s.near_field_spacing
-	for node in get_tree().get_nodes_in_group(&"surface_displacement_scatter"):
-		var scatter_node := node as PebbleScatter3D
-		scatter_node.visible = s.scatter_enabled
-		scatter_node.density = s.scatter_density
-		scatter_node.radius = s.scatter_radius
+		for node in get_tree().get_nodes_in_group(&"surface_displacement_field"):
+			var field := node as DisplacementField3D
+			field.visible = s.near_field_enabled
+			field.set_quality(quality)
+			if s.near_field_enabled:
+				field.levels = s.near_field_levels
+				field.resolution = s.near_field_resolution
+				field.base_spacing = s.near_field_spacing
+		for node in get_tree().get_nodes_in_group(&"surface_displacement_scatter"):
+			var scatter_node := node as PebbleScatter3D
+			scatter_node.visible = s.scatter_enabled
+			scatter_node.density = s.scatter_density
+			scatter_node.radius = s.scatter_radius
 	settings_changed.emit()
 
 

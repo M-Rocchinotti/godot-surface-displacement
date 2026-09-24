@@ -75,6 +75,10 @@ static func write_import(path: String) -> void:
 	var cfg := ConfigFile.new()
 	cfg.set_value("remap", "importer", "texture")
 	cfg.set_value("remap", "type", "CompressedTexture2D")
+	# Rewriting the settings of an existing file keeps its UID, so references to it stay valid.
+	var existing := ConfigFile.new()
+	if existing.load(path + ".import") == OK and existing.has_section_key("remap", "uid"):
+		cfg.set_value("remap", "uid", existing.get_value("remap", "uid"))
 	cfg.set_value("params", "compress/mode", 0)
 	cfg.set_value("params", "mipmaps/generate", true)
 	cfg.set_value("params", "mipmaps/limit", -1)

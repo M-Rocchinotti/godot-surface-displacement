@@ -7,11 +7,12 @@ extends RefCounted
 ##
 ## What carries over: albedo colour and texture, normal map and scale, ORM texture
 ## (ORMMaterial3D) or constant roughness / metallic, AO on/off, specular, UV scale and offset,
-## triplanar (world) mapping, the height map (flipped if the material flips it). The relief depth
-## is BaseMaterial3D's heightmap_scale (hundredths of a texture repeat) turned into metres with
-## [param metres_per_repeat] (default 1 m per texture repeat) - check it per material. Materials
-## with transparency, emission, unshaded shading or separate AO / roughness / metallic textures
-## are not converted (reported in "skipped" with the reason).
+## world triplanar mapping and its sharpness, the height map (flipped if the material flips it).
+## The relief depth is BaseMaterial3D's heightmap_scale (hundredths of a texture repeat) turned
+## into metres with [param metres_per_repeat] (default 1 m per texture repeat) - check it per
+## material. Materials with transparency, emission, unshaded shading, object-space triplanar
+## mapping or separate AO / roughness / metallic textures are not converted (reported in
+## "skipped" with the reason).
 
 
 ## {"assignments": [{"node", "surface" (-1 = material_override), "from" (the material that was
@@ -74,6 +75,8 @@ static func skip_reason(m: BaseMaterial3D) -> String:
 		return "not per-pixel shaded"
 	if m.emission_enabled:
 		return "emission is not supported"
+	if m.uv1_triplanar and not m.uv1_world_triplanar:
+		return "object-space triplanar (Surface Displacement's triplanar mapping is in world space)"
 	if not m is ORMMaterial3D and (m.roughness_texture != null or m.metallic_texture != null or (m.ao_enabled and m.ao_texture != null)):
 		return "separate AO / roughness / metallic textures (pack them into one ORM texture first)"
 	return ""
@@ -104,6 +107,7 @@ static func convert_material(m: BaseMaterial3D, metres_per_repeat := 1.0) -> Sha
 	if triplanar:
 		var scale := m.uv1_scale
 		params["texture_size_m"] = Vector2(1.0 / maxf(scale.x, 1e-4), 1.0 / maxf(scale.z, 1e-4))
+		params["triplanar_sharpness"] = clampf(m.uv1_triplanar_sharpness, 1.0, 16.0)
 		params["height_m"] = m.heightmap_scale * 0.01 * params["texture_size_m"].x
 	else:
 		params["uv_scale"] = Vector2(m.uv1_scale.x, m.uv1_scale.y)

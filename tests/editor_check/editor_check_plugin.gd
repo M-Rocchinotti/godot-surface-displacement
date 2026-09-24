@@ -98,6 +98,15 @@ func _run() -> void:
 	ur.undo()
 	_check(field.ground_bake == null, "undo removes the bake from the field")
 	ur.redo()
+	# A second bake while the first is still assigned (the resource cache holds the old one).
+	var first_bake := field.ground_bake
+	ground.position.y = 0.5
+	EditorInterface.get_selection().clear()
+	EditorInterface.get_selection().add_node(field)
+	await _sd_plugin.bake_selected_field()
+	_check(field.ground_bake != null and field.ground_bake != first_bake and absf(field.ground_bake.sample_height(Vector2(1.0, -2.0)) - 0.5) < 0.001,
+			"baking again assigns the new ground")
+	ground.position.y = 0.0
 
 	# 5. Validation.
 	var issues := SDValidator.validate(root)
@@ -118,6 +127,10 @@ func _run() -> void:
 	var text := FileAccess.get_file_as_string("res://check_scene.tscn")
 	_check(not text.contains("FieldMesh") and not text.contains("Pebbles"), "the field's internal mesh is not saved with the scene")
 	_check(text.contains("sd_world_pom_ss.gdshader"), "the editor does not switch the saved material's variant")
+	# The node's default preset (Medium) has no near-camera geometry; in the editor that must not
+	# hide the field or change its saved properties.
+	_check(field.visible and not text.contains("visible = false") and not text.contains("resolution = "),
+			"the SurfaceDisplacement node leaves the field's saved properties alone in the editor")
 	_check(text.contains("check_scene_ground.res"), "the field keeps its bake reference")
 	_finish()
 
