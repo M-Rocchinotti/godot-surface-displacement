@@ -34,7 +34,7 @@ Your own shaders: `render_mode diffuse_burley, specular_schlick_ggx;`, define `S
 
 Requirements: Godot 4.7+, Forward+ (Vulkan tested).
 Limitations: POM gives no silhouettes on walls and props; the near-camera geometry needs
-height-field ground (world-planar or triplanar ground materials); feet sink into the relief by
+height-field ground (world-planar ground materials); feet sink into the relief by
 up to its depth; depth write is opt-in and costs early-Z; self-shadowing is from directional
 lights only; fields follow one camera. The project README on the repository page has the
 measured costs, accuracy figures, texture tools, an offline Blender bake tool, troubleshooting

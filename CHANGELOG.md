@@ -22,9 +22,10 @@ First version. Requires Godot 4.7+ with the Forward+ renderer.
 - Opt-in depth write with a depth rounding that keeps the depth pre-pass and the colour pass
   equal.
 - `DisplacementField3D`: camera-snapped geometry clipmap with geomorphing (crack-free,
-  no swimming), displaced by up to four ground layers over a top-down ground bake
-  (`SDGroundBake`: 16-bit height, layer weights, step detection); its fragments march the
-  full-resolution relief so the grid blends into POM.
+  no swimming), displaced by up to four world-planar ground layers over a top-down ground bake
+  (`SDGroundBake`: 16-bit height, layer and coverage captured on the GPU and decoded in the
+  shaders, slope-based step detection, `from_arrays()` for procedural terrain); its fragments
+  march the full-resolution relief so the grid blends into POM.
 - `PebbleScatter3D`: camera-following GPU-particle cells of pebbles, placed by world cell.
 - `SurfaceDisplacement` node and `SDSettings`: Off / Low / Medium / High / Epic presets,
   feature switches, runtime variant switching, debug views, a script API for settings menus.
@@ -36,9 +37,11 @@ First version. Requires Godot 4.7+ with the Forward+ renderer.
 - Demo: gravel path, cobblestone street, rocky ground, brick wall and props, with CC0 textures,
   a flat / POM / POM + geometry comparison, presets, feature switches, debug views and a
   frame-time overlay.
-- Tests: logic, render (POM against a CPU ray / height-field intersection, relief drift,
-  triplanar plane count, light() against Godot's lighting, LIGHT_VERTEX shadows, self-shadow
-  against a CPU height-field shadow, depth write, mip shimmer, distance fade), field (vertex
-  heights, cracks, swimming, edge blend, bake precision, pebble stability, lifetime), demo and
-  editor smoke, shipped archive, editor plugin actions with undo/redo, Blender bake; 22
-  mutation checks; a log scan for engine errors and leaks.
+- Tests: logic, render (POM against a CPU ray / height-field intersection, inverted height
+  remap, world-planar walls, relief drift, triplanar plane count, light() against Godot's
+  lighting, LIGHT_VERTEX shadows, self-shadow against a CPU height-field shadow, depth write,
+  mip shimmer, distance fade), field (vertex heights, the baked ground against its CPU twin, the
+  field's own parallax and self-shadow against the CPU references, cracks, swimming, edge blend,
+  bake precision, pebble stability, lifetime), demo and editor smoke, shipped archive, editor
+  plugin actions with undo/redo, Blender bake; mutation checks; a log scan for engine errors and
+  leaks.

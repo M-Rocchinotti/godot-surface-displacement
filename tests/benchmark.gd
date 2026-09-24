@@ -74,7 +74,11 @@ func build(sd_mode: Variant, features := {}) -> void:
 		field.add_child(PebbleScatter3D.new())
 		sd.preset = sd_mode
 		for key: String in features:
-			sd.set(key, features[key])
+			if key == "depth_write":
+				# The opt-in depth write on the ground material itself.
+				SDMaterials.set_depth_write(mat, true)
+			else:
+				sd.set(key, features[key])
 	env_root.add_child(ground)
 	viewport.add_child(scene)
 	(env_root.get_node("Camera") as Camera3D).current = true
@@ -127,6 +131,7 @@ func _run() -> void:
 		[SDSettings.Preset.HIGH, {}], [SDSettings.Preset.EPIC, {}],
 		[SDSettings.Preset.EPIC, {"scatter": false}], [SDSettings.Preset.EPIC, {"near_field": false}],
 		[SDSettings.Preset.EPIC, {"near_field": false, "self_shadow": false}],
+		[SDSettings.Preset.MEDIUM, {"depth_write": true}],
 	]
 	for row: Array in rows:
 		await build(row[0], row[1])
@@ -137,7 +142,8 @@ func _run() -> void:
 		var ok := added <= budget
 		if budget_row and not ok:
 			failures += 1
-		var feats := "all of the preset" if (row[1] as Dictionary).is_empty() else ", ".join((row[1] as Dictionary).keys().map(func(k: String) -> String: return "no " + k.replace("_", " ")))
+		var feats := "all of the preset" if (row[1] as Dictionary).is_empty() else ", ".join((row[1] as Dictionary).keys().map(
+				func(k: String) -> String: return ("+ " if row[1][k] else "no ") + k.replace("_", " ")))
 		_log("| %s | %s | %.3f | %.3f | %s | %.3f | %s |" % [SDSettings.preset_name(row[0]), feats, r["gpu"], added,
 				"%.1f" % budget if budget_row else "-", r["spread"], ("PASS" if ok else "OVER") if budget_row else "-"])
 	_log("")

@@ -12,7 +12,7 @@ from three layers that each do what the engine allows:
 | Layer | Where | What it gives | Code |
 |---|---|---|---|
 | Parallax occlusion mapping (POM) | every SD material, any distance up to the fade | per-pixel relief at the height map's full resolution, occlusion between stones, shadows received on the relief (`LIGHT_VERTEX`), self-shadowing | `shaders/sd_core.gdshaderinc`, `sd_march.gdshaderinc`, `sd_surface.gdshaderinc` |
-| Near-camera geometry | horizontal ground within ~13-15 m | real vertices displaced by the height map: silhouettes, real depth (SSAO, intersections), coarse relief | `nodes/displacement_field_3d.gd`, `shaders/sd_field.gdshaderinc` |
+| Near-camera geometry | ground within 12.8 m (High) / 15.4 m (Epic) of the camera | real vertices displaced by the height map: silhouettes, real depth (SSAO, intersections), coarse relief | `nodes/displacement_field_3d.gd`, `shaders/sd_field.gdshaderinc` |
 | Pebble scatter | gravel layers within ~8 m | loose stones as real little meshes | `nodes/pebble_scatter_3d.gd`, `shaders/sd_pebble*.gdshader` |
 
 Plus an offline Blender tool (`tools/bake_displaced_mesh.py`, not shipped) for the few props whose
@@ -76,7 +76,7 @@ global shader uniforms, so they change without recompiling anything.
    with it. Beyond the fade end the shader does no march at all: plain normal mapping.
 
 Final texture samples use `textureGrad` with the rasterized uv's derivatives (the hit uv jumps at
-stone edges). The flat UV and world variants use `texture()`, and then match ORMMaterial3D
+stone edges). The flat UV and world variants use `texture()`; the flat UV variant then matches ORMMaterial3D
 exactly (render test).
 
 ### 3.2 Lighting
@@ -143,9 +143,17 @@ snapping moves ring boundaries, the geometry does not pop either (render test: u
 - `ground` and the layer weights `w` come from an `SDGroundBake` (or a flat plane at the node's
   height). The bake renders the ground group's meshes top-down in their own `World3D` with a
   capture shader that writes the world height as 16-bit fixed point split over two channels
-  (exact in the half-float target) and the layer index; it marks texels next to height steps
-  (kerbs) and next to no ground as not displaceable, fills empty texels by dilation, and is
-  sampled bilinearly between texel centres with `texelFetch` (the same function on the CPU).
+  (exact in the half-float target), the layer index and coverage, and stores the captured image
+  as it is: nothing runs per texel on the CPU (0.3 s for the demo's 90 x 90 m at 5 cm, most of it
+  waiting for frames). `sd_ground.gdshaderinc`, shared by the field and the pebbles, decodes the
+  4 x 4 texels around a point: a texel is displaceable when it and its four neighbours are
+  covered and no neighbour differs by more than `step_limit` (0.8 x the texel size: slopes up to
+  39 degrees are ground, kerbs and steps are not, whatever the texel size); uncovered texels take
+  the mean height of the covered ones around them; heights, weights and the gradient normal are
+  bilinear between texel centres; beyond the bake nothing is displaceable. `SDGroundBake.sample()`
+  is the same function on the CPU, and a render test checks the field's vertices against it.
+- The vertices pass the normalised layer weights to the fragments (varyings), so the fragments
+  do not decode the bake again.
 - The field is drawn *on top of* the original ground: relief "up only" plus `lift` (2 mm).
   Where no layer is displaceable, vertices dive `push_down` under the ground and the ground mesh
   hides them - no `discard`, so early-Z stays.
@@ -162,6 +170,12 @@ proxy geometry was rasterized. The geometry adds what POM cannot: pixels the fla
 not cover (silhouettes), real depth for SSAO and for props, and the coarse relief. At the field's
 edge the geometry is flat, the shading is the ground's, and the two meet seamlessly (render test:
 1 % mean difference in the last metre, zero beyond).
+
+The march's mip level and the texture gradients come from the footprint on the ground plane under
+the proxy (the view ray's point at relief height 0), not from the proxy's own screen derivatives:
+those jump at the proxy's bumps and silhouettes and would blur the relief there. A render test
+checks the field's hits against the CPU ray tracer like the surfaces' (90th percentile 0.16 mm)
+and its self-shadow against the CPU height-field shadow (99.7 %).
 
 ## 5. `PebbleScatter3D`
 
@@ -202,4 +216,5 @@ exit.
 - Tests that check a direction use only the pixels where the right and the wrong answer differ
   (the shadow-edge test, the depth-write test), so a broken feature cannot pass on pixels that
   look the same either way.
-- `tests/run_mutations.py` re-introduces 22 bugs, each of which must turn its tests red.
+- `tests/run_mutations.py` re-introduces known bugs one at a time (the list is in the README),
+  each of which must turn its tests red.
