@@ -50,6 +50,7 @@ func load_scene(index: int) -> void:
 		sd.self_shadow = old_sd.self_shadow
 		sd.near_field = old_sd.near_field
 		sd.scatter = old_sd.scatter
+		sd.depth_write = old_sd.depth_write
 		sd.debug_view = old_sd.debug_view
 	else:
 		sd.preset = _preset
@@ -92,7 +93,7 @@ func _sync_ui() -> void:
 	_preset_option.select(sd.preset if sd.preset != SDSettings.Preset.CUSTOM else SDSettings.Preset.MEDIUM)
 	for feature: int in _feature_checks:
 		var check := _feature_checks[feature] as CheckButton
-		check.set_pressed_no_signal([sd.pom, sd.self_shadow, sd.near_field, sd.scatter][feature])
+		check.set_pressed_no_signal([sd.pom, sd.self_shadow, sd.near_field, sd.scatter, sd.depth_write][feature])
 	var mode := _compare_mode()
 	for i in _compare_buttons.size():
 		_compare_buttons[i].set_pressed_no_signal(i == mode)
@@ -169,7 +170,7 @@ func _build_ui() -> void:
 	_preset_option = _option(box, "Preset  (P)", PRESETS, func(i: int) -> void:
 		sd.preset = i as SDSettings.Preset
 		_sync_ui())
-	var names := ["Parallax occlusion (POM)", "Self-shadowing", "Near-camera geometry", "Pebble scatter"]
+	var names := ["Parallax occlusion (POM)", "Self-shadowing", "Near-camera geometry", "Pebble scatter", "Depth write (opted-in walls)"]
 	for feature in names.size():
 		var check := CheckButton.new()
 		check.text = names[feature]

@@ -90,6 +90,8 @@ func test_presets() -> void:
 	check(not low.near_field_enabled and not med.near_field_enabled and not high.near_field_enabled and epic.near_field_enabled,
 			"near-camera geometry only at Epic")
 	check(epic.scatter_enabled and not high.scatter_enabled, "pebble scatter only at Epic")
+	check(not off.depth_write_enabled and not low.depth_write_enabled and med.depth_write_enabled and high.depth_write_enabled
+			and epic.depth_write_enabled, "the opt-in depth write is on from Medium, off at Low (and Off)")
 	check(low.pom_max_steps <= med.pom_max_steps and med.pom_max_steps <= high.pom_max_steps and low.pom_fade_end <= med.pom_fade_end
 			and med.pom_fade_end <= high.pom_fade_end and low.pom_refine_steps < med.pom_refine_steps and med.pom_refine_steps <= high.pom_refine_steps
 			and high.self_shadow == SDSettings.SelfShadow.SOFT and med.self_shadow == SDSettings.SelfShadow.HARD,
@@ -147,7 +149,58 @@ func test_manager() -> void:
 	sd.enabled = false
 	sd.apply()
 	check(SDMaterials.parse(mat.shader)["quality"] == SDMaterials.Quality.FLAT and is_zero_approx(sd.get_budget_ms()), "enabled = false draws everything flat")
+	_check_depth_write_switch(sd, scene)
 	scene.queue_free()
+
+
+## The depth-write switch (preset and feature): an opted-in material draws without the depth write
+## at Low or with the switch off and gets exactly its shader back afterwards, through any number of
+## switches, also via flat; a material that did not opt in never gets it.
+func _check_depth_write_switch(sd: SurfaceDisplacement, scene: Node3D) -> void:
+	var opted: Array[ShaderMaterial] = []
+	var plain: Array[ShaderMaterial] = []
+	for m in SDMaterials.Mapping.values():
+		opted.append(SDMaterials.create(m, {}, {}, SDMaterials.Quality.POM_SELF_SHADOW, true))
+		# As made in the inspector: a _depth variant picked by hand, no metadata.
+		var by_hand := ShaderMaterial.new()
+		by_hand.shader = SDMaterials.get_shader(m, SDMaterials.Quality.POM, true)
+		opted.append(by_hand)
+		plain.append(SDMaterials.create(m, {}, {}, SDMaterials.Quality.POM_SELF_SHADOW))
+	# Their shaders as created (entering the tree switches them to the node's current settings).
+	var originals := opted.map(func(m: ShaderMaterial) -> Shader: return m.shader)
+	for m in opted + plain:
+		var mi := MeshInstance3D.new()
+		mi.mesh = PlaneMesh.new()
+		mi.material_override = m
+		scene.add_child(mi)
+	var states := []
+	var steps := [[true, SDSettings.Preset.HIGH, true], [true, SDSettings.Preset.LOW, true], [true, SDSettings.Preset.MEDIUM, true],
+			[true, SDSettings.Preset.EPIC, false], [false, SDSettings.Preset.EPIC, false], [true, SDSettings.Preset.EPIC, false],
+			[true, SDSettings.Preset.EPIC, true], [true, SDSettings.Preset.LOW, true], [true, SDSettings.Preset.HIGH, true]]
+	var ok := true
+	for step: Array in steps:
+		sd.enabled = step[0]
+		sd.preset = step[1]
+		sd.set_feature(SurfaceDisplacement.Feature.DEPTH_WRITE, step[2])
+		sd.apply()
+		var want: bool = step[0] and step[1] != SDSettings.Preset.LOW and step[2]
+		ok = ok and sd.is_feature_active(SurfaceDisplacement.Feature.DEPTH_WRITE) == want
+		for m in opted:
+			ok = ok and SDMaterials.parse(m.shader)["depth_write"] == (want and SDMaterials.parse(m.shader)["quality"] != SDMaterials.Quality.FLAT)
+		for m in plain:
+			ok = ok and not SDMaterials.parse(m.shader)["depth_write"]
+		states.append(opted.map(func(m: ShaderMaterial) -> bool: return SDMaterials.parse(m.shader)["depth_write"]))
+	# Back to the start, and to the quality the hand-made ones were made with.
+	sd.preset = SDSettings.Preset.HIGH
+	sd.apply()
+	var restored := true
+	for i in opted.size():
+		if i % 2 == 1:
+			SDMaterials.set_quality(opted[i], SDMaterials.Quality.POM)
+		restored = restored and opted[i].shader == originals[i]
+	print("  opted-in materials' depth write over the steps (enabled, preset, switch): %s" % [states])
+	check(ok, "the depth write follows the preset and its switch; materials that did not opt in never get it")
+	check(restored, "back at High with the switch on, every opted-in material (also those made by hand, without metadata) has exactly its original shader")
 
 
 # --- DisplacementField3D geometry ------------------------------------------------------------

@@ -136,7 +136,9 @@ Depth write is a separate shader variant (`..._depth.gdshader`, or
 `SDMaterials.set_depth_write(material, true)`): props then intersect the relief instead of the
 flat surface. It costs early-Z for the material and runs the POM march in the depth pre-pass
 too; use it on the few surfaces where objects stand close to deep relief (a wall with a crate
-against it). See [Limitations](#limitations).
+against it). The preset decides whether the materials that opted in write depth: Low draws them
+without it, and the node's `depth_write` switch (`Feature.DEPTH_WRITE`) turns it off in any
+preset; each material keeps its opt-in for when it is on again. See [Limitations](#limitations).
 
 ### The SurfaceDisplacement node
 
@@ -144,7 +146,7 @@ against it). See [Limitations](#limitations).
 |---|---|---|
 | `enabled` | on | Off = the Off preset. |
 | `preset` | Medium | Off / Low / Medium / High / Epic / Custom (`custom_settings`, an `SDSettings`). |
-| `pom`, `self_shadow`, `near_field`, `scatter` | on | Feature switches. They can only take a feature away from the preset, never add one. |
+| `pom`, `self_shadow`, `near_field`, `scatter`, `depth_write` | on | Feature switches. They can only take a feature away from the preset, never add one. `depth_write` concerns the materials that opted into the depth write. |
 | `debug_view` | Off | Hit offset, march cost, relief height, normals, self-shadow, field rings. |
 
 One node per project scene; it writes the shader globals, switches every registered material
@@ -159,6 +161,7 @@ Script API for a settings menu:
 var sd := SurfaceDisplacement.find_in(get_tree())
 sd.preset = SDSettings.Preset.HIGH
 sd.set_feature(SurfaceDisplacement.Feature.SCATTER, false)
+sd.set_feature(SurfaceDisplacement.Feature.DEPTH_WRITE, false)
 sd.is_feature_active(SurfaceDisplacement.Feature.NEAR_FIELD)   # preset AND switch
 sd.get_budget_ms()                                             # target cost of the preset
 sd.settings_changed.connect(_refresh_menu)
@@ -166,13 +169,13 @@ sd.settings_changed.connect(_refresh_menu)
 
 ### Presets and measured cost
 
-| Preset | POM steps (min-max, bisection) | Relief fades out | Self-shadow | Near-camera geometry | Pebbles |
-|---|---|---|---|---|---|
-| Off | - (normal mapping) | - | - | - | - |
-| Low | 4-10, secant only | 8-14 m | - | - | - |
-| Medium | 8-20, 3 | 18-30 m | hard, 6 steps, to 15 m | - | - |
-| High | 10-28, 4 | 25-40 m | soft, 12 steps, to 25 m | - | - |
-| Epic | 8-20, 3 | 20-35 m | soft, 8 steps, to 20 m | 3 rings x 96 at 4 cm (to 7.7 m) | to 8 m |
+| Preset | POM steps (min-max, bisection) | Relief fades out | Self-shadow | Near-camera geometry | Pebbles | Depth write (opted-in materials) |
+|---|---|---|---|---|---|---|
+| Off | - (normal mapping) | - | - | - | - | - |
+| Low | 4-10, secant only | 8-14 m | - | - | - | off |
+| Medium | 8-20, 3 | 18-30 m | hard, 6 steps, to 15 m | - | - | on |
+| High | 10-28, 4 | 25-40 m | soft, 12 steps, to 25 m | - | - | on |
+| Epic | 8-20, 3 | 20-35 m | soft, 8 steps, to 20 m | 3 rings x 96 at 4 cm (to 7.7 m) | to 8 m | on |
 
 (`core/sd_settings.gd`; Custom takes an `SDSettings` resource with every value.) Epic has
 slightly fewer parallax steps and a shorter fade than High: the near-camera geometry's fragments

@@ -25,6 +25,9 @@ enum SelfShadow { OFF, HARD, SOFT }
 @export_range(-2.0, 4.0, 0.25) var pom_lod_bias := 0.0
 ## Height-map mip level at and beyond which the march is skipped (the relief is below a pixel).
 @export_range(0.0, 12.0, 0.5) var pom_max_lod := 6.0
+## Materials that opted into the depth write ([method SDMaterials.set_depth_write]) write it;
+## off, they draw without it (their opt-in is kept for when it is on again).
+@export var depth_write_enabled := true
 @export_group("Self-shadowing")
 ## Height-field shadows from directional lights, computed in a light() that reproduces Godot's
 ## own direct lighting. OFF uses Godot's built-in lighting.
@@ -55,6 +58,7 @@ static func create_preset(preset: Preset) -> SDSettings:
 		Preset.OFF:
 			s.pom_enabled = false
 			s.self_shadow = SelfShadow.OFF
+			s.depth_write_enabled = false
 		Preset.LOW:
 			s.pom_min_steps = 4
 			s.pom_max_steps = 10
@@ -63,6 +67,8 @@ static func create_preset(preset: Preset) -> SDSettings:
 			s.pom_fade_end = 14.0
 			s.pom_max_lod = 5.0
 			s.self_shadow = SelfShadow.OFF
+			# The depth write costs early-Z and a second march (README): not in the cheapest preset.
+			s.depth_write_enabled = false
 		Preset.MEDIUM:
 			pass # the defaults
 		Preset.HIGH:

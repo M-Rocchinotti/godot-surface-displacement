@@ -30,6 +30,7 @@ PEBBLES = SH + "sd_pebble_process.gdshader"
 FIELD = "addons/surface_displacement/nodes/displacement_field_3d.gd"
 MANAGER = "addons/surface_displacement/nodes/surface_displacement.gd"
 BAKE = "addons/surface_displacement/core/sd_ground_bake.gd"
+MATERIALS = "addons/surface_displacement/core/sd_materials.gd"
 HEIGHT_IMPORT = "demo/textures/clean_pebbles/clean_pebbles_height.exr.import"
 
 # (name, what it breaks, [(file, old, new)], [(suite, name filter)]); suite is "logic",
@@ -142,6 +143,13 @@ MUTATIONS = [
     ("debug views lit (field)", "the field's light() adds the specular highlight to the debug views' read-back",
      [(FIELD_SH, "	if (debug_view == 0) {\n		sd_brdf(", "	if (!shadow_view) {\n		sd_brdf(")],
      [("field", "debug_views")]),
+    ("depth-write switch ignored", "opted-in materials keep the depth write at Low and with the DEPTH_WRITE switch off",
+     [(MATERIALS, "	var shader := get_shader(info[\"mapping\"], quality, opted_in and allow_depth_write)",
+       "	var shader := get_shader(info[\"mapping\"], quality, opted_in and (allow_depth_write or true))")],
+     [("logic", "")]),
+    ("depth-write switch forgets the opt-in", "switching the depth write off loses the material's opt-in, so it never comes back",
+     [(MATERIALS, "	if opted_in:\n		material.set_meta(&\"sd_depth_write\", true)", "	if false:\n		material.set_meta(&\"sd_depth_write\", true)")],
+     [("logic", "")]),
     ("feature switch adds features", "a feature switch turns on what the preset leaves out",
      [(MANAGER, "	base.near_field_enabled = base.near_field_enabled and near_field", "	base.near_field_enabled = near_field")],
      [("logic", "")]),

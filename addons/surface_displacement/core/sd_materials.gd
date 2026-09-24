@@ -76,18 +76,22 @@ static func is_sd_material(material: Material) -> bool:
 	return material is ShaderMaterial and not parse((material as ShaderMaterial).shader).is_empty()
 
 
-## Switches [param material] to [param quality], keeping its mapping and depth write. Returns
-## true if the shader changed. Materials that are not SD variants are left alone.
-static func set_quality(material: ShaderMaterial, quality: Quality) -> bool:
+## Switches [param material] to [param quality], keeping its mapping and its depth-write opt-in.
+## [param allow_depth_write] false draws an opted-in material without the depth write (the
+## presets' switch, [member SDSettings.depth_write_enabled]); the opt-in is remembered and comes
+## back with the next call that allows it. Returns true if the shader changed. Materials that are
+## not SD variants are left alone.
+static func set_quality(material: ShaderMaterial, quality: Quality, allow_depth_write := true) -> bool:
 	var info := parse(material.shader)
 	if info.is_empty():
 		return false
-	var depth: bool = info["depth_write"] or bool(material.get_meta(&"sd_depth_write", false))
-	var shader := get_shader(info["mapping"], quality, depth)
+	var opted_in: bool = info["depth_write"] or bool(material.get_meta(&"sd_depth_write", false))
+	var shader := get_shader(info["mapping"], quality, opted_in and allow_depth_write)
 	if material.shader == shader:
 		return false
-	# A flat variant cannot carry the depth write; remember it for the way back.
-	if depth:
+	# Neither a flat variant nor a switched-off depth write carries the opt-in in its shader:
+	# remember it for the way back.
+	if opted_in:
 		material.set_meta(&"sd_depth_write", true)
 	material.shader = shader
 	return true

@@ -19,7 +19,7 @@ extends Node
 
 signal settings_changed
 
-enum Feature { POM, SELF_SHADOW, NEAR_FIELD, SCATTER }
+enum Feature { POM, SELF_SHADOW, NEAR_FIELD, SCATTER, DEPTH_WRITE }
 enum DebugView { OFF = 0, HIT_OFFSET = 1, COST = 2, RELIEF = 3, NORMALS = 4, SELF_SHADOW = 5, FIELD_LEVELS = 8 }
 
 ## Off: every SD material draws as plain normal mapping, no field, no scatter.
@@ -54,6 +54,11 @@ enum DebugView { OFF = 0, HIT_OFFSET = 1, COST = 2, RELIEF = 3, NORMALS = 4, SEL
 @export var scatter := true:
 	set(value):
 		scatter = value
+		_queue_apply()
+## The depth write of the materials that opted into it ([method SDMaterials.set_depth_write]).
+@export var depth_write := true:
+	set(value):
+		depth_write = value
 		_queue_apply()
 @export_group("Debug")
 @export var debug_view := DebugView.OFF:
@@ -105,6 +110,7 @@ func get_effective_settings() -> SDSettings:
 		base.self_shadow = SDSettings.SelfShadow.OFF
 	base.near_field_enabled = base.near_field_enabled and near_field
 	base.scatter_enabled = base.scatter_enabled and scatter and base.near_field_enabled
+	base.depth_write_enabled = base.depth_write_enabled and depth_write and base.pom_enabled
 	return base
 
 
@@ -118,6 +124,8 @@ func set_feature(feature: Feature, on: bool) -> void:
 			near_field = on
 		Feature.SCATTER:
 			scatter = on
+		Feature.DEPTH_WRITE:
+			depth_write = on
 
 
 ## Whether [param feature] is on in the effective settings (preset and switch).
@@ -130,6 +138,8 @@ func is_feature_active(feature: Feature) -> bool:
 			return s.self_shadow != SDSettings.SelfShadow.OFF
 		Feature.NEAR_FIELD:
 			return s.near_field_enabled
+		Feature.DEPTH_WRITE:
+			return s.depth_write_enabled
 		_:
 			return s.scatter_enabled
 
@@ -145,7 +155,8 @@ func register_material(material: Material) -> void:
 	if SDMaterials.is_sd_material(material):
 		_materials[material.get_instance_id()] = weakref(material)
 		if not Engine.is_editor_hint() and is_inside_tree():
-			SDMaterials.set_quality(material, get_effective_settings().get_quality())
+			var s := get_effective_settings()
+			SDMaterials.set_quality(material, s.get_quality(), s.depth_write_enabled)
 
 
 ## Registers the SD materials of every GeometryInstance3D under [param root].
@@ -180,7 +191,7 @@ func apply() -> void:
 	if not Engine.is_editor_hint():
 		var quality := s.get_quality()
 		for m in get_registered_materials():
-			SDMaterials.set_quality(m, quality)
+			SDMaterials.set_quality(m, quality, s.depth_write_enabled)
 		for node in get_tree().get_nodes_in_group(&"surface_displacement_field"):
 			var field := node as DisplacementField3D
 			field.visible = s.near_field_enabled
