@@ -99,13 +99,16 @@ func _run() -> void:
 	_check(field.ground_bake == null, "undo removes the bake from the field")
 	ur.redo()
 	# A second bake while the first is still assigned (the resource cache holds the old one).
-	var first_bake := field.ground_bake
 	ground.position.y = 0.5
 	EditorInterface.get_selection().clear()
 	EditorInterface.get_selection().add_node(field)
 	await _sd_plugin.bake_selected_field()
-	_check(field.ground_bake != null and field.ground_bake != first_bake and absf(field.ground_bake.sample_height(Vector2(1.0, -2.0)) - 0.5) < 0.001,
-			"baking again assigns the new ground")
+	_check(field.ground_bake != null and absf(field.ground_bake.sample_height(Vector2(1.0, -2.0)) - 0.5) < 0.001
+			and field.ground_bake.resource_path == "res://check_scene_ground.res",
+			"baking again gives the field the new ground, still from the saved file")
+	# Undo and redo of the re-bake must leave a bake that is saved as a reference, not embedded.
+	ur.undo()
+	ur.redo()
 	ground.position.y = 0.0
 
 	# 5. Validation.
@@ -131,7 +134,7 @@ func _run() -> void:
 	# hide the field or change its saved properties.
 	_check(field.visible and not text.contains("visible = false") and not text.contains("resolution = "),
 			"the SurfaceDisplacement node leaves the field's saved properties alone in the editor")
-	_check(text.contains("check_scene_ground.res"), "the field keeps its bake reference")
+	_check(text.contains("check_scene_ground.res") and not text.contains("sd_ground_bake.gd"), "the field keeps its bake as a reference to the file (nothing embedded)")
 	_finish()
 
 

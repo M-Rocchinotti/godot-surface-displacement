@@ -260,11 +260,17 @@ func test_ground_bake_sampling() -> void:
 	var corner := bake.origin + Vector2(0.25, 0.25)
 	check(bake.sample_weights(corner).r < 1e-6 and bake.sample_weights(bake.origin + Vector2(-3.0, 1.0)).r < 1e-6,
 			"nothing is displaceable at the bake's border texels or beyond the bake")
-	check(absf(bake.sample_height(bake.origin + Vector2(20.0, 20.0)) - (0.1 * (n - 1) + 0.3 * (n - 1))) < 1e-4,
-			"beyond the bake the height continues its edge")
+	# Beyond the right edge the height continues the edge column, bilinear along it.
+	var beyond_ok := true
+	for z: float in [3.3, 3.45, 4.1]:
+		var tz := (z - bake.origin.y) / bake.texel_size - 0.5
+		beyond_ok = beyond_ok and absf(bake.sample_height(Vector2(bake.origin.x + 12.0, z)) - (0.1 * (n - 1) + 0.3 * tz)) < 1e-4
+	check(beyond_ok and absf(bake.sample_height(bake.origin + Vector2(20.0, 20.0)) - (0.1 * (n - 1) + 0.3 * (n - 1))) < 1e-4,
+			"beyond the bake the height continues its edge smoothly")
 
-	# Steps are judged by slope, whatever the texel size: 5 cm texels (limit 4 cm) and 20 cm
-	# texels (16 cm): a 30-degree slope stays ground, a 45-degree one and a 15 cm kerb do not.
+	# Steps are judged by slope, whatever the texel size: at 5 cm texels (limit 4 cm) and at 20 cm
+	# texels (limit 16 cm) a 30-degree slope stays ground and a 45-degree one does not. (A kerb
+	# lower than the limit is draped: a 15 cm kerb is a step at 5 cm texels, not at 20 cm.)
 	for texel: float in [0.05, 0.2]:
 		var row := func(rise_per_texel: float) -> bool:
 			var hs := PackedFloat32Array()

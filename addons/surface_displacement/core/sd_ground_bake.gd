@@ -74,10 +74,11 @@ func sample(xz: Vector2) -> Dictionary:
 		if covered[k]:
 			covered_sum += h[k]
 			covered_count += 1
-	var fill := covered_sum / covered_count if covered_count > 0 else h[5]
-	for k in 16:
-		if not covered[k]:
-			h[k] = fill
+	if covered_count > 0:
+		var fill := covered_sum / covered_count
+		for k in 16:
+			if not covered[k]:
+				h[k] = fill
 	var w: Array[Color] = []
 	var gradient: Array[Vector2] = []
 	for c: int in [5, 6, 9, 10]:

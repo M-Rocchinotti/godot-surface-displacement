@@ -58,11 +58,13 @@ SDGround sd_ground(vec2 xz) {
 	}
 	// Texels without ground take the mean height of the covered ones around them, so heights and
 	// normals stay sane at the ground's edges (they are not displaceable anyway). With no ground in
-	// the block at all, the (clamped) fetch stands: the bake's edge continues outwards.
-	float fill = covered_count > 0.0 ? covered_sum / covered_count : h[5];
-	for (int k = 0; k < 16; k++) {
-		if (!covered[k]) {
-			h[k] = fill;
+	// the block at all, the (clamped) fetches stand: beyond the bake its edge continues outwards.
+	if (covered_count > 0.0) {
+		float fill = covered_sum / covered_count;
+		for (int k = 0; k < 16; k++) {
+			if (!covered[k]) {
+				h[k] = fill;
+			}
 		}
 	}
 	int footprint[4] = { 5, 6, 9, 10 };
