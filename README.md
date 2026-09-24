@@ -70,9 +70,13 @@ props whose silhouette POM cannot give into real triangles.
 
 ## Installation
 
-1. **Asset Store / Asset Library:** search for "Surface Displacement" and install it.
-   **By hand:** copy `addons/surface_displacement` into your project's `addons/` folder. It is
-   self-contained.
+1. **From a release:** download the release archive from
+   <https://github.com/M-Rocchinotti/godot-surface-displacement/releases> (it holds only
+   `addons/surface_displacement` and the licence; the repository's "Code > Download ZIP" is the
+   same archive) and extract it into your project's root folder.
+   **By hand:** copy `addons/surface_displacement` from a clone of the repository into your
+   project's `addons/` folder. It is self-contained. The addon is not listed in the Godot Asset
+   Library or Asset Store.
 2. Enable **Surface Displacement** in Project > Project Settings > Plugins. It registers five
    global shader uniforms (`sd_pom_steps`, `sd_pom_range`, `sd_shadow`, `sd_debug`, `sd_dfg`) in
    Project Settings > Shader Globals. Keep them: every Surface Displacement shader reads them.
