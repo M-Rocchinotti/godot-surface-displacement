@@ -268,7 +268,9 @@ void fragment() {
 
 #ifdef SD_SELF_SHADOW
 	{
-		float in_range = 1.0 - smoothstep(0.8 * sd_shadow.y, sd_shadow.y, length(VERTEX));
+		// smoothstep(a, b, x) is undefined for a >= b: a distance of 0 means "nowhere".
+		float reach = max(sd_shadow.y, 1e-3);
+		float in_range = 1.0 - smoothstep(0.8 * reach, reach, length(VERTEX));
 		float strength = 0.0;
 		for (int i = 0; i < SD_FIELD_LAYERS; i++) {
 			if (i < layer_count) {

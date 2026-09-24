@@ -30,6 +30,7 @@ enum SelfShadow { OFF, HARD, SOFT }
 ## own direct lighting. OFF uses Godot's built-in lighting.
 @export var self_shadow := SelfShadow.HARD
 @export_range(1, 32) var self_shadow_steps := 6
+## Self-shadowing fades out towards this distance from the camera (0 = no self-shadowing).
 @export_range(0.0, 200.0, 0.5, "suffix:m") var self_shadow_distance := 15.0
 ## Contact-hardening strength for SOFT (larger = harder).
 @export_range(1.0, 200.0, 1.0) var self_shadow_softness := 24.0

@@ -202,7 +202,9 @@ void fragment() {
 #else
 		mat3 to_view = world_to_view;
 #endif
-		float in_range = 1.0 - smoothstep(0.8 * sd_shadow.y, sd_shadow.y, view_distance);
+		// smoothstep(a, b, x) is undefined for a >= b: a distance of 0 means "nowhere".
+		float reach = max(sd_shadow.y, 1e-3);
+		float in_range = 1.0 - smoothstep(0.8 * reach, reach, view_distance);
 		sd_ss_uv = main_uv;
 		sd_ss_z = main_z;
 		sd_ss_gu = to_view * main_plane.gu;
