@@ -17,6 +17,7 @@ func _run() -> void:
 	await process_frame
 	test_variants()
 	test_height_analysis()
+	test_deformation_field()
 	test_presets()
 	test_manager()
 	await test_settings_changes()
@@ -42,6 +43,61 @@ func check(condition: bool, what: String) -> void:
 
 
 # --- Shader variants -------------------------------------------------------------------------
+
+## GADSDeformationField on the CPU: stamps, combine modes, rims, strokes, image stamps, the
+## window following its target, persistence and the shader globals.
+func test_deformation_field() -> void:
+	print("\n== deformation field")
+	var holder := Node3D.new()
+	root.add_child(holder)
+	var target := Node3D.new()
+	holder.add_child(target)
+	var f := GADSDeformationField.new()
+	f.size_m = 8.0
+	f.resolution = 256
+	f.max_depth = 0.3
+	holder.add_child(f)
+	f.follow = f.get_path_to(target)
+	f._process(0.0)
+	var t := f.get_texel_size()
+	check(f.get_window_rect().position == Vector2(-4, -4) and is_equal_approx(t, 8.0 / 256.0), "the window centres on its target")
+	var at := func(x: float, z: float) -> float: return f.get_depth(Vector3(x, 0, z))
+	f.stamp(Vector3(1, 0, 1), 0.2, 0.05)
+	check(absf(at.call(1.0, 1.0) - 0.05) < 0.002 and at.call(1.25, 1.0) == 0.0, "a round mark is its depth in the middle and 0 beyond its radius")
+	f.stamp(Vector3(1, 0, 1), 0.2, 0.05)
+	check(absf(at.call(1.0, 1.0) - 0.05) < 0.002, "DEEPEN: stepping twice does not dig deeper")
+	for i in 10:
+		f.stamp(Vector3(1, 0, 1), 0.2, 0.05, 0.0, GADSDeformationField.Combine.ADD)
+	check(is_equal_approx(at.call(1.0, 1.0), 0.3), "ADD digs deeper, down to max_depth")
+	f.stamp(Vector3(-1, 0, -1), 0.2, 0.04, 0.01)
+	check(at.call(-1.0 + 0.25, -1.0) < -0.005, "a rim pushes the ground up around a mark")
+	f.stroke(Vector3(-2, 0, 2), Vector3(2, 0, 2), 0.2, 0.03)
+	check(absf(at.call(0.0, 2.0) - 0.03) < 0.002 and at.call(0.0, 2.15) == 0.0, "a stroke presses a track along its line")
+	var foot := Image.create(8, 8, false, Image.FORMAT_RF)
+	foot.fill_rect(Rect2i(0, 0, 8, 4), Color(1, 0, 0)) # front half
+	f.stamp_image(Vector3(-2, 0, -2), foot, Vector2(0.4, 0.4), 0.0, 0.02)
+	check(absf(at.call(-2.0, -2.0 + 0.1) - 0.02) < 0.002 and at.call(-2.0, -2.0 - 0.1) == 0.0,
+			"an image stamp's top row points along its heading (+Z here)")
+	# The window moves with its target: marks inside both windows stay, marks that leave are cleared.
+	f.stamp(Vector3(3, 0, 0), 0.2, 0.05)
+	target.position.x = 2.0
+	f._process(0.0)
+	check(absf(at.call(3.0, 0.0) - 0.05) < 0.002, "a mark stays while the window moves over it")
+	target.position.x = 8.0
+	f._process(0.0)
+	target.position.x = 0.0
+	f._process(0.0)
+	check(at.call(3.0, 0.0) == 0.0 and at.call(-1.0, -1.0) == 0.0, "marks that left the window are cleared")
+	f.stamp(Vector3(0.5, 0, 0.5), 0.2, 0.07)
+	var state := f.get_state()
+	f.clear()
+	check(at.call(0.5, 0.5) == 0.0, "clear() removes every mark")
+	check(f.set_state(state) and absf(at.call(0.5, 0.5) - 0.07) < 0.002, "get_state() / set_state() bring the marks back")
+	var params: Vector4 = GADSGlobals.get_value(GADSGlobals.DEFORM_PARAMS)
+	check(params == Vector4(-4, -4, 8, 0.3) and GADSGlobals.get_value(GADSGlobals.DEFORM) == f.get_texture(),
+			"the field publishes its texture, window and depth to the shaders")
+	holder.queue_free()
+
 
 ## GADSHeightTools.analyse_detail(): how much relief each scale of a height map carries.
 func test_height_analysis() -> void:

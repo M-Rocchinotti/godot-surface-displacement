@@ -81,10 +81,11 @@ float gads_layer_h(int i, vec2 xz, float lod) {
 	return gads_remap_height(h, layer_a[i].yz);
 }
 
-// Relief above the ground (m) at world xz: sum over layers of weight * height_m * h. `lod` is
-// log2 of metres per sample; each layer adds -log2 of its texel size.
+// Relief above the ground (m) at world xz: sum over layers of weight * height_m * h, minus the
+// runtime deformation there. `lod` is log2 of metres per sample; each layer adds -log2 of its
+// texel size.
 float gads_field_relief(vec2 xz, float lod, vec4 w) {
-	float r = 0.0;
+	float r = -gads_deformation(xz);
 	for (int i = 0; i < GADS_FIELD_LAYERS; i++) {
 		if (i >= layer_count) {
 			break;
@@ -178,7 +179,10 @@ void vertex() {
 	// The field's own fade towards its edge, times the parallax distance fade the materials use,
 	// so the geometry never shows more relief than the parallax shading around it.
 	float view_distance = distance(vec3(xz.x, ground, xz.y), field_camera);
-	float y = ground + lift + gads_field_fade(xz) * gads_fade(view_distance) * gads_field_relief(xz, lod, w);
+	// The relief fades with distance; the runtime deformation does not (the ground around the field
+	// shows it at every distance).
+	float deform = gads_deformation(xz);
+	float y = ground + lift + gads_field_fade(xz) * gads_fade(view_distance) * (gads_field_relief(xz, lod, w) + deform) - deform;
 	y = mix(ground - push_down, y, displaceable);
 	VERTEX = vec3(local_xz.x, y - field_origin.y, local_xz.y);
 	f_base_normal = g.normal;
@@ -231,7 +235,9 @@ void fragment() {
 		int steps = gads_field_step_count(dot(n, v), pom_fade, w);
 		vec2 base_xz = wpos.xz - dxz_dz * z_hit;
 		float z_proxy = z_hit;
-		z_hit = gads_march(base_xz, dxz_dz, amp, 0.0, w * pom_fade, lod, steps, int(gads_pom_steps.z), xz_hit, steps_used);
+		// The slab reaches down to the deepest runtime deformation (0 without one).
+		z_hit = gads_march(base_xz, dxz_dz, amp, -max(gads_deform_params.w, 0.0), w * pom_fade, lod, steps, int(gads_pom_steps.z), xz_hit,
+				steps_used);
 		// The hit on the view ray (on sloped ground the ground height under xz_hit differs from
 		// f_ground, so it is not rebuilt from xz_hit and z_hit).
 		hit = wpos + v * ((z_hit - z_proxy) * n.y / nv);

@@ -17,6 +17,8 @@ scattered stones, cobblestones as real stones, brick walls with deep joints.
   and hard edges, rebuilt normals and tangents, LODs, optional collision). Non-destructive and
   cached; Bake / Rebuild / Clear in the inspector. The native library ships for Linux and
   Windows x86_64 (`native/`).
+- **GADSDeformationField** / **GADSDeformer3D**: footprints, tracks and craters written at runtime,
+  pressing the field's geometry and the ground's parallax down; persistent, recovering.
 - **GADSManager** node: Low / Medium / High / Ultra presets (measured on a GTX 1080 at
   1080p: 0.47 / 1.15 / 1.58 / 2.86 ms added; near-camera geometry and pebbles only at Ultra),
   feature switches, a script API for settings menus.
@@ -24,7 +26,8 @@ scattered stones, cobblestones as real stones, brick walls with deep joints.
 ## Quick start
 
 1. Enable **GADS** in Project Settings > Plugins. It registers the shader
-   globals `gads_pom_steps`, `gads_pom_range`, `gads_shadow`, `gads_debug` and `gads_dfg`; keep them.
+   globals `gads_pom_steps`, `gads_pom_range`, `gads_shadow`, `gads_debug`, `gads_dfg` and the three
+   `gads_deform*` of runtime deformation; keep them.
 2. Add a **GADSManager** node (Project > Tools > GADS: Add
    GADSManager Node) and pick a preset.
 3. **Convert Materials** turns StandardMaterial3D / ORMMaterial3D with a height map into GADS

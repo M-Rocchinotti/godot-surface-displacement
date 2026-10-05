@@ -91,8 +91,9 @@ what the engine allows:
 1. **Asset Store / Asset Library:** search for "GADS" and install it.
    **By hand:** copy `addons/gads` into your project's `addons/` folder. It is
    self-contained.
-2. Enable **GADS** in Project > Project Settings > Plugins. It registers five
-   global shader uniforms (`gads_pom_steps`, `gads_pom_range`, `gads_shadow`, `gads_debug`, `gads_dfg`) in
+2. Enable **GADS** in Project > Project Settings > Plugins. It registers eight
+   global shader uniforms (`gads_pom_steps`, `gads_pom_range`, `gads_shadow`, `gads_debug`, `gads_dfg`,
+   and `gads_deform`, `gads_deform_params`, `gads_deform_time` for runtime deformation) in
    Project Settings > Shader Globals. Keep them: every GADS shader reads them.
 3. If materials failed to compile before the plugin was enabled, reload the project once.
 
@@ -275,6 +276,35 @@ displaceable. Collision stays on the original ground.
 A child of a GADSDisplacementField3D. `density`, `radius` (8 m), `per_cell` (24), `cell_size` (1 m),
 `size_range` (1.2-3.5 cm), `valley_bias` (preference for low points of the height map) and
 `layer_density` (per field layer, default only layer 0).
+
+### GADSDeformationField (runtime deformation)
+
+Footprints, tyre tracks, ruts and craters in snow, sand and mud. A `GADSDeformationField` holds
+how far the ground is pressed down (m; negative = raised) over a square window that follows a
+node (`follow`: the player or camera; marks keep their place while inside the window). Gameplay
+writes it:
+
+```gdscript
+var snow: GADSDeformationField = $DeformationField
+snow.stamp(foot.global_position, 0.08, 0.05)                    # radius, depth (m)
+snow.stamp(impact, 1.2, 0.4, 0.15, GADSDeformationField.Combine.ADD)  # a crater with a rim
+snow.stroke(wheel_last, wheel.global_position, 0.25, 0.06)       # a tyre track
+snow.stamp_image(foot.global_position, footprint_img, Vector2(0.12, 0.3), heading, 0.04)
+var sink := snow.get_depth(foot.global_position)                 # the same depth, for scripts
+```
+
+or a `GADSDeformer3D` on each foot or wheel stamps by itself as it moves (`spacing`, round
+marks, `continuous` tracks or an `image` turned along the direction of travel; `set_contact()` or
+a `ground_height` callable say when it touches). `Combine` DEEPEN keeps the deeper of mark and
+ground (snow), ADD digs (craters), SET levels. `recovery_rate` refills marks over time (computed in
+the shaders from each mark's time, so free per frame); `get_state()` / `save_to()` keep them.
+
+What reads it: a `GADSDisplacementField3D` moves its vertices and marches the deformed relief
+(true geometry near the camera); world-planar GADS materials and the tops of triplanar ones
+press their parallax down by the depth under each pixel (UV-mapped ones as far as they face up).
+`max_depth` clamps the marks and deepens the field's slab. Size and resolution: 16 m at 512
+texels (3 cm) by default; the whole map is uploaded once per frame in which it changed
+(`resolution`^2 x 8 bytes).
 
 ### GADSMeshInstance3D (baked displacement)
 
@@ -510,7 +540,7 @@ VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json xvfb-run -a -s "-screen 0 
 | standalone addon (shipped archive) | Builds the `git archive` users download (`.gitattributes` export rules applied), checks it holds only `LICENSE` and `addons/gads` with no Markdown link to a file it does not ship, puts it alone into a fresh project, lets the plugin register its globals and checks that a POM ground and a GADSDisplacementField3D with pebbles render there. |
 | editor plugin actions | In a real editor: Add GADSManager Node, Add GADSDisplacementField3D, Convert Materials (a mesh and a CSG shape), Bake Ground, Make Selected Meshes GADSMeshInstance3D and Bake Selected GADSMeshInstance3D (the bake saved into `res://gads_baked/`), each with undo and redo; the inspector's Bake / Rebuild / Clear buttons; a second bake that replaces the first while it is in use; Validate Setup; Prepare Height Maps; a save that writes no internal nodes, keeps the materials' saved variant and the field's properties (the node's preset does not touch them in the editor) and refers to the bake files instead of embedding them. |
 | offline Blender bake (`tests/test_blender_bake.py`) | Vertex-exact displacement against the height map for the primitives and mappings, decimation and glTF export. |
-| mutation checks (`tests/run_mutations.py`) | Re-introduces one bug at a time and expects its tests to fail: height map without mipmaps, march at mip 0, wrong parallax sign, no binary refinement, world-planar rotation sign, triplanar X plane mirrored, zero-weight planes marched, no distance fade, `LIGHT_VERTEX` not written, self-shadow ray reversed, Lambert instead of Burley in `light()`, a clamped GGX term, no energy compensation, depth written by every POM variant, depth not rounded, no geomorph at ring seams, no grid snapping, vertex fetch at mip 0, relief pushed down, pebbles seeded by window slot, a bake that ignores the layers, a feature switch that adds features, an inverted remap that flattens, the field's parallax sign, the field's self-shadow direction, the field's relief measured from ground + lift, kerbs not marked (shader and CPU), ground beyond the bake displaced, local lights that never or always self-shadow, field parameters set when unchanged, a scatter that stops following its field, presets that miss CSG shapes, Custom settings not followed, the demo camera's script attached after it is ready, a baked mesh that still marches, a baked mesh lit by the full normal map on top of its slope, a bake key that ignores scale and rotation, the bake cache ignored, a collision body saved with the scene. Each prints what the failing tests measured. On the GTX 1080 the first 29 were all caught; on Mesa's lavapipe 35 of the 36 are, all but "depth not rounded": there the depth pre-pass and the colour pass agree without the rounding, so the bug it guards against does not occur. The five bake mutations added in 0.2 are all caught on lavapipe. |
+| mutation checks (`tests/run_mutations.py`) | Re-introduces one bug at a time and expects its tests to fail: height map without mipmaps, march at mip 0, wrong parallax sign, no binary refinement, world-planar rotation sign, triplanar X plane mirrored, zero-weight planes marched, no distance fade, `LIGHT_VERTEX` not written, self-shadow ray reversed, Lambert instead of Burley in `light()`, a clamped GGX term, no energy compensation, depth written by every POM variant, depth not rounded, no geomorph at ring seams, no grid snapping, vertex fetch at mip 0, relief pushed down, pebbles seeded by window slot, a bake that ignores the layers, a feature switch that adds features, an inverted remap that flattens, the field's parallax sign, the field's self-shadow direction, the field's relief measured from ground + lift, kerbs not marked (shader and CPU), ground beyond the bake displaced, local lights that never or always self-shadow, field parameters set when unchanged, a scatter that stops following its field, presets that miss CSG shapes, Custom settings not followed, the demo camera's script attached after it is ready, a baked mesh that still marches, a baked mesh lit by the full normal map on top of its slope, a bake key that ignores scale and rotation, the bake cache ignored, a collision body saved with the scene, the detail layer outside the slab, layers blended without heights, a slope band ignored. Each prints what the failing tests measured. On the GTX 1080 the first 29 were all caught; on Mesa's lavapipe 35 of the 36 are, all but "depth not rounded": there the depth pre-pass and the colour pass agree without the rounding, so the bug it guards against does not occur. The mutations added in 0.2 (baked meshes, detail and layered materials) are all caught on lavapipe. |
 
 Every suite fails on engine errors, script errors or leak reports ("RID ... was leaked",
 "ObjectDB instance ... leaked", "resources still in use") in its log. The tests compare against

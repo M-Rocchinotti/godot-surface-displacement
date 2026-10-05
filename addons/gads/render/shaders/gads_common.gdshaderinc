@@ -18,10 +18,43 @@ global uniform vec4 gads_pom_range;   // fade start (m), fade end (m), LOD bias,
 global uniform vec4 gads_shadow;      // steps, max distance (m), softness (0 = hard), strength
 global uniform vec4 gads_debug;       // view (0 = off), scale (m), reference height (m) of the field's world-height view, unused
 global uniform sampler2D gads_dfg;    // Godot's multiple-scattering term, see tools/make_dfg_lut.py
+global uniform sampler2D gads_deform;        // runtime deformation: r = depth when stamped (m, down), g = stamp time (s)
+global uniform vec4 gads_deform_params;      // window origin x, z (m), window side (m), deepest deformation (m; 0 = off)
+global uniform vec4 gads_deform_time;        // now (s), recovery (m/s), unused, unused
 
 // Distance fade of the relief (1 near, 0 beyond the fade end).
 float gads_fade(float view_distance) {
 	return 1.0 - smoothstep(gads_pom_range.x, max(gads_pom_range.y, gads_pom_range.x + 1e-3), view_distance);
+}
+
+// One texel of the deformation map, wrapped (the window is addressed toroidally: a world cell
+// keeps its texel while the window moves), with its recovery since the stamp applied.
+float gads_deform_texel(ivec2 c, int n) {
+	vec2 rg = texelFetch(gads_deform, ivec2(((c.x % n) + n) % n, ((c.y % n) + n) % n), 0).rg;
+	float recovered = max(abs(rg.r) - gads_deform_time.y * max(gads_deform_time.x - rg.g, 0.0), 0.0);
+	return sign(rg.r) * recovered;
+}
+
+// How far the ground is pressed down (m, negative = raised) at world xz by GADSDeformationField:
+// bilinear between texel centres, 0 outside the window or without a field.
+float gads_deformation(vec2 xz) {
+	if (gads_deform_params.w <= 0.0) {
+		return 0.0;
+	}
+	vec2 rel = xz - gads_deform_params.xy;
+	if (rel.x < 0.0 || rel.y < 0.0 || rel.x >= gads_deform_params.z || rel.y >= gads_deform_params.z) {
+		return 0.0;
+	}
+	int n = textureSize(gads_deform, 0).x;
+	vec2 f = xz / gads_deform_params.z * float(n) - 0.5;
+	vec2 cell = floor(f);
+	vec2 t = f - cell;
+	ivec2 c = ivec2(cell);
+	float a = gads_deform_texel(c, n);
+	float b = gads_deform_texel(c + ivec2(1, 0), n);
+	float d = gads_deform_texel(c + ivec2(0, 1), n);
+	float e = gads_deform_texel(c + ivec2(1, 1), n);
+	return mix(mix(a, b, t.x), mix(d, e, t.x), t.y);
 }
 
 // Height map value h remapped so remap.x -> 0 and remap.y -> 1, clamped; remap.x > remap.y inverts

@@ -29,6 +29,7 @@ func _run() -> void:
 	await _test("pom_matches_ray_traced_height_field", test_pom_vs_reference)
 	await _test("detail_layer_matches_height_field", test_detail_layer)
 	await _test("layered_material", test_layered)
+	await _test("runtime_deformation_presses_parallax", test_deformation)
 	await _test("inverted_height_remap", test_height_remap)
 	await _test("world_planar_on_walls_stays_finite", test_world_planar_walls)
 	await _test("pom_relief_does_not_swim", test_pom_no_swimming)
@@ -308,6 +309,38 @@ func test_layered() -> void:
 	check(top.b > 4.0 * top.r and side.r > 4.0 * side.b, "a slope-banded layer covers the box's top and leaves its sides")
 	# The quad faces up, so layer 1 (tops) covers it; layer 2 covers that where green is painted.
 	check(painted.g > 4.0 * painted.b and unpainted.b > 4.0 * unpainted.g, "a vertex-colour layer lies where the colour is")
+
+
+## Runtime deformation on parallax ground: a 3 cm mark on a flat world-planar ground (the relief
+## at the top of its slab) moves the march's hit 3 cm down at the mark's centre and not at all far
+## from it.
+func test_deformation() -> void:
+	var top := PackedFloat32Array()
+	top.resize(16 * 16)
+	top.fill(1.0)
+	var flat := Harness.field_from_data(top, 16)
+	var tex := ImageTexture.create_from_image(flat["image"])
+	var s := h.new_debug_scene()
+	var mat := GADSMaterials.create(GADSMaterials.Mapping.WORLD, {"height": tex}, {"height_m": 0.05, "height_center": 1.0}, GADSMaterials.Quality.POM)
+	h.add_quad(Vector3(-3, 0, 3), Vector3(3, 0, 3), Vector3(3, 0, -3), Vector3(-3, 0, -3),
+			[Vector2(0, 1), Vector2(1, 1), Vector2(1, 0), Vector2(0, 0)], mat)
+	var deform := GADSDeformationField.new()
+	deform.size_m = 8.0
+	deform.resolution = 256
+	s.add_child(deform)
+	deform.stamp(Vector3(0, 0, 0), 0.6, 0.03)
+	var cam := h.add_camera(Vector3(0, 3, 0.001), Vector3.ZERO, 60.0, Vector3.FORWARD)
+	debug_view(Harness.DEBUG_HIT_OFFSET)
+	await h.frames(4)
+	var img := await h.capture()
+	var centre := Harness.decode_offset(img, Vector2i(cam.unproject_position(Vector3.ZERO)), OFFSET_SCALE)
+	var outside := Harness.decode_offset(img, Vector2i(cam.unproject_position(Vector3(1.5, 0, 1.0))), OFFSET_SCALE)
+	print("  hit offset at the mark's centre %s, outside %s (mm)" % [centre * 1000.0, outside * 1000.0])
+	check(absf(centre.y + 0.03) < 0.001 and centre.length() < 0.031, "the mark presses the parallax surface down by its depth")
+	check(outside.length() < 0.0005, "away from the mark nothing moves")
+	deform.queue_free()
+	debug_view(Harness.DEBUG_OFF)
+	await h.frames(2)
 
 
 func test_pom_vs_reference() -> void:

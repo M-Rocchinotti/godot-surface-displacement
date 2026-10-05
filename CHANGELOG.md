@@ -48,6 +48,12 @@ All notable changes to this project are documented here. The format follows
   recommendations and one-click fixes, and **Optimize for Target** (Cinematic to Mobile: preset
   and geometry ranges, settings only, undoable). `GADSHeightTools.analyse_detail()` measures the
   relief a height map carries per mip band and the size beyond which a map adds nothing.
+- **Runtime deformation**: `GADSDeformationField` (a depth map over a window that follows the
+  player: `stamp()`, `stroke()`, `stamp_image()`, DEEPEN / ADD / SET, rims, recovery over time
+  computed in the shaders, `get_depth()` for scripts, state save and load) and
+  `GADSDeformer3D` (marks from feet and wheels as they move). The field's geometry and its
+  march, world-planar materials and the tops of triplanar ones are pressed down; three new
+  shader globals carry it.
 - Editor: Bake / Rebuild / Clear / Cancel with progress and statistics in the inspector (undoable);
   Project > Tools > **Make Selected Meshes GADSMeshInstance3D** and **Bake Selected
   GADSMeshInstance3D** (undoable); Validate Setup reports stale bakes, unbakeable meshes, a

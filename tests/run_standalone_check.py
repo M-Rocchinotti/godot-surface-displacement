@@ -22,7 +22,8 @@ import shipped_archive
 
 ROOT = Path(__file__).resolve().parent.parent
 DEST = ROOT / "build" / "standalone"
-GLOBALS = ["gads_pom_steps", "gads_pom_range", "gads_shadow", "gads_debug", "gads_dfg"]
+GLOBALS = ["gads_pom_steps", "gads_pom_range", "gads_shadow", "gads_debug", "gads_dfg", "gads_deform", "gads_deform_params",
+           "gads_deform_time"]
 
 PROJECT = """config_version=5
 

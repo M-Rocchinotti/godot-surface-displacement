@@ -26,6 +26,7 @@ func _initialize() -> void:
 
 func _run() -> void:
 	await _test("vertex_heights_match_the_height_map", test_vertex_heights)
+	await _test("runtime_deformation_moves_the_geometry", test_deformation)
 	await _test("baked_ground_matches_the_cpu_reference", test_baked_ground)
 	await _test("field_pom_matches_ray_traced_height_field", test_field_pom)
 	await _test("no_cracks_between_rings", test_no_cracks)
@@ -168,6 +169,69 @@ func test_vertex_heights() -> void:
 	check(per_ring[0] > 300 and per_ring[1] > 300 and per_ring[2] > 100, "vertices of the inner three rings are checked")
 	check(worst < 0.00005, "every vertex is at lift + relief of the height map at its ring's mip (within 0.05 mm)")
 	GADSGlobals.set_value(GADSGlobals.DEBUG, Vector4(0, 0.1, 0, 0))
+
+
+## Runtime deformation (GADSDeformationField): marks stamped near the camera press the field's
+## vertices down by the depth the field reports for scripts (get_depth(), the CPU twin of the
+## shaders' gads_deformation()), unfaded; marks recover over time.
+func test_deformation() -> void:
+	var tile := 1.28
+	var amp := 0.04
+	var field := Harness.make_wave_field(256)
+	h.new_debug_scene()
+	var tracked := add_tracked_camera(Vector3(0.37, 1.7, -0.23))
+	var f := add_field(field, tile, amp, tracked)
+	var deform := GADSDeformationField.new()
+	deform.size_m = 4.0
+	deform.resolution = 256
+	deform.max_depth = 0.2
+	deform.follow = deform.get_path_to(tracked) if deform.is_inside_tree() else NodePath()
+	h.scene.add_child(deform)
+	deform.follow = deform.get_path_to(tracked)
+	deform.stamp(Vector3(0.2, 0, -0.1), 0.25, 0.06)
+	deform.stamp(Vector3(0.7, 0, -0.5), 0.15, 0.03, 0.01)
+	deform.stroke(Vector3(-0.4, 0, 0.2), Vector3(0.6, 0, 0.3), 0.12, 0.05)
+	await h.frames(3)
+	var snap := pow(2.0, LEVELS) * S0
+	var origin := Vector2(floorf(0.37 / snap + 0.5) * snap, floorf(-0.23 / snap + 0.5) * snap)
+	var centre := origin - Vector2(0.5, 0.5) * S0
+	add_top_camera(centre, S0)
+	var scale := 0.05
+	GADSGlobals.set_value(GADSGlobals.DEBUG, Vector4(Harness.DEBUG_WORLD_HEIGHT, scale, 0.0, 0.0))
+	await h.frames(5)
+	var img := await h.capture()
+	var mip := Harness.field_mip(field, 2)
+	var errors := []
+	var pressed := 0
+	for py in range(0, SIZE.y, 3):
+		for px in range(0, SIZE.x, 3):
+			var xz := pixel_to_xz(Vector2i(px, py), centre, S0)
+			var lat := ((xz - origin) / S0).round()
+			if maxf(absf(lat.x), absf(lat.y)) >= N / 2.0 - 1.0:
+				continue # inner ring only: no morph
+			if xz.distance_to(Vector2(tracked.position.x, tracked.position.z)) >= f.get_morph_range(0).x:
+				continue
+			var depth := deform.get_depth(Vector3(xz.x, 0, xz.y))
+			pressed += 1 if depth > 0.001 else 0
+			var want := f.lift + amp * Harness.sample_field(mip, xz / tile) - depth
+			errors.append(absf(img.get_pixel(px, py).r * scale - want))
+	var worst := percentile(errors, 1.0)
+	print("  %d vertices, %d of them pressed down; largest error %.4f mm" % [errors.size(), pressed, worst * 1000.0])
+	check(pressed > 50, "marks cover vertices")
+	check(worst < 0.0001, "every vertex is at lift + relief - deformation (within 0.1 mm)")
+	# Recovery: after 1 s at 2 cm/s a fresh 6 cm mark is 4 cm deep (recovery counts from each mark's
+	# stamp time, so a rate set later applies to the time already passed too).
+	deform.stamp(Vector3(0.2, 0, -0.1), 0.25, 0.06, 0.0, GADSDeformationField.Combine.SET)
+	deform.recovery_rate = 0.02
+	var before := deform.get_depth(Vector3(0.2, 0, -0.1))
+	deform._process(1.0)
+	var after := deform.get_depth(Vector3(0.2, 0, -0.1))
+	print("  mark centre %.4f m, after 1 s of recovery %.4f m" % [before, after])
+	check(absf(before - 0.06) < 0.002 and absf(after - (before - 0.02)) < 1e-4, "marks recover at recovery_rate")
+	deform.queue_free()
+	GADSGlobals.set_value(GADSGlobals.DEBUG, Vector4(0, 0.1, 0, 0))
+	await h.frames(2)
+	check(float((GADSGlobals.get_value(GADSGlobals.DEFORM_PARAMS) as Vector4).w) == 0.0, "a removed field turns the deformation off in the shaders")
 
 
 ## The field over a baked ground with a gentle slope, a 6 cm kerb, a cell without ground and

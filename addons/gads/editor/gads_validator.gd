@@ -37,6 +37,9 @@ static func validate(root: Node) -> Array:
 			issues.append_array(_check_mesh_attributes(node as MeshInstance3D))
 	for node in root.find_children("*", "GADSDisplacementField3D", true, false):
 		issues.append_array(_check_field(node as GADSDisplacementField3D))
+	var deformations := root.find_children("*", "GADSDeformationField", true, false)
+	if deformations.size() > 1:
+		issues.append(_issue("warning", "%d GADSDeformationField nodes: only one drives the shaders at a time (the last to enter the tree); use one field that follows the player." % deformations.size()))
 	var baked_meshes := root.find_children("*", "GADSMeshInstance3D", true, false)
 	if root is GADSMeshInstance3D:
 		baked_meshes.append(root)

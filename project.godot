@@ -48,3 +48,15 @@ gads_dfg={
 "type": "sampler2D",
 "value": "res://addons/gads/render/textures/gads_dfg_lut.exr"
 }
+gads_deform={
+"type": "sampler2D",
+"value": ""
+}
+gads_deform_params={
+"type": "vec4",
+"value": Vector4(0, 0, 1, 0)
+}
+gads_deform_time={
+"type": "vec4",
+"value": Vector4(0, 0, 0, 0)
+}

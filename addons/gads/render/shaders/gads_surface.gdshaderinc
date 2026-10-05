@@ -24,8 +24,11 @@ void vertex() {
 
 // Marches one projection. Frame space: view space for UV mapping, world space otherwise.
 // Returns the hit's offset from the rasterized point (frame space) and writes its uv and height.
-vec3 gads_resolve_plane(GADSPlane p, vec3 n, vec3 v, GADS_RELIEF_ARG arg, float fade, float lod, out vec2 uv_hit,
-		out float z_hit, inout float steps_used) {
+// `deform`: how far the relief is pressed down here along its axis (runtime deformation, constant
+// over the pixel): marching relief - deform is marching the relief from a start shifted by
+// -duv_dz * deform; z_hit is the deformed height.
+vec3 gads_resolve_plane(GADSPlane p, vec3 n, vec3 v, GADS_RELIEF_ARG arg, float fade, float lod, float deform,
+		out vec2 uv_hit, out float z_hit, inout float steps_used) {
 	uv_hit = p.uv;
 	z_hit = 0.0;
 #ifdef GADS_POM
@@ -34,7 +37,14 @@ vec3 gads_resolve_plane(GADSPlane p, vec3 n, vec3 v, GADS_RELIEF_ARG arg, float 
 		float z_top = gads_slab_top(arg);
 		float z_bot = gads_slab_bottom(arg);
 		int steps = gads_step_count(dot(n, v), fade);
-		z_hit = gads_march(p.uv, duv_dz, z_top, z_bot, arg, lod, steps, int(gads_pom_steps.z), uv_hit, steps_used);
+		vec2 uv0 = p.uv;
+		if (deform != 0.0) {
+			uv0 -= duv_dz * deform;
+		}
+		z_hit = gads_march(uv0, duv_dz, z_top, z_bot, arg, lod, steps, int(gads_pom_steps.z), uv_hit, steps_used);
+		if (deform != 0.0) {
+			z_hit -= deform;
+		}
 	}
 #endif
 	// Moving z along the relief axis moves the ray point by z * (N.A) / (N.V) towards the camera.
@@ -68,6 +78,7 @@ void fragment() {
 	GADSPlane main_plane;
 	vec2 main_uv = vec2(0.0);
 	float main_z = 0.0;
+	float main_deform = 0.0; // runtime deformation at the main plane's hit
 	float main_lod = 0.0;
 	vec3 main_n = vec3(0.0, 1.0, 0.0);
 
@@ -94,7 +105,9 @@ void fragment() {
 	vec2 uv_hit;
 	float z_hit;
 	GADS_RELIEF_ARG arg_uv = inv_det != 0.0 ? arg : arg * 0.0;
-	offset_view = gads_resolve_plane(p, n, v, arg_uv, fade, lod, uv_hit, z_hit, steps_used);
+	// Runtime deformation presses along world up, as much as the surface faces up.
+	float deform = gads_deformation(gads_world_pos.xz) * max(dot(n, mat3(VIEW_MATRIX) * vec3(0.0, 1.0, 0.0)), 0.0);
+	offset_view = gads_resolve_plane(p, n, v, arg_uv, fade, lod, deform, uv_hit, z_hit, steps_used);
 	planes_marched = steps_used > 0.0 ? 1.0 : 0.0;
 	vec3 nm;
 	gads_sample_surface(uv_hit, p.ddx, p.ddy, lod, sample_arg, albedo_sum, orm_sum, nm);
@@ -108,6 +121,7 @@ void fragment() {
 	main_plane = p;
 	main_uv = uv_hit;
 	main_z = z_hit;
+	main_deform = deform;
 	main_lod = lod;
 	main_n = n;
 #endif
@@ -125,7 +139,8 @@ void fragment() {
 	float lod = gads_march_lod(p);
 	vec2 uv_hit;
 	float z_hit;
-	vec3 offset_world = gads_resolve_plane(p, n, v, arg, fade, lod, uv_hit, z_hit, steps_used);
+	float deform = gads_deformation(gads_world_pos.xz);
+	vec3 offset_world = gads_resolve_plane(p, n, v, arg, fade, lod, deform, uv_hit, z_hit, steps_used);
 	planes_marched = steps_used > 0.0 ? 1.0 : 0.0;
 	offset_view = world_to_view * offset_world;
 	vec3 nm;
@@ -139,6 +154,7 @@ void fragment() {
 	main_plane = p;
 	main_uv = uv_hit;
 	main_z = z_hit;
+	main_deform = deform;
 	main_lod = lod;
 	main_n = n;
 #endif
@@ -166,7 +182,9 @@ void fragment() {
 		vec2 uv_hit;
 		float z_hit;
 		float before = steps_used;
-		offset_world += wa * gads_resolve_plane(p, n, v, arg, fade, lod, uv_hit, z_hit, steps_used);
+		// Only the top plane is pressed down by runtime deformation.
+		float deform = axis_index == 1 && p.axis.y > 0.0 ? gads_deformation(gads_world_pos.xz) : 0.0;
+		offset_world += wa * gads_resolve_plane(p, n, v, arg, fade, lod, deform, uv_hit, z_hit, steps_used);
 		planes_marched += steps_used > before ? 1.0 : 0.0;
 		vec3 albedo_p;
 		vec3 orm_p;
@@ -184,6 +202,7 @@ void fragment() {
 			main_plane = p;
 			main_uv = uv_hit;
 			main_z = z_hit;
+			main_deform = deform;
 			main_lod = lod;
 		}
 	}
@@ -231,7 +250,8 @@ void fragment() {
 #endif
 		float in_range = 1.0 - smoothstep(0.8 * gads_shadow.y, gads_shadow.y, view_distance);
 		gads_ss_uv = main_uv;
-		gads_ss_z = main_z;
+		// The self-shadow marches the undeformed relief, so it starts from the undeformed height.
+		gads_ss_z = main_z + main_deform;
 		gads_ss_gu = to_view * main_plane.gu;
 		gads_ss_gv = to_view * main_plane.gv;
 		gads_ss_n = normalize(to_view * main_n);
