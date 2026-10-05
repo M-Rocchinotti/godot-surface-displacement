@@ -215,6 +215,9 @@ func test_baked_ground() -> void:
 	var push: float = f.get_material().get_shader_parameter("push_down")
 	var fade := f.get_fade_range()
 	var errors := []
+	# The error less one half-float step of the read-back value (0.2 mm at 1-2): a renderer may
+	# round its half-float output towards zero (Mesa's lavapipe does), not to the nearest step.
+	var beyond_step := []
 	var kinds := {"displaced": 0, "dived": 0, "blended": 0}
 	# Every pixel (one per innermost vertex): the partly displaceable vertices lie in bands a
 	# fraction of a texel wide.
@@ -239,8 +242,10 @@ func test_baked_ground() -> void:
 			var displaceable := smoothstep(0.35, 0.65, w.r)
 			var ground: float = s["height"]
 			var want := lerpf(ground - push, ground + f.lift + amp * Harness.sample_field(mips[k], xz / tile), displaceable)
-			var got := reference + img.get_pixel(px, py).r * scale
+			var raw := img.get_pixel(px, py).r
+			var got := reference + raw * scale
 			errors.append(absf(got - want))
+			beyond_step.append(absf(got - want) - pow(2.0, floorf(log(raw) / log(2.0)) - 10.0) * scale)
 			if displaceable >= 1.0:
 				kinds["displaced"] += 1
 			elif displaceable <= 0.0:
@@ -248,9 +253,11 @@ func test_baked_ground() -> void:
 			else:
 				kinds["blended"] += 1
 	var worst := percentile(errors, 1.0)
-	print("  %d vertices checked %s, largest error %.4f mm" % [errors.size(), kinds, worst * 1000.0])
+	print("  %d vertices checked %s, largest error %.4f mm, %.4f mm beyond the read-back's half-float step" % [
+			errors.size(), kinds, worst * 1000.0, percentile(beyond_step, 1.0) * 1000.0])
 	check(kinds["displaced"] > 1000 and kinds["dived"] > 1000 and kinds["blended"] > 2, "displaced, dived and partly displaced vertices are all checked")
-	check(worst < 0.0003, "every vertex is where the CPU reference of the baked ground puts it (within 0.3 mm)")
+	check(percentile(beyond_step, 1.0) < 0.0003,
+			"every vertex is where the CPU reference of the baked ground puts it (within 0.3 mm plus one half-float step of the read-back)")
 	SDGlobals.set_value(SDGlobals.DEBUG, Vector4(0, 0.1, 0, 0))
 
 

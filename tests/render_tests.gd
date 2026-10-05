@@ -659,11 +659,19 @@ func test_self_shadow() -> void:
 	await h.frames(2)
 	var off := await h.capture()
 	var min_off := 1.0
+	var on_quad := 0
 	for py in range(4, SIZE.y, 10):
 		for px in range(4, SIZE.x, 10):
-			if Harness.luminance(off.get_pixel(px, py)) > 0.0:
-				min_off = minf(min_off, off.get_pixel(px, py).r)
-	check(min_off > 0.999, "strength 0 switches it off (factor 1 everywhere)")
+			# Pixels whose ray meets the quad well inside its edges: next to the edge, Mesa's lavapipe
+			# leaves a few millionths in a background pixel.
+			var o := cam.project_ray_origin(Vector2(px, py) + Vector2(0.5, 0.5))
+			var d := cam.project_ray_normal(Vector2(px, py) + Vector2(0.5, 0.5))
+			var p := o + d * (-o.y / d.y) if d.y < 0.0 else Vector3.INF
+			if absf(p.x) > 1.9 or absf(p.z) > 1.9:
+				continue
+			on_quad += 1
+			min_off = minf(min_off, off.get_pixel(px, py).r)
+	check(on_quad > 3000 and min_off > 0.999, "strength 0 switches it off (factor 1 everywhere)")
 	debug_view(Harness.DEBUG_OFF)
 
 
