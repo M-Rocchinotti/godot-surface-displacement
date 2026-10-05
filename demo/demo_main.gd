@@ -8,7 +8,7 @@ const Builder := preload("res://demo/scenes/demo_builder.gd")
 const FlyCamera := preload("res://demo/fly_camera.gd")
 const PRESETS: Array[String] = ["Off", "Low", "Medium", "High", "Ultra"]
 const COMPARE: Array[String] = ["Flat (normal map)", "POM", "POM + geometry"]
-const DEBUG_VIEWS := [["Final", 0], ["Hit offset", 1], ["Cost (steps)", 2], ["Relief height", 3], ["Normals", 4], ["Self-shadow", 5], ["Field levels", 8]]
+const DEBUG_VIEWS := [["Final", 0], ["Hit offset", 1], ["Cost (steps)", 2], ["Relief height", 3], ["Normals", 4], ["Self-shadow", 5], ["Field levels", 8], ["Tessellation", 9]]
 const PANEL_WIDTH := 300.0
 
 var scene: Node3D

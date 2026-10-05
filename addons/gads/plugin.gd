@@ -2,16 +2,24 @@
 extends EditorPlugin
 ## GADS editor integration: registers the shader globals the materials read and
 ## adds Project > Tools entries: add the GADSManager node, add a GADSDisplacementField3D for
-## the selected ground, convert materials (undoable), bake the ground of the selected field,
-## prepare height maps selected in the FileSystem dock, and validate the setup.
+## the selected ground, convert materials (undoable), turn selected meshes into
+## GADSMeshInstance3D and bake them (undoable), bake the ground of the selected field, prepare
+## height maps selected in the FileSystem dock, and validate the setup. GADSMeshInstance3D gets
+## Bake / Rebuild / Clear buttons in the inspector.
 
 const MENU_ADD_NODE := "GADS: Add GADSManager Node"
 const MENU_ADD_FIELD := "GADS: Add GADSDisplacementField3D for Selected Ground"
 const MENU_CONVERT := "GADS: Convert Materials (Selected)"
 const MENU_BAKE := "GADS: Bake Ground of Selected Field"
+const MENU_MESH_CONVERT := "GADS: Make Selected Meshes GADSMeshInstance3D"
+const MENU_MESH_BAKE := "GADS: Bake Selected GADSMeshInstance3D"
 const MENU_HEIGHT := "GADS: Prepare Height Maps (FileSystem Selection)"
 const MENU_VALIDATE := "GADS: Validate Setup"
-const MENUS: Array[String] = [MENU_ADD_NODE, MENU_ADD_FIELD, MENU_CONVERT, MENU_BAKE, MENU_HEIGHT, MENU_VALIDATE]
+const MENUS: Array[String] = [MENU_ADD_NODE, MENU_ADD_FIELD, MENU_CONVERT, MENU_MESH_CONVERT, MENU_MESH_BAKE, MENU_BAKE,
+	MENU_HEIGHT, MENU_VALIDATE]
+const MeshInspector := preload("res://addons/gads/editor/gads_mesh_inspector.gd")
+
+var _mesh_inspector: EditorInspectorPlugin
 
 
 func _enable_plugin() -> void:
@@ -23,14 +31,21 @@ func _enter_tree() -> void:
 	add_tool_menu_item(MENU_ADD_NODE, add_manager_node)
 	add_tool_menu_item(MENU_ADD_FIELD, add_field_for_selection)
 	add_tool_menu_item(MENU_CONVERT, convert_selection)
+	add_tool_menu_item(MENU_MESH_CONVERT, convert_selected_meshes)
+	add_tool_menu_item(MENU_MESH_BAKE, bake_selected_meshes)
 	add_tool_menu_item(MENU_BAKE, bake_selected_field)
 	add_tool_menu_item(MENU_HEIGHT, prepare_selected_height_maps)
 	add_tool_menu_item(MENU_VALIDATE, validate)
+	_mesh_inspector = MeshInspector.new()
+	_mesh_inspector.undo_redo = get_undo_redo()
+	add_inspector_plugin(_mesh_inspector)
 
 
 func _exit_tree() -> void:
 	for item in MENUS:
 		remove_tool_menu_item(item)
+	remove_inspector_plugin(_mesh_inspector)
+	_mesh_inspector = null
 
 
 func _add_node_undoable(parent: Node, node: Node, action: String) -> void:
@@ -131,6 +146,62 @@ func convert_selection() -> void:
 		ur.add_do_reference(a["to"])
 	ur.commit_action()
 	print("GADS: converted %d material(s) on %d surface(s); check height_m of each." % [planned["converted"], assignments.size()])
+
+
+## The selected MeshInstance3D nodes (and those under them) that are not GADSMeshInstance3D yet,
+## or that are when [param baked_type] is true.
+func _selected_meshes(baked_type: bool) -> Array[MeshInstance3D]:
+	var out: Array[MeshInstance3D] = []
+	for node in EditorInterface.get_selection().get_selected_nodes():
+		var candidates: Array = [node] + node.find_children("*", "MeshInstance3D", true, false)
+		for c in candidates:
+			if c is MeshInstance3D and (c is GADSMeshInstance3D) == baked_type and not out.has(c):
+				out.append(c)
+	return out
+
+
+## Gives the selected MeshInstance3D nodes the GADSMeshInstance3D script (their mesh becomes the
+## source mesh), as one undoable action. Nodes with a script of their own are left alone.
+func convert_selected_meshes() -> void:
+	var meshes := _selected_meshes(false).filter(func(mi: MeshInstance3D) -> bool: return mi.get_script() == null and mi.mesh != null)
+	if meshes.is_empty():
+		push_warning("GADS: select MeshInstance3D nodes that have a mesh and no script.")
+		return
+	var script: Script = load("res://addons/gads/geometry/gads_mesh_instance_3d.gd")
+	var ur := get_undo_redo()
+	ur.create_action("Make meshes GADSMeshInstance3D")
+	for mi: MeshInstance3D in meshes:
+		ur.add_do_method(mi, "set_script", script)
+		ur.add_do_property(mi, "source_mesh", mi.mesh)
+		ur.add_undo_method(mi, "set_script", null)
+		ur.add_undo_property(mi, "mesh", mi.mesh)
+	ur.commit_action()
+	print("GADS: %d mesh(es) are GADSMeshInstance3D now; bake them from the inspector or Project > Tools." % meshes.size())
+
+
+## Bakes the selected GADSMeshInstance3D nodes one after the other (blocking), as one undoable
+## action.
+func bake_selected_meshes() -> void:
+	var meshes := _selected_meshes(true)
+	if meshes.is_empty():
+		push_warning("GADS: select GADSMeshInstance3D nodes.")
+		return
+	var before := {}
+	var after := {}
+	for mi: GADSMeshInstance3D in meshes:
+		var state := mi.get_bake_state()
+		if mi.bake() == OK:
+			before[mi] = state
+			after[mi] = mi.get_bake_state()
+			print("GADS: baked %s: %s" % [mi.name, mi.get_bake_summary().replace("\n", " ")])
+	if after.is_empty():
+		return
+	var ur := get_undo_redo()
+	ur.create_action("Bake GADS meshes")
+	for mi: GADSMeshInstance3D in after:
+		ur.add_do_method(mi, "set_bake_state", after[mi])
+		ur.add_undo_method(mi, "set_bake_state", before[mi])
+	ur.commit_action(false)
 
 
 ## Bakes the selected field's ground and saves it next to the scene as <scene>_ground.res.

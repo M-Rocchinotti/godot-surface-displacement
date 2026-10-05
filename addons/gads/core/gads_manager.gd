@@ -20,7 +20,7 @@ extends Node
 signal settings_changed
 
 enum Feature { POM, SELF_SHADOW, NEAR_FIELD, SCATTER }
-enum DebugView { OFF = 0, HIT_OFFSET = 1, COST = 2, RELIEF = 3, NORMALS = 4, SELF_SHADOW = 5, FIELD_LEVELS = 8 }
+enum DebugView { OFF = 0, HIT_OFFSET = 1, COST = 2, RELIEF = 3, NORMALS = 4, SELF_SHADOW = 5, FIELD_LEVELS = 8, TESSELLATION = 9 }
 
 ## Off: every GADS material draws as plain normal mapping, no field, no scatter.
 @export var enabled := true:

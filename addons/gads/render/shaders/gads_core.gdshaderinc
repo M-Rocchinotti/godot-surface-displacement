@@ -58,8 +58,16 @@ uniform vec2 planar_offset_m = vec2(0.0);
 uniform float triplanar_sharpness : hint_range(1.0, 16.0) = 4.0;
 group_uniforms;
 
-varying vec3 gads_world_pos;
-varying vec3 gads_world_normal;
+// 1 on a GADSMeshInstance3D that draws its baked mesh: the geometry already carries the relief,
+// so nothing is marched, textures are mapped where each vertex was before it moved, and the
+// normal map adds only the detail finer than the triangles (gads_detail_normal). The bake stores
+// CUSTOM0 = rest position, mip level of the vertex's footprint; CUSTOM1 = rest normal, level / 32.
+instance uniform float gads_baked = 0.0;
+
+varying vec3 gads_world_pos;      // where textures are mapped (a baked mesh: the rest position)
+varying vec3 gads_world_normal;   // the normal projections use (a baked mesh: the rest normal)
+varying vec3 gads_geom_normal;    // the surface's own normal, the base of normal mapping
+varying vec2 gads_tess;           // baked vertex: refinement level, footprint mip (height-map texels)
 
 #ifdef GADS_SELF_SHADOW
 // Handed from fragment() to light(), view space.
@@ -106,6 +114,28 @@ float gads_march_lod(GADSPlane p) {
 vec2 gads_duv_dz(GADSPlane p, vec3 n, vec3 v) {
 	float nv = max(dot(n, v), GADS_MIN_NDOTV);
 	return vec2(dot(p.gu, v), dot(p.gv, v)) * (dot(n, p.axis) / nv);
+}
+
+// A baked mesh's geometry carries the relief down to the mip level of its triangles' footprint;
+// the normal map supplies what lies below. Returns the part of the normal-map sample `fine` (at
+// p's uv derivatives) that the geometry does not carry: `fine` seen from the frame of the normal
+// map averaged over the footprint (Reoriented Normal Mapping run backwards, Barre-Brisebois and
+// Hill 2012), packed like a sample. Where the triangles are smaller than a pixel both samples are
+// the same and the detail is flat: the geometry's own normal shades.
+vec3 gads_detail_normal(vec3 fine, GADSPlane p, vec2 uv) {
+	vec2 size = vec2(textureSize(normal_texture, 0));
+	vec2 dx = p.ddx * size;
+	vec2 dy = p.ddy * size;
+	float pixel_lod = 0.5 * log2(max(max(dot(dx, dx), dot(dy, dy)), 1e-12));
+	float footprint_lod = gads_tess.y + log2(size.x / float(textureSize(height_texture, 0).x));
+	vec3 c = textureLod(normal_texture, uv, max(max(footprint_lod, pixel_lod), 0.0)).rgb * 2.0 - 1.0;
+	c.z = sqrt(max(0.0, 1.0 - dot(c.xy, c.xy)));
+	vec3 f = fine * 2.0 - 1.0;
+	f.z = sqrt(max(0.0, 1.0 - dot(f.xy, f.xy)));
+	// The rotation that takes c to +Z is the one that takes +Z to (-c.x, -c.y, c.z).
+	vec3 t = vec3(-c.xy, c.z + 1.0);
+	vec3 u = vec3(-f.xy, f.z);
+	return normalize(t * dot(t, u) / t.z - u) * 0.5 + 0.5;
 }
 
 #define GADS_RELIEF(coord, lod, amp) gads_relief(coord, lod, amp)

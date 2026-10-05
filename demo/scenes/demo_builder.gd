@@ -179,6 +179,22 @@ static func boulder(material: Material, pos: Vector3, radius: float, seed_value:
 	return mi
 
 
+## [param mi] as a GADSMeshInstance3D that bakes its relief in the background once it is in the
+## tree (a bake made while the game runs stays in memory). Without the native library it keeps
+## drawing the parallax version.
+static func baked(mi: MeshInstance3D, node_name: String) -> GADSMeshInstance3D:
+	var node := GADSMeshInstance3D.new()
+	node.name = node_name
+	node.source_mesh = mi.mesh
+	node.material_override = mi.material_override
+	node.transform = mi.transform
+	node.quality = GADSMeshInstance3D.Quality.LOW
+	mi.free()
+	if GADSMeshBaker.is_available():
+		node.ready.connect(node.bake_async.bind(false), CONNECT_ONE_SHOT)
+	return node
+
+
 ## A quad wall facing +Z (before [param basis]) with UVs in texture repeats of [param tile_m].
 static func wall_quad(size: Vector2, tile_m: float) -> ArrayMesh:
 	var st := SurfaceTool.new()
@@ -326,6 +342,8 @@ static func build_rocky_ground() -> Node3D:
 	_field(root, [rocks], false)
 	var boulder_mat := GADSMaterials.from_texture_set(TEX + "rocks_ground_05", GADSMaterials.Mapping.TRIPLANAR, {"height_m": 0.08, "height_center": 1.0, "texture_size_m": Vector2(1.5, 1.5)})
 	root.add_child(boulder(boulder_mat, Vector3(2.5, rocky_height(2.5, -4.0) + 0.2, -4.0), 0.8, 7))
+	# The same boulder with its relief baked into real geometry: outline, shadows and contact.
+	root.add_child(baked(boulder(boulder_mat, Vector3(4.6, rocky_height(4.6, -3.2) + 0.2, -3.2), 0.8, 7), "BakedBoulder"))
 	root.add_child(hero_prop("res://demo/models/hero_rubble_pile.glb", "rubble", Vector3(-2.0, rocky_height(-2.0, -2.0), -2.0), 0.3))
 	_views(root, {
 		"Eye level": [Vector3(0.0, rocky_height(0.0, 4.0) + 1.7, 4.0), Vector3(0.0, rocky_height(0.0, -3.0), -3.0)],

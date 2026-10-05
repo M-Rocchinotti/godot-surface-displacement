@@ -37,6 +37,11 @@ static func validate(root: Node) -> Array:
 			issues.append_array(_check_mesh_attributes(node as MeshInstance3D))
 	for node in root.find_children("*", "GADSDisplacementField3D", true, false):
 		issues.append_array(_check_field(node as GADSDisplacementField3D))
+	var baked_meshes := root.find_children("*", "GADSMeshInstance3D", true, false)
+	if root is GADSMeshInstance3D:
+		baked_meshes.append(root)
+	for node in baked_meshes:
+		issues.append_array(_check_baked_mesh(node as GADSMeshInstance3D))
 	for node in root.find_children("*", "GADSPebbleScatter3D", true, false):
 		if not node.get_parent() is GADSDisplacementField3D:
 			issues.append(_issue("error", "GADSPebbleScatter3D %s draws nothing: it must be a child of a GADSDisplacementField3D." % node.name))
@@ -154,4 +159,21 @@ static func _check_field(field: GADSDisplacementField3D) -> Array:
 		var outer := field.resolution / 2.0 * spacing
 		if k > 0 and r.x < sqrt(2.0) * (outer * 0.5 + field.get_snap() * 0.5) - 1e-4:
 			issues.append(_issue("warning", "%s: ring %d is too small for its snap step; its morph is abrupt. Raise the resolution." % [label, k]))
+	return issues
+
+
+static func _check_baked_mesh(mi: GADSMeshInstance3D) -> Array:
+	var issues := []
+	if not GADSMeshBaker.is_available():
+		issues.append(_issue("warning" if mi.baked else "error", "GADSMeshInstance3D %s: the GADS native library is not loaded on this platform, so it cannot be baked." % mi.name))
+	var problem := GADSMeshBaker.check_mesh(mi.source_mesh)
+	if not problem.is_empty():
+		issues.append(_issue("error", "GADSMeshInstance3D %s cannot be baked: %s." % [mi.name, problem]))
+	elif not mi.baked:
+		issues.append(_issue("info", "GADSMeshInstance3D %s is not baked: it draws the source mesh with parallax." % mi.name))
+	elif mi.is_bake_stale():
+		issues.append(_issue("warning", "GADSMeshInstance3D %s: the source, its materials, the bake settings or (world and triplanar mappings) its placement changed since the bake. Bake it again." % mi.name))
+	if mi.baked and mi.bake_stats.get("budget_reached", false):
+		issues.append(_issue("info", "GADSMeshInstance3D %s: the triangle budget stopped the bake %.2f mm from the relief (tolerance %.2f mm); raise the quality to follow it closer." % [
+			mi.name, float(mi.bake_stats.get("max_error_left", 0.0)) * 1000.0, float(mi.bake_stats.get("error_m", 0.0)) * 1000.0]))
 	return issues

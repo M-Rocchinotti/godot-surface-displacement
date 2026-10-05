@@ -14,8 +14,11 @@
 #endif
 
 void vertex() {
-	gads_world_pos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
-	gads_world_normal = normalize(MODEL_NORMAL_MATRIX * NORMAL);
+	bool baked = gads_baked > 0.5;
+	gads_geom_normal = normalize(MODEL_NORMAL_MATRIX * NORMAL);
+	gads_world_pos = (MODEL_MATRIX * vec4(baked ? CUSTOM0.xyz : VERTEX, 1.0)).xyz;
+	gads_world_normal = baked ? normalize(MODEL_NORMAL_MATRIX * CUSTOM1.xyz) : gads_geom_normal;
+	gads_tess = baked ? vec2(CUSTOM1.w * 32.0, CUSTOM0.w) : vec2(0.0);
 #ifdef GADS_DEPTH_WRITE
 	// Writing VERTEX (even unchanged) stops the engine from drawing this material's depth
 	// pre-pass with its shared flat-depth material. The pre-pass must run this fragment() so it
@@ -48,7 +51,8 @@ void fragment() {
 	mat3 view_to_world = mat3(INV_VIEW_MATRIX);
 	mat3 world_to_view = mat3(VIEW_MATRIX);
 	float fade = gads_fade(view_distance);
-	float amp = height_m * fade;
+	// A baked mesh's geometry already carries the relief.
+	float amp = gads_baked > 0.5 ? 0.0 : height_m * fade;
 	float steps_used = 0.0;
 	float planes_marched = 0.0;
 	vec3 offset_view = vec3(0.0);
@@ -89,7 +93,11 @@ void fragment() {
 	planes_marched = steps_used > 0.0 ? 1.0 : 0.0;
 	albedo_sum = GADS_SAMPLE(albedo_texture, uv_hit, p.ddx, p.ddy).rgb;
 	orm_sum = GADS_SAMPLE(orm_texture, uv_hit, p.ddx, p.ddy).rgb;
-	NORMAL_MAP = GADS_SAMPLE(normal_texture, uv_hit, p.ddx, p.ddy).rgb;
+	vec3 nm = GADS_SAMPLE(normal_texture, uv_hit, p.ddx, p.ddy).rgb;
+	if (gads_baked > 0.5) {
+		nm = gads_detail_normal(nm, p, uv_hit);
+	}
+	NORMAL_MAP = nm;
 	NORMAL_MAP_DEPTH = normal_strength;
 	normal_world = view_to_world * n;
 	main_plane = p;
@@ -118,7 +126,10 @@ void fragment() {
 	albedo_sum = GADS_SAMPLE(albedo_texture, uv_hit, p.ddx, p.ddy).rgb;
 	orm_sum = GADS_SAMPLE(orm_texture, uv_hit, p.ddx, p.ddy).rgb;
 	vec3 nm = GADS_SAMPLE(normal_texture, uv_hit, p.ddx, p.ddy).rgb;
-	normal_world = gads_apply_normal_map(nm, normalize(p.gu), -normalize(p.gv), n, normal_strength);
+	if (gads_baked > 0.5) {
+		nm = gads_detail_normal(nm, p, uv_hit);
+	}
+	normal_world = gads_apply_normal_map(nm, normalize(p.gu), -normalize(p.gv), normalize(gads_geom_normal), normal_strength);
 	NORMAL = normalize(world_to_view * normal_world);
 	main_plane = p;
 	main_uv = uv_hit;
@@ -155,7 +166,10 @@ void fragment() {
 		albedo_sum += wa * GADS_SAMPLE(albedo_texture, uv_hit, p.ddx, p.ddy).rgb;
 		orm_sum += wa * GADS_SAMPLE(orm_texture, uv_hit, p.ddx, p.ddy).rgb;
 		vec3 nm = GADS_SAMPLE(normal_texture, uv_hit, p.ddx, p.ddy).rgb;
-		nsum += wa * gads_apply_normal_map(nm, normalize(p.gu), -normalize(p.gv), n, normal_strength);
+		if (gads_baked > 0.5) {
+			nm = gads_detail_normal(nm, p, uv_hit);
+		}
+		nsum += wa * gads_apply_normal_map(nm, normalize(p.gu), -normalize(p.gv), normalize(gads_geom_normal), normal_strength);
 		if (wa > main_w) {
 			main_w = wa;
 			main_plane = p;
@@ -215,7 +229,8 @@ void fragment() {
 
 	// Debug views (gads_debug.x): 1 = hit offset (world, 0.5 + offset / (2 * gads_debug.y)),
 	// 2 = cost (steps / 64, planes marched / 3, LOD / 8), 3 = relief height in the slab,
-	// 4 = world normal, 5 = self-shadow factor of directional lights (written by light()).
+	// 4 = world normal, 5 = self-shadow factor of directional lights (written by light()),
+	// 9 = tessellation of a baked mesh (refinement level: blue 0, green 8, yellow 16, red 24+).
 	// Output through EMISSION with black, non-reflective ALBEDO/SPECULAR; view 5 through a white,
 	// non-reflective ALBEDO that light() fills.
 	int debug_view = int(gads_debug.x + 0.5);
@@ -234,6 +249,11 @@ void fragment() {
 			debug_color = vec3(steps_used / 64.0, planes_marched / 3.0, main_lod / 8.0);
 		} else if (debug_view == 3) {
 			debug_color = vec3(amp > 0.0 ? main_z / amp + height_center : 0.0);
+		} else if (debug_view == 9) {
+			float t = clamp(gads_tess.x / 24.0, 0.0, 1.0) * 3.0;
+			debug_color = t < 1.0 ? mix(vec3(0.1, 0.25, 1.0), vec3(0.1, 0.9, 0.2), t)
+					: t < 2.0 ? mix(vec3(0.1, 0.9, 0.2), vec3(1.0, 0.9, 0.1), t - 1.0)
+					: mix(vec3(1.0, 0.9, 0.1), vec3(1.0, 0.15, 0.1), t - 2.0);
 		} else {
 			debug_color = normal_world * 0.5 + 0.5;
 		}
