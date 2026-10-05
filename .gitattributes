@@ -10,6 +10,7 @@
 # tests, tools, docs and the repository README (its links point into docs/) stay in git. The
 # addon has its own README and LICENSE. tests/run_standalone_check.py checks the archive.
 /.gitattributes export-ignore
+/.github export-ignore
 /.gitignore export-ignore
 /demo export-ignore
 /docs export-ignore
