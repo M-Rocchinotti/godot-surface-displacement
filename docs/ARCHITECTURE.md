@@ -96,9 +96,16 @@ exactly (render test).
   `light()` (the engine shades them itself as long as the shader does not read the area
   built-ins). Not reproducible: the soft-light size term `A` (a few thousandths of N.L for lights
   with a size). Measured difference to the engine: 0.07 % at the 99th percentile.
-- The self-shadow itself marches from the hit towards directional lights over the relief:
+- The self-shadow itself marches from the hit towards the light over the relief:
   hard (any relief above the ray) or contact-hardening (Tatarchuk 2006: the largest
   `(relief - ray) * k / distance`), with a 1 % bias, fading out towards `sd_shadow.y` metres.
+  Directional lights always self-shadow; omni and spot lights when `sd_pom_steps.w` is 1
+  (`SDSettings.self_shadow_local_lights`, High and Epic). For them `light()` gets `LIGHT` from
+  the relief hit (`LIGHT_VERTEX`) towards the light, which is exactly the shadow ray: the march
+  spans a few centimetres, over which the direction to a light metres away does not change.
+  Each local light costs one march on every pixel it lights, so it is a setting.
+  `render_tests.gd` (`local_light_self_shadow_matches_height_field`) checks an omni and a spot
+  light against the CPU height-field shadow towards the light's position.
 
 ### 3.3 Opt-in depth write
 
@@ -202,13 +209,23 @@ the proxy's depth never hides them; they shrink away between half the radius and
 Rejected slots keep a zero transform instead of being deactivated: a deactivated particle is not
 processed again until it is re-emitted and could not come back when the window moves.
 
+The scatter copies the field's ground and layer parameters into its two materials only when the
+field changed them (`DisplacementField3D.get_parameters_version()`; the field itself sets a
+parameter only when its value differs). Setting a texture parameter, even to the texture it
+already holds, makes Godot's renderer free and rebuild the material's uniform set, which every
+frame would be wasted work.
+
 ## 6. `SurfaceDisplacement` and presets
 
 `SDSettings.create_preset()` defines Off / Low / Medium / High / Epic; the node combines the
 preset with four feature switches (a switch can remove a feature, never add one), writes the
 globals, swaps the variants of every registered SD material at runtime (materials entering the
 tree later are registered through `SceneTree.node_added`), and sets the fields' ring count,
-resolution and spacing and the scatters' density and radius. In the editor it only writes the
+resolution and spacing and the scatters' density and radius. `SDMaterials.materials_of()` finds
+the materials a node draws with, wherever they sit: mesh surfaces, overrides and overlays and
+their `next_pass` chains, MultiMesh and particle meshes, CSG shapes and GridMap mesh libraries.
+`SDSettings` emits `changed` from every setter, so edits to a Custom preset's resource apply at
+the end of the frame like the node's own properties. In the editor it only writes the
 globals, so saved materials keep their variant (editor check).
 
 ## 7. Resource lifetime

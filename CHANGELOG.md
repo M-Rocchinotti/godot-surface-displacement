@@ -29,11 +29,19 @@ First version. Requires Godot 4.7+ with the Forward+ renderer.
 - `PebbleScatter3D`: camera-following GPU-particle cells of pebbles, placed by world cell.
 - `SurfaceDisplacement` node and `SDSettings`: Off / Low / Medium / High / Epic presets
   (0.47 / 1.15 / 1.58 / 2.86 ms added on a GTX 1080 at 1080p, `tools/run_benchmark.py`), feature
-  switches, runtime variant switching, debug views, a script API for settings menus.
+  switches, runtime variant switching, debug views, a script API for settings menus. Presets
+  reach SD materials wherever a scene draws them: mesh surfaces, overrides, overlays and
+  `next_pass` chains, MultiMeshes, particles, CSG shapes and GridMap mesh libraries
+  (`SDMaterials.materials_of()`). Edits to a Custom preset's `SDSettings` apply live.
+- Self-shadowing from omni and spot lights (`SDSettings.self_shadow_local_lights`, on at High
+  and Epic), in the surface and the field shaders; checked against a CPU height-field shadow
+  towards the light's position.
 - Showcase videos (`tools/make_videos.py`): eye-level and low sweeps over the demo scenes, and
   labelled flat vs displacement comparisons.
-- Editor tools: add nodes, convert materials (undoable), bake the ground (undoable), prepare
-  height maps as 16-bit EXR, validate the setup.
+- Editor tools: add nodes, convert materials on meshes and CSG shapes (undoable), bake the ground
+  (undoable), prepare height maps as 16-bit EXR, validate the setup (including UV-mapped
+  materials on meshes without UVs, ground materials a field leaves flat, a bake made
+  for other layers, a pebble scatter outside a field, a Custom preset without settings).
 - Repository tools: Poly Haven texture fetch (EXR heights, md5-checked, license records) and
   preparation, variant generator, DFG table generator, offline Blender hero bake, idle-GPU
   benchmark runner, screenshot capture.
@@ -47,4 +55,22 @@ First version. Requires Godot 4.7+ with the Forward+ renderer.
   field's own parallax and self-shadow against the CPU references, cracks, swimming, edge blend,
   bake precision, pebble stability, lifetime), demo and editor smoke, shipped archive, editor
   plugin actions with undo/redo, Blender bake; mutation checks; a log scan for engine errors and
-  leaks.
+  leaks. They also pass on Linux with Mesa's lavapipe software Vulkan, which a GitHub Actions
+  workflow (`.github/workflows/tests.yml`) runs on every push.
+
+### Fixed (since the review build)
+
+- The demo's fly camera never moved: its script was attached after the camera was ready, so
+  Godot never turned on its processing.
+- `PebbleScatter3D` set the field's texture parameters on its materials every frame, which made
+  the renderer rebuild two uniform sets per frame; it now copies them when the field changes
+  them.
+- A ground-group `MeshInstance3D` without a mesh stretched the ground bake to its origin.
+- Two checks failed on drivers that round towards zero when writing half floats or bleed a trace
+  of geometry into the background next to a silhouette (Mesa's lavapipe): the baked ground's
+  vertex heights are now read back around 0 m (0.1 mm half-float steps instead of 0.2 mm), and
+  "self-shadow strength 0" checks the traced relief pixels (which also catches a wrongly black
+  pixel) instead of every non-black one. The log scan ignores errors located in an audio driver
+  (ALSA on a machine without a sound card), like the WASAPI ones. The mip shimmer test also
+  compares the march's mip level with the hardware's directly: on lavapipe, a march at mip 0 did
+  not flicker enough to fail the flicker limit.

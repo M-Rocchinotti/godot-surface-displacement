@@ -5,8 +5,9 @@ scattered stones, cobblestones as real stones, brick walls with deep joints.
 
 - **Parallax occlusion mapping, done properly**, for UV, world-planar and triplanar mapping:
   adaptive steps, binary refinement, mip-correct sampling, fade to normal mapping, relief depth
-  in metres, `LIGHT_VERTEX`, optional contact-hardening self-shadowing (with a `light()` that
-  reproduces Godot's own shading) and opt-in depth write.
+  in metres, `LIGHT_VERTEX`, optional contact-hardening self-shadowing from the sun and from
+  omni and spot lights (with a `light()` that reproduces Godot's own shading) and opt-in depth
+  write.
 - **DisplacementField3D**: real displaced geometry for ground near the camera (LOD rings,
   crack-free, draped over your ground mesh by a top-down bake; collision unchanged), blending
   seamlessly into POM.
@@ -33,11 +34,11 @@ Your own shaders: `render_mode diffuse_burley, specular_schlick_ggx;`, define `S
 `SD_DEPTH_WRITE`, then `#include "res://addons/surface_displacement/shaders/sd_surface.gdshaderinc"`
 (see the files in `shaders/variants/`).
 
-Requirements: Godot 4.7+, Forward+ (Vulkan tested).
-Limitations: POM gives no silhouettes on walls and props; the near-camera geometry needs
-height-field ground (world-planar ground materials); feet sink into the relief by
-up to its depth; depth write is opt-in and costs early-Z; self-shadowing is from directional
-lights only; fields follow one camera. The project README on the repository page has the
+Requirements: Godot 4.7+, Forward+ (Vulkan tested). Limitations: POM gives no silhouettes on
+walls and props; the near-camera geometry needs height-field ground (world-planar ground
+materials); feet sink into the relief by up to its depth; depth write is opt-in and costs
+early-Z; omni and spot lights self-shadow only at High and Epic (each one costs a march per
+pixel it lights); fields follow one camera. The project README on the repository page has the
 measured costs, accuracy figures, texture tools, an offline Blender bake tool, troubleshooting
 and the full list.
 

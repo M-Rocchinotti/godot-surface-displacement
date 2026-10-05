@@ -46,7 +46,8 @@ props whose silhouette POM cannot give into real triangles.
   field, generated from one `.gdshaderinc` library you can include in your own shaders).
 - POM measured against a CPU ray / height-field intersection: 0.13 mm 90th-percentile hit error
   on a 50 mm relief, from steep to grazing views, for all mappings (`tests/render_tests.gd`).
-- Self-shadowing whose `light()` matches Godot's built-in lighting to 0.07 % (99th percentile).
+- Self-shadowing whose `light()` matches Godot's built-in lighting to 0.07 % (99th percentile),
+  from the sun and (High and Epic) from omni and spot lights.
 - Triplanar that marches only the planes with weight (1 plane on a floor, 2 on a 45-degree roof).
 - Near-camera geometry with geomorphing between rings: zero cracks, no swimming, heights exact
   to 0.03 mm against the height map.
@@ -61,7 +62,8 @@ props whose silhouette POM cannot give into real triangles.
 ## Requirements
 
 - **Godot 4.7** or newer (developed and tested on 4.7.2-stable).
-- The **Forward+** renderer (Vulkan tested on Windows 10, NVIDIA GeForce GTX 1080). Mobile and
+- The **Forward+** renderer (Vulkan tested on Windows 10, NVIDIA GeForce GTX 1080; every test
+  suite also passes on Linux with Mesa's lavapipe software Vulkan, as in CI). Mobile and
   Compatibility are untested; the near-camera geometry and scatter need a rendering device.
 - Height maps with more than 8 bits (16-bit PNG or EXR). 8-bit height maps work but terrace
   visibly once displaced by more than a few centimetres.
@@ -84,7 +86,8 @@ props whose silhouette POM cannot give into real triangles.
    SurfaceDisplacement Node). Pick a preset.
 2. Give your surfaces Surface Displacement materials:
    - **Convert Materials** turns every StandardMaterial3D / ORMMaterial3D with a height map in
-     the selection (or scene) into the matching UV or triplanar SD material (undoable). Then
+     the selection (or scene), on meshes and CSG shapes, into the matching UV or triplanar SD
+     material (undoable). Then
      set each material's `height_m` to the real depth of its relief.
    - Or create one in the inspector: a ShaderMaterial with a shader from
      `addons/surface_displacement/shaders/variants/` (`sd_<uv|world|triplanar>_<flat|pom|pom_ss>[_depth].gdshader`).
@@ -103,7 +106,9 @@ props whose silhouette POM cannot give into real triangles.
    Set the ground material's `height_center` to 0 (relief above the ground; see below).
    Add a **PebbleScatter3D** as the field's child for loose pebbles.
 4. Run **Validate Setup** if something looks wrong; it lists missing globals, wrong texture
-   imports, materials the field cannot use and more.
+   imports, UV-mapped materials on meshes without UVs, materials the field cannot
+   use, ground materials the field leaves flat, a bake made for other layers, a pebble scatter
+   outside a field and more.
 
 ## Configuration
 
@@ -143,15 +148,17 @@ against it). See [Limitations](#limitations).
 | Property | Default | Meaning |
 |---|---|---|
 | `enabled` | on | Off = the Off preset. |
-| `preset` | Medium | Off / Low / Medium / High / Epic / Custom (`custom_settings`, an `SDSettings`). |
+| `preset` | Medium | Off / Low / Medium / High / Epic / Custom (`custom_settings`, an `SDSettings`; changing its values applies them). |
 | `pom`, `self_shadow`, `near_field`, `scatter` | on | Feature switches. They can only take a feature away from the preset, never add one. |
 | `debug_view` | Off | Hit offset, march cost, relief height, normals, self-shadow, field rings. |
 
 One node per project scene; it writes the shader globals, switches every registered material
 between its flat / POM / POM + self-shadow variant at runtime, and configures the fields and
-scatters. Materials in the scene are registered automatically (also those added later);
-`register_material()` / `register_scene()` cover materials created in code but not yet in the
-tree. In the editor the node only writes the globals, so saved materials keep their variant.
+scatters. Materials in the scene are registered automatically, also those added later: on
+meshes (surface materials, overrides and overlays, and their `next_pass` chains), MultiMeshes,
+particles, CSG shapes and GridMap mesh libraries. `register_material()` / `register_scene()`
+cover materials created in code but not yet in the tree, or assigned to a node already in it.
+In the editor the node only writes the globals, so saved materials keep their variant.
 
 Script API for a settings menu:
 
@@ -170,9 +177,9 @@ sd.settings_changed.connect(_refresh_menu)
 |---|---|---|---|---|---|
 | Off | - (normal mapping) | - | - | - | - |
 | Low | 4-10, secant only | 8-14 m | - | - | - |
-| Medium | 8-20, 3 | 18-30 m | hard, 6 steps, to 15 m | - | - |
-| High | 10-28, 4 | 25-40 m | soft, 12 steps, to 25 m | - | - |
-| Epic | 8-20, 3 | 20-35 m | soft, 8 steps, to 20 m | 3 rings x 96 at 4 cm (to 7.7 m) | to 8 m |
+| Medium | 8-20, 3 | 18-30 m | hard, 6 steps, to 15 m; sun | - | - |
+| High | 10-28, 4 | 25-40 m | soft, 12 steps, to 25 m; sun, omni, spot | - | - |
+| Epic | 8-20, 3 | 20-35 m | soft, 8 steps, to 20 m; sun, omni, spot | 3 rings x 96 at 4 cm (to 7.7 m) | to 8 m |
 
 (`core/sd_settings.gd`; Custom takes an `SDSettings` resource with every value.) Epic has
 slightly fewer parallax steps and a shorter fade than High: the near-camera geometry's fragments
@@ -230,7 +237,7 @@ A child of a DisplacementField3D. `density`, `radius` (8 m), `per_cell` (24), `c
 `debug_view` on the node (or the demo's panel): **Hit offset** (how far the march moved each
 pixel), **Cost** (red = linear + refinement steps / 64, green = triplanar planes / 3, blue = mip
 level / 8), **Relief** (height at the hit), **Normals**, **Self-shadow** (the self-shadow factor
-of the main light), **Field rings** (ring index and morph state).
+of the directional lights), **Field rings** (ring index and morph state).
 
 ## Height maps and textures
 
@@ -313,6 +320,7 @@ docs/                             ARCHITECTURE.md, RESEARCH.md, images/
 tests/                            test suites, harness, benchmark, mutation runner, log scanner
 tools/                            engine runner, texture fetch / prepare, variant generator,
                                   DFG table, Blender bake, benchmark runner, screenshots
+.github/workflows/tests.yml       CI: tests/run_all.py on Linux (Godot 4.7.2, lavapipe, Xvfb)
 ```
 
 ## Demo
@@ -344,19 +352,25 @@ python tools/godot.py --script tests/render_tests.gd -- --only=pom_matches,swim 
 Engine runs go through `tools/godot.py`, which serialises them with a lock and finds Godot
 via the `GODOT_BIN` environment variable, else `tools/.godot_path` (one line, git-ignored),
 else `godot` on `PATH` (on Windows use the `*_console.exe` build). Render suites run
-**headed**: `--headless` is a dummy renderer that draws nothing.
+**headed**: `--headless` is a dummy renderer that draws nothing. Without a GPU (a Linux server,
+CI) they run on Mesa's lavapipe under Xvfb, as `.github/workflows/tests.yml` does:
+
+```
+sudo apt-get install mesa-vulkan-drivers xvfb
+VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json xvfb-run -a -s "-screen 0 1920x1080x24" python tests/run_all.py
+```
 
 | Suite | What it checks |
 |---|---|
 | shader variants | The 18 variant files in the repository are what `tools/generate_variants.py` generates. |
-| logic tests (headless, 41 checks) | Variants parse back to their mapping / quality / depth write; preset table (Epic keeps soft self-shadowing and at least Medium's parallax next to its geometry), budgets and feature switches (a switch never adds a feature); the ring mesh (vertex count, no triangles in the holes, every ring's outer edge collapsing exactly onto the next ring's inner edge, seam flags); morph bands inside their rings for Epic's grid and a dense one, a new field's defaults equal Epic's grid; the ground bake's CPU twin (`SDGroundBake.sample()`): bilinear heights at 16-bit precision, the gradient normal, nothing displaceable at or beyond the bake's border, the edge continued smoothly beyond it, a 30-degree slope is ground and a 45-degree slope is not at 5 cm and at 20 cm texels, a 15 cm kerb is a step at 5 cm texels, a cell without ground, per-cell layers; every demo texture imported with mipmaps, heights as one-channel half float. |
-| render tests (headed, 70 checks) | **POM against a CPU ray / height-field intersection** (world floor with relief above and below, UV floor, UV wall, triplanar floor and two walls; steep, 45-degree and grazing views): median hit error under 0.2 mm and 90th percentile under 0.4 mm on a 50 mm relief (measured worst 90th percentile 0.13 mm; without the bisection 1.0 mm). **Inverted `height_remap`** (1, 0) on an inverted map draws the same relief (99th percentile 0.10 mm). **World-planar walls**: finite, lit pixels (a smoke test, see the file). **No swimming**: 190 relief markers over 24 camera positions stay within 0.19 mm of their traced position. **Triplanar** marches 1 plane on a floor and 2 on a 45-degree roof. **light() vs Godot's built-in lighting** (dielectric, metal, metal at a grazing view): 99th percentile at most 0.07 %, maximum 0.17 % (limits 0.12 % / 0.3 %); the flat variant equals ORMMaterial3D exactly. **LIGHT_VERTEX**: on the 2 041 pixels whose received shadow depends on where it is computed, 100 % are lit or shadowed as on the relief. **Self-shadow** against a CPU height-field shadow: 99.8 % of 4 929 pixels agree (limit 98 %). **Depth write**: with it, props are cut where the relief (not the plane) predicts on 100 % of the 1 397 pixels where the two disagree, and 4 of 318 484 wall pixels are empty; without it, as the plane predicts and none empty. **Mip shimmer** 10-60 m away: POM flickers 1.02 x as much as flat normal mapping (limit 1.3). **Distance fade**: 136 mm parallax offset before the fade, 0 beyond it. Globals (the registered defaults and this project's are the Medium preset), parameter defaults equal to the shaders' own, emission pass-through. |
-| field tests (headed, 35 checks) | **Vertex heights** against the height map: 1 539 vertices in all 4 rings, largest error 0.03 mm. **Over a baked ground** (slope, kerb, hole, other ground, the bake's edge): 12 966 vertices against `SDGroundBake.sample()`, largest error 0.20 mm. **The field's own parallax** against the CPU ray tracer: 90th percentile 0.05 / 0.07 / 0.10 mm (steep / 45 degrees / grazing); its self-shadow agrees with the CPU height-field shadow on 99.8 % of pixels. **No cracks**: 0 background pixels inside the grid from 6 camera positions. **No swimming**: 0 mm height change in the inner ring while the camera walks; in the morph bands at most 0.96 mm per 1 cm camera step (limit 2 mm). **Field vs parallax ground**: 0.15 % mean luminance difference inside the grid (limit 1 %), 0.08 % in the last metre before the relief fades (limit 0.5 %), 0 beyond the grid. **Ground bake**: 1 698 points within 1.9 mm of the mesh surface. **Pebbles stay put**: 0 of 1 536 pebble pixels change when the camera moves 1.24 m across cell boundaries. Lifetime: presets, resizes, a second viewport, freeing the scene, a scene change during a bake. All four demo scenes render at every preset, their ground faces up, and their runtime bakes take about 0.3 s (printed by the test). |
+| logic tests (headless, 53 checks) | Variants parse back to their mapping / quality / depth write; preset table (Epic keeps soft self-shadowing and at least Medium's parallax next to its geometry, omni and spot lights self-shadow from High up), budgets and feature switches (a switch never adds a feature); edits to a Custom preset's settings apply; presets reach SD materials on mesh surfaces, overlays, next passes, CSG shapes, MultiMeshes, GridMaps and particles, also those added later; Validate Setup reports each mistake it knows (and nothing on a correct setup); the pebble scatter gets the field's parameters when they change and not when they do not; the ring mesh (vertex count, no triangles in the holes, every ring's outer edge collapsing exactly onto the next ring's inner edge, seam flags); morph bands inside their rings for Epic's grid and a dense one, a new field's defaults equal Epic's grid; the ground bake's CPU twin (`SDGroundBake.sample()`): bilinear heights at 16-bit precision, the gradient normal, nothing displaceable at or beyond the bake's border, the edge continued smoothly beyond it, a 30-degree slope is ground and a 45-degree slope is not at 5 cm and at 20 cm texels, a 15 cm kerb is a step at 5 cm texels, a cell without ground, per-cell layers; every demo texture imported with mipmaps, heights as one-channel half float. |
+| render tests (headed, 77 checks) | **POM against a CPU ray / height-field intersection** (world floor with relief above and below, UV floor, UV wall, triplanar floor and two walls; steep, 45-degree and grazing views): median hit error under 0.2 mm and 90th percentile under 0.4 mm on a 50 mm relief (measured worst 90th percentile 0.13 mm; without the bisection 1.0 mm). **Inverted `height_remap`** (1, 0) on an inverted map draws the same relief (99th percentile 0.10 mm). **World-planar walls**: finite, lit pixels (a smoke test, see the file). **No swimming**: 190 relief markers over 24 camera positions stay within 0.19 mm of their traced position. **Triplanar** marches 1 plane on a floor and 2 on a 45-degree roof. **light() vs Godot's built-in lighting** (dielectric, metal, metal at a grazing view): 99th percentile at most 0.07 %, maximum 0.17 % (limits 0.12 % / 0.3 %); the flat variant equals ORMMaterial3D exactly. **LIGHT_VERTEX**: on the 2 041 pixels whose received shadow depends on where it is computed, 100 % are lit or shadowed as on the relief. **Self-shadow** against a CPU height-field shadow: 99.8 % of 4 929 pixels agree (limit 98 %); from an omni and a spot light, against the shadow towards the light's position: 99.5 % (limit 98 %), and nothing changes with the setting off. **Depth write**: with it, props are cut where the relief (not the plane) predicts on 100 % of the 1 397 pixels where the two disagree, and 4 of 318 484 wall pixels are empty; without it, as the plane predicts and none empty. **Mip shimmer** 10-60 m away: POM flickers 1.02 x as much as flat normal mapping (limit 1.3), and the march samples the mip level the hardware would pick (90th percentile 0.006 levels off). **Distance fade**: 136 mm parallax offset before the fade, 0 beyond it. Globals (the registered defaults and this project's are the Medium preset), parameter defaults equal to the shaders' own, emission pass-through. |
+| field tests (headed, 36 checks) | **Vertex heights** against the height map: 1 539 vertices in all 4 rings, largest error 0.03 mm. **Over a baked ground** (slope, kerb, hole, other ground, the bake's edge): 12 966 vertices against `SDGroundBake.sample()`, largest error 0.20 mm. **The field's own parallax** against the CPU ray tracer: 90th percentile 0.05 / 0.07 / 0.10 mm (steep / 45 degrees / grazing); its self-shadow agrees with the CPU height-field shadow on 99.8 % of pixels. **No cracks**: 0 background pixels inside the grid from 6 camera positions. **No swimming**: 0 mm height change in the inner ring while the camera walks; in the morph bands at most 0.96 mm per 1 cm camera step (limit 2 mm). **Field vs parallax ground**: 0.15 % mean luminance difference inside the grid (limit 1 %), 0.08 % in the last metre before the relief fades (limit 0.5 %), 0 beyond the grid. **Ground bake**: 1 698 points within 1.9 mm of the mesh surface. **Pebbles stay put**: 0 of 1 536 pebble pixels change when the camera moves 1.24 m across cell boundaries. Lifetime: presets, resizes, a second viewport, freeing the scene, a scene change during a bake. All four demo scenes render at every preset, their ground faces up, and their runtime bakes take about 0.3 s (printed by the test). The demo's fly camera flies. |
 | demo / editor smoke | The demo and the editor with the demo open run without script errors, engine errors or leaks. |
 | standalone addon (shipped archive) | Builds the `git archive` users download (`.gitattributes` export rules applied), checks it holds only `LICENSE` and `addons/surface_displacement` with no Markdown link to a file it does not ship, puts it alone into a fresh project, lets the plugin register its globals and checks that a POM ground and a DisplacementField3D with pebbles render there. |
-| editor plugin actions | In a real editor: Add SurfaceDisplacement Node, Add DisplacementField3D, Convert Materials and Bake Ground, each with undo and redo; a second bake that replaces the first while it is in use; Validate Setup; Prepare Height Maps; a save that writes no internal nodes, keeps the materials' saved variant and the field's properties (the node's preset does not touch them in the editor) and refers to the bake file instead of embedding it. |
+| editor plugin actions | In a real editor: Add SurfaceDisplacement Node, Add DisplacementField3D, Convert Materials (a mesh and a CSG shape) and Bake Ground, each with undo and redo; a second bake that replaces the first while it is in use; Validate Setup; Prepare Height Maps; a save that writes no internal nodes, keeps the materials' saved variant and the field's properties (the node's preset does not touch them in the editor) and refers to the bake file instead of embedding it. |
 | offline Blender bake (`tests/test_blender_bake.py`) | Vertex-exact displacement against the height map for the primitives and mappings, decimation and glTF export. |
-| mutation checks (`tests/run_mutations.py`) | Re-introduces one bug at a time and expects its tests to fail: height map without mipmaps, march at mip 0, wrong parallax sign, no binary refinement, world-planar rotation sign, triplanar X plane mirrored, zero-weight planes marched, no distance fade, `LIGHT_VERTEX` not written, self-shadow ray reversed, Lambert instead of Burley in `light()`, a clamped GGX term, no energy compensation, depth written by every POM variant, depth not rounded, no geomorph at ring seams, no grid snapping, vertex fetch at mip 0, relief pushed down, pebbles seeded by window slot, a bake that ignores the layers, a feature switch that adds features, an inverted remap that flattens, the field's parallax sign, the field's self-shadow direction, the field's relief measured from ground + lift, kerbs not marked (shader and CPU), ground beyond the bake displaced. All 29 are caught; each prints what the failing tests measured. |
+| mutation checks (`tests/run_mutations.py`) | Re-introduces one bug at a time and expects its tests to fail: height map without mipmaps, march at mip 0, wrong parallax sign, no binary refinement, world-planar rotation sign, triplanar X plane mirrored, zero-weight planes marched, no distance fade, `LIGHT_VERTEX` not written, self-shadow ray reversed, Lambert instead of Burley in `light()`, a clamped GGX term, no energy compensation, depth written by every POM variant, depth not rounded, no geomorph at ring seams, no grid snapping, vertex fetch at mip 0, relief pushed down, pebbles seeded by window slot, a bake that ignores the layers, a feature switch that adds features, an inverted remap that flattens, the field's parallax sign, the field's self-shadow direction, the field's relief measured from ground + lift, kerbs not marked (shader and CPU), ground beyond the bake displaced, local lights that never or always self-shadow, field parameters set when unchanged, a scatter that stops following its field, presets that miss CSG shapes, Custom settings not followed, the demo camera's script attached after it is ready. Each prints what the failing tests measured. On the GTX 1080 the first 29 were all caught; on Mesa's lavapipe 35 of the 36 are, all but "depth not rounded": there the depth pre-pass and the colour pass agree without the rounding, so the bug it guards against does not occur. |
 
 Every suite fails on engine errors, script errors or leak reports ("RID ... was leaked",
 "ObjectDB instance ... leaked", "resources still in use") in its log. The tests compare against
@@ -389,8 +403,11 @@ pass because two errors cancel.
   disagree and show the background (measured: 4 of 318 484 in the render test). Disabling the
   depth pre-pass (`rendering/driver/depth_prepass/enable`) removes the problem at a cost for
   the whole scene.
-- **Self-shadowing** comes from directional lights only; omni and spot lights light the relief
-  (at `LIGHT_VERTEX`) without self-shadowing it. Area lights are shaded by the engine as usual.
+- **Self-shadowing** comes from directional lights, and from omni and spot lights where the
+  settings ask for it (`self_shadow_local_lights`: High and Epic). Each local light adds a
+  self-shadow march on every pixel it lights, which the measured preset costs (a sun only) do
+  not include; with many overlapping local lights, use Medium or switch it off in a Custom
+  preset. Area lights are shaded by the engine as usual and do not self-shadow.
   The custom `light()` omits the soft-light size term Godot applies to lights with a size
   (a few thousandths of N.L). With `force_lambert_over_burley` on, the self-shadowing variants
   still use Burley diffuse (the flat and POM variants follow the setting).
@@ -417,12 +434,12 @@ pass because two errors cancel.
 | Relief goes the wrong way (stones look like holes) | `height_center` is 1 where 0 is meant, or the height map is inverted (`height_remap` = (1, 0)). |
 | The field is not visible | It needs a rendering device (not `--headless`), a ground layer that is displaceable at the camera's position (Field rings debug view), and a baked or flat ground under it. Ground materials must be world-planar with `height_center` 0. |
 | Props float above the relief or cut into it | Opt-in depth write on that surface; or place props on the relief's average height. |
+| A preset changes nothing on some surfaces | Their material was assigned by code to a node already in the tree (the node registers materials as nodes enter the tree). Call `register_material()` with it. |
 | After undoing and redoing Bake Ground, quitting the editor with the field selected prints "Can't use get_node() with absolute paths from outside the active scene tree" | Seen with Godot 4.7.2 at shutdown, after the scene was saved; nothing is lost. The cause was not found; deselecting the field before quitting avoids it. |
 
 ## Roadmap
 
 - Height-based blending between ground layers (stones sitting in sand).
-- Omni / spot self-shadowing.
 - Silhouette POM (curvature-aware) for props.
 - A runtime height bake from arbitrary meshes for non-planar surfaces near the camera.
 
