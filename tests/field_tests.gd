@@ -202,9 +202,12 @@ func test_baked_ground() -> void:
 	var origin := Vector2(floorf(0.37 / snap + 0.5) * snap, floorf(-0.23 / snap + 0.5) * snap)
 	var centre := origin - Vector2(0.5, 0.5) * S0
 	add_top_camera(centre, S0)
-	# World height relative to -0.2 m in units of 0.2 m: values 0.3-1.7, where half floats keep
-	# 0.2 mm.
-	var reference := -0.2
+	# World height in units of 0.2 m, around 0 (the linear tone mapper keeps negative values): the
+	# heights here (-0.14 to 0.14 m) read back as -0.7 to 0.7, where a half float's step is at
+	# most 0.1 mm. (Relative to -0.2 m, values of 1 to 1.7 had 0.2 mm steps: a driver that
+	# rounds towards zero when writing half floats, like Mesa's lavapipe, lost two of them, 0.4
+	# mm, between the 3D and the 2D buffer.)
+	var reference := 0.0
 	var scale := 0.2
 	SDGlobals.set_value(SDGlobals.DEBUG, Vector4(Harness.DEBUG_WORLD_HEIGHT, scale, reference, 0.0))
 	await h.frames(5)

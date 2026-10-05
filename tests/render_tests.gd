@@ -636,6 +636,7 @@ func test_self_shadow() -> void:
 	var agree := 0
 	var total := 0
 	var shadowed := 0
+	var on_relief: Array[Vector2i] = []
 	for py in range(4, SIZE.y, 10):
 		for px in range(4, SIZE.x, 10):
 			var o := cam.project_ray_origin(Vector2(px, py) + Vector2(0.5, 0.5))
@@ -646,6 +647,7 @@ func test_self_shadow() -> void:
 			var hit: Vector3 = ref["hit"]
 			if absf(hit.x) > 1.5 or absf(hit.z) > 1.5:
 				continue
+			on_relief.append(Vector2i(px, py))
 			var want := Harness.height_field_shadowed(hit, to_sun, surface, 0.01 * amp)
 			var got := img.get_pixel(px, py).r < 0.5
 			total += 1
@@ -658,12 +660,13 @@ func test_self_shadow() -> void:
 	SDGlobals.set_value(SDGlobals.SHADOW, Vector4(16, 20, 0, 0))
 	await h.frames(2)
 	var off := await h.capture()
+	# On the traced relief, where a wrong shadow would show (also a black one); not every non-black
+	# pixel: a driver can bleed a trace of the quad into the background next to its silhouette
+	# (Mesa's lavapipe: 4e-6).
 	var min_off := 1.0
-	for py in range(4, SIZE.y, 10):
-		for px in range(4, SIZE.x, 10):
-			if Harness.luminance(off.get_pixel(px, py)) > 0.0:
-				min_off = minf(min_off, off.get_pixel(px, py).r)
-	check(min_off > 0.999, "strength 0 switches it off (factor 1 everywhere)")
+	for p in on_relief:
+		min_off = minf(min_off, off.get_pixelv(p).r)
+	check(min_off > 0.999, "strength 0 switches it off (factor 1 on all %d relief pixels)" % on_relief.size())
 	debug_view(Harness.DEBUG_OFF)
 
 
