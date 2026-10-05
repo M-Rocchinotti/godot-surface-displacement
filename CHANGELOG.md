@@ -6,6 +6,35 @@ All notable changes to this project are documented here. The format follows
 
 ## [0.2.0] - unreleased
 
+### Added
+
+- **Baked displacement for any mesh: `GADSMeshInstance3D`.** The relief of a mesh's GADS
+  materials made into real triangles in the editor, non-destructively: `source_mesh` is kept, the
+  bake is a cached file (`res://gads_baked/<name>_<key>.mesh`) the scene refers to, reused for
+  the same inputs and reported stale when the source, the materials, the settings or the
+  placement change. Quality presets Draft to Ultra (tolerance relative to the relief depth,
+  triangle budget) or a custom tolerance in metres; locked borders; displacement direction; hard
+  edges kept; LODs; optional trimesh or convex collision from a coarser pass of its own, as an
+  internal static body. Bakes run on a worker thread with progress and cancel.
+- **Native adaptive tessellator** (`native/`, a GDExtension built with godot-cpp; libraries for
+  Linux and Windows x86_64 in `addons/gads/native/bin/`, `tools/build_native.py` to rebuild):
+  Rivara longest-edge bisection on position-welded topology (crack-free across UV seams, hard
+  edges and surface borders, angles of the source kept), refinement driven by how far each
+  triangle's height field deviates from it in world metres (min / max mip pyramid first), worst
+  triangles first within a budget, footprint-filtered heights where the budget stopped it,
+  normals rebuilt from the displaced faces, MikkTSpace tangents. Deterministic for any thread
+  count.
+- Shaders on a baked mesh (instance uniform `gads_baked`): no parallax march, textures mapped at
+  each vertex's rest position, and only the normal-map detail finer than the triangles (the
+  normal map seen from its footprint-averaged frame), so the relief is not lit twice. Debug view
+  **Tessellation** (`GADSManager.DebugView.TESSELLATION`).
+- Editor: Bake / Rebuild / Clear / Cancel with progress and statistics in the inspector (undoable);
+  Project > Tools > **Make Selected Meshes GADSMeshInstance3D** and **Bake Selected
+  GADSMeshInstance3D** (undoable); Validate Setup reports stale bakes, unbakeable meshes, a
+  missing native library and bakes the budget cut short.
+- `tests/bake_tests.gd` (63 checks) and editor-check steps for the new tools; CI builds the
+  native library from source for Linux and Windows and runs the headless suites on Windows.
+
 ### Changed
 
 - **Renamed to GADS (Godot Adaptive Displacement System).** The addon now lives in

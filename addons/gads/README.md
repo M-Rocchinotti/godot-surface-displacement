@@ -12,6 +12,11 @@ scattered stones, cobblestones as real stones, brick walls with deep joints.
   crack-free, draped over your ground mesh by a top-down bake; collision unchanged), blending
   seamlessly into POM.
 - **GADSPebbleScatter3D**: loose pebbles as real meshes in camera-following GPU particle cells.
+- **GADSMeshInstance3D**: the relief of any mesh baked into real triangles in the editor by a
+  native adaptive tessellator (dense only where the height map needs it, crack-free across seams
+  and hard edges, rebuilt normals and tangents, LODs, optional collision). Non-destructive and
+  cached; Bake / Rebuild / Clear in the inspector. The native library ships for Linux and
+  Windows x86_64 (`native/`).
 - **GADSManager** node: Low / Medium / High / Ultra presets (measured on a GTX 1080 at
   1080p: 0.47 / 1.15 / 1.58 / 2.86 ms added; near-camera geometry and pebbles only at Ultra),
   feature switches, a script API for settings menus.
@@ -27,7 +32,9 @@ scattered stones, cobblestones as real stones, brick walls with deep joints.
    relief depth in metres. Height maps: 16-bit or EXR, imported **with mipmaps**.
 4. Ground: select the ground mesh, **Add GADSDisplacementField3D**, set the ground material's
    `height_center` to 0 (relief above the ground). Optionally add a GADSPebbleScatter3D child.
-5. **Validate Setup** reports what stands in the way.
+5. Props whose outline should follow the relief: **Make Selected Meshes GADSMeshInstance3D**,
+   then **Bake** in the inspector.
+6. **Validate Setup** reports what stands in the way.
 
 Your own shaders: `render_mode diffuse_burley, specular_schlick_ggx;`, define `GADS_MAPPING_UV` /
 `GADS_MAPPING_WORLD` / `GADS_MAPPING_TRIPLANAR` and optionally `GADS_POM`, `GADS_SELF_SHADOW`,
@@ -35,7 +42,8 @@ Your own shaders: `render_mode diffuse_burley, specular_schlick_ggx;`, define `G
 (see the files in `render/shaders/variants/`).
 
 Requirements: Godot 4.7+, Forward+ (Vulkan tested). Limitations: POM gives no silhouettes on
-walls and props; the near-camera geometry needs height-field ground (world-planar ground
+walls and props (bake those); baking needs the native library (Linux, Windows x86_64) and static,
+unskinned meshes; the near-camera geometry needs height-field ground (world-planar ground
 materials); feet sink into the relief by up to its depth; depth write is opt-in and costs
 early-Z; omni and spot lights self-shadow only at High and Ultra (each one costs a march per
 pixel it lights); fields follow one camera. The project README on the repository page has the

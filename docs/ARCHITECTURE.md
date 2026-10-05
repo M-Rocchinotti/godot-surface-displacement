@@ -15,8 +15,10 @@ from three layers that each do what the engine allows:
 | Near-camera geometry | ground within 7.7 m of the camera (Ultra) | real vertices displaced by the height map: silhouettes, real depth (SSAO, intersections), coarse relief | `terrain/gads_displacement_field_3d.gd`, `render/shaders/gads_field.gdshaderinc` |
 | Pebble scatter | gravel layers within ~8 m | loose stones as real little meshes | `terrain/gads_pebble_scatter_3d.gd`, `render/shaders/gads_pebble*.gdshader` |
 
-Plus an offline Blender tool (`tools/bake_displaced_mesh.py`, not shipped) for the few props whose
-silhouette POM cannot give.
+Plus **baked displacement** for any mesh (`GADSMeshInstance3D`, section 9): the relief made
+into real triangles in the editor by a native adaptive tessellator, for props whose silhouette,
+shadows or collision POM cannot give. (The older offline Blender tool, `tools/bake_displaced_mesh.py`,
+is not shipped.)
 
 ## 2. Conventions
 
@@ -231,7 +233,7 @@ globals, so saved materials keep their variant (editor check).
 ## 7. Resource lifetime
 
 The field and scatter own their render objects as *internal* children (never saved, freed with
-their parent); the field's static mesh cache is cleared when the last field leaves the tree; the
+their parent), and so does a baked mesh its collision body; the field's static mesh cache is cleared when the last field leaves the tree; the
 bake's capture viewport is freed after the capture. Shader globals hold plain values only. Every
 test runner fails on "RID leaked", "ObjectDB instances leaked" or "resources still in use" at
 exit.
@@ -249,3 +251,69 @@ exit.
   look the same either way.
 - `tests/run_mutations.py` re-introduces known bugs one at a time (the list is in the README),
   each of which must turn its tests red.
+- Baked geometry is checked against the height field it was baked from (random points inside the
+  triangles, at their interpolated uv), closedness by welding the output and counting the
+  triangles on every edge, and a baked mesh's render against the parallax render of the same
+  material, with the wrong normal treatment rendered alongside so the test can tell them apart.
+
+## 9. Baked displacement (`GADSMeshInstance3D`)
+
+The relief of the GADS materials made into real geometry, offline, for any triangle mesh.
+
+**Native tessellator** (`native/src/tess/`, engine-independent C++17, exposed as
+`GADSTessellator` by a GDExtension built with godot-cpp; binaries for Linux and Windows x86_64 in
+`addons/gads/native/bin/`):
+
+- *Topology on welded positions.* Corners at the same position (UV seams, hard edges, surface
+  borders) form one position group; edges are keyed by groups. Every corner of a group moves by
+  the same vector (direction: the area-weighted normal of the group, or world +Y when every
+  displaced surface is world-planar, matching the shaders' relief axis), so seams and hard edges
+  cannot open, and a split creates one midpoint group shared by both sides.
+- *Rivara longest-edge bisection.* A triangle is split across its longest edge after its
+  neighbour across that edge has been brought to the same edge (longest-edge propagation, LEPP).
+  The mesh stays conforming (no T-junctions) and angles stay at least half the source's (a
+  plane's 45-45-90 triangles stay 45-45-90).
+- *Error.* For each triangle: how far its own height field (sampled with the material's
+  mapping and parameters, bilinear like the GPU) deviates from the plane through its displaced
+  corners, in world metres. A min / max mip pyramid bounds it first, so flat regions are not
+  scanned texel by texel. Triangles below the tolerance, or with edges under
+  `min_edge_texels` texels, stay.
+- *Budget.* Rounds refine the worst triangles first until every triangle meets the tolerance or
+  the triangle budget is spent; the statistics report the error left.
+- *Output.* Where refinement met the tolerance, vertices keep the full-resolution heights the
+  error was measured against; where it stopped early (budget, smallest edge, deepest level),
+  heights are filtered to each vertex's footprint (trilinear at the mip of its mean edge length)
+  so coarse regions do not alias. Normals are rebuilt from the displaced faces,
+  per cluster of source normals within `hard_angle` (hard edges stay hard); tangents by
+  MikkTSpace in Godot's convention. `CUSTOM0` holds the rest position and the footprint's mip
+  level, `CUSTOM1` the rest normal and the refinement level.
+- Everything runs on worker threads (`parallel_for` over triangles and groups); results do not
+  depend on the thread count (bake tests).
+
+**Bake pipeline** (`geometry/gads_mesh_baker.gd`): resolves each surface's material, turns the
+GADS parameters into the tessellator's displacement description, runs a render pass and an
+optional coarser collision pass on a worker thread, builds LODs with `ImporterMesh.generate_lods`
+(index buffers only, the vertices are shared) and the collision shape (trimesh or convex hull).
+
+**Node** (`geometry/gads_mesh_instance_3d.gd`): `source_mesh` is never modified; `mesh` is the bake
+or a mirror of the source. The bake is saved as `<cache_directory>/<name>_<key>.mesh`, where the
+key hashes everything that shapes it: the source (path and file times for imported assets,
+contents for built-in resources), each surface's displacement parameters and height map, the
+transform where it matters (the basis always, since the tolerance is in metres; the origin for
+world and triplanar mappings), the settings and the pipeline and library versions. The scene
+refers to the file; the same inputs bake once; a changed input makes the bake stale (inspector,
+configuration warning, validator). The collision body is an internal child, rebuilt from the
+saved shape when the scene loads.
+
+**Shaders on a baked mesh.** The node sets the instance uniform `gads_baked`. The surface shaders
+then skip the march (the geometry carries the relief), map textures at the rest position from
+`CUSTOM0` (so they do not stretch over the displaced slopes, and world-planar textures stay put)
+and pick triplanar weights from the rest normal. The normal map needs care: it encodes the
+relief's full slope, and the geometry already carries the slope down to the triangle size.
+Applying the normal map on top of the geometry's normal tilts the flanks twice. So the shaders
+take only the part of the normal map finer than the triangles: the normal map sampled at the
+footprint's mip level (`CUSTOM0.w`, what the geometry carries) is rotated back to +Z and the
+same rotation is applied to the full-resolution sample (Reoriented Normal Mapping run
+backwards), and that detail goes on the geometry's normal and tangents. Where triangles are
+smaller than a pixel the two samples agree and the geometry alone shades; without a normal map
+the detail is flat and the geometry shades too.
