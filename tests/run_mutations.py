@@ -30,6 +30,9 @@ PEBBLES = SH + "sd_pebble_process.gdshader"
 FIELD = "addons/surface_displacement/nodes/displacement_field_3d.gd"
 MANAGER = "addons/surface_displacement/nodes/surface_displacement.gd"
 BAKE = "addons/surface_displacement/core/sd_ground_bake.gd"
+MATERIALS = "addons/surface_displacement/core/sd_materials.gd"
+SCATTER = "addons/surface_displacement/nodes/pebble_scatter_3d.gd"
+DEMO = "demo/demo_main.gd"
 HEIGHT_IMPORT = "demo/textures/clean_pebbles/clean_pebbles_height.exr.import"
 
 # (name, what it breaks, [(file, old, new)], [(suite, name filter)]); suite is "logic",
@@ -127,6 +130,28 @@ MUTATIONS = [
     ("feature switch adds features", "a feature switch turns on what the preset leaves out",
      [(MANAGER, "	base.near_field_enabled = base.near_field_enabled and near_field", "	base.near_field_enabled = near_field")],
      [("logic", "")]),
+    ("local lights never self-shadow", "omni and spot lights ignore sd_pom_steps.w (directional lights only)",
+     [(SURFACE, "	if (LIGHT_IS_DIRECTIONAL || sd_pom_steps.w > 0.5) {", "	if (LIGHT_IS_DIRECTIONAL) {")],
+     [("render", "local_light")]),
+    ("local lights always self-shadow", "omni and spot lights self-shadow whatever the settings say",
+     [(SURFACE, "	if (LIGHT_IS_DIRECTIONAL || sd_pom_steps.w > 0.5) {", "	if (LIGHT_IS_DIRECTIONAL || sd_pom_steps.w > -0.5) {")],
+     [("render", "local_light")]),
+    ("field parameters set every time", "the field sets its parameters even when they did not change (the editor's layer refresh every 30 frames then makes the scatter re-upload its textures)",
+     [(FIELD, "	if _material.get_shader_parameter(param) != value:", "	if true:")],
+     [("logic", "")]),
+    ("scatter stops following the field", "the scatter copies the field's parameters once and never again",
+     [(SCATTER, "	if field.get_instance_id() != _copied_field_id or field.get_parameters_version() != _copied_version:",
+       "	if field.get_instance_id() != _copied_field_id:")],
+     [("logic", "")]),
+    ("presets miss CSG shapes", "materials on CSG shapes are not found, so presets do not switch them",
+     [(MATERIALS, "	elif node.is_class(\"CSGShape3D\"):", "	elif false:")],
+     [("logic", "")]),
+    ("custom settings not followed", "edits to a Custom preset's settings resource do not apply",
+     [(MANAGER, "			custom_settings.changed.connect(_queue_apply)", "			pass")],
+     [("logic", "")]),
+    ("demo camera script after ready", "the demo attaches its fly camera script after the camera is ready",
+     [(DEMO, "	cam.set_script(FlyCamera)\n	add_child(scene)", "	add_child(scene)\n	cam.set_script(FlyCamera)")],
+     [("field", "demo_camera")]),
 ]
 
 SUITES = {
