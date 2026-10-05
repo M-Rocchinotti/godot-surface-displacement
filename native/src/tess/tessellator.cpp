@@ -1,0 +1,1001 @@
+#include "tessellator.h"
+
+#include "parallel.h"
+
+extern "C" {
+#include "mikktspace.h"
+}
+
+#include <algorithm>
+#include <chrono>
+#include <cmath>
+
+namespace gads {
+
+static constexpr double PI = 3.14159265358979323846;
+// A triangle whose edges span more texels than this is not scanned: its min / max bound decides.
+static constexpr double SCAN_LIMIT_TEXELS = 64.0;
+
+// --- Edge table --------------------------------------------------------------------------------
+
+void Tessellator::EdgeTable::rehash(size_t cap) {
+	std::vector<uint64_t> old_keys = std::move(keys_);
+	std::vector<EdgeRec> old_vals = std::move(vals_);
+	keys_.assign(cap, EMPTY);
+	vals_.assign(cap, EdgeRec());
+	count_ = used_ = 0;
+	for (size_t i = 0; i < old_keys.size(); i++) {
+		if (old_keys[i] != EMPTY && old_keys[i] != DEAD) {
+			size_t s = slot(old_keys[i]);
+			keys_[s] = old_keys[i];
+			vals_[s] = old_vals[i];
+			count_++;
+			used_++;
+		}
+	}
+}
+
+void Tessellator::EdgeTable::reserve(size_t n) {
+	size_t cap = 16;
+	while (cap < n * 2) {
+		cap <<= 1;
+	}
+	if (cap > keys_.size()) {
+		rehash(cap);
+	}
+}
+
+size_t Tessellator::EdgeTable::slot(uint64_t key) const {
+	// The first slot holding the key, else the first empty one (tombstones are skipped).
+	uint64_t h = key * 0x9E3779B97F4A7C15ull;
+	size_t mask = keys_.size() - 1;
+	size_t i = size_t(h >> 17) & mask;
+	while (keys_[i] != EMPTY && keys_[i] != key) {
+		i = (i + 1) & mask;
+	}
+	return i;
+}
+
+void Tessellator::EdgeTable::grow() {
+	// Live keys and tombstones both lengthen probes; a rehash drops the tombstones, at the same
+	// size when they are most of the load.
+	if (keys_.empty()) {
+		rehash(64);
+	} else if ((used_ + 1) * 10 > keys_.size() * 7) {
+		rehash((count_ + 1) * 10 > keys_.size() * 5 ? keys_.size() * 2 : keys_.size());
+	}
+}
+
+Tessellator::EdgeRec *Tessellator::EdgeTable::find(uint64_t key) {
+	if (keys_.empty()) {
+		return nullptr;
+	}
+	size_t s = slot(key);
+	return keys_[s] == key ? &vals_[s] : nullptr;
+}
+
+void Tessellator::EdgeTable::add(uint64_t key, int tri, std::vector<std::vector<int>> &extra) {
+	grow();
+	size_t s = slot(key);
+	if (keys_[s] != key) {
+		keys_[s] = key;
+		vals_[s] = EdgeRec();
+		count_++;
+		used_++;
+	}
+	EdgeRec &r = vals_[s];
+	if (r.t[0] < 0) {
+		r.t[0] = tri;
+	} else if (r.t[1] < 0) {
+		r.t[1] = tri;
+	} else {
+		if (r.more < 0) {
+			r.more = int(extra.size());
+			extra.emplace_back();
+		}
+		extra[r.more].push_back(tri);
+	}
+}
+
+void Tessellator::EdgeTable::remove_tri(uint64_t key, int tri, std::vector<std::vector<int>> &extra) {
+	EdgeRec *r = find(key);
+	if (r == nullptr) {
+		return;
+	}
+	if (r->t[0] == tri) {
+		r->t[0] = r->t[1];
+		r->t[1] = -1;
+	} else if (r->t[1] == tri) {
+		r->t[1] = -1;
+	} else if (r->more >= 0) {
+		std::vector<int> &m = extra[r->more];
+		m.erase(std::remove(m.begin(), m.end(), tri), m.end());
+	}
+	// Keep the two inline slots filled first.
+	if (r->more >= 0 && !extra[r->more].empty() && (r->t[0] < 0 || r->t[1] < 0)) {
+		int moved = extra[r->more].back();
+		extra[r->more].pop_back();
+		(r->t[0] < 0 ? r->t[0] : r->t[1]) = moved;
+	}
+	if (r->t[0] < 0 && r->t[1] >= 0) {
+		r->t[0] = r->t[1];
+		r->t[1] = -1;
+	}
+	if (r->t[0] < 0 && (r->more < 0 || extra[r->more].empty())) {
+		erase(key);
+	}
+}
+
+void Tessellator::EdgeTable::erase(uint64_t key) {
+	if (keys_.empty()) {
+		return;
+	}
+	size_t s = slot(key);
+	if (keys_[s] == key) {
+		keys_[s] = DEAD;
+		count_--;
+	}
+}
+
+// --- Input -------------------------------------------------------------------------------------
+
+int Tessellator::add_height_map(int width, int height, std::vector<float> data) {
+	maps_.push_back(std::make_unique<HeightMap>(width, height, std::move(data)));
+	return int(maps_.size()) - 1;
+}
+
+int Tessellator::add_displacement(const Displacement &d) {
+	displacements_.push_back(d);
+	return int(displacements_.size()) - 1;
+}
+
+void Tessellator::add_surface(SurfaceInput s) {
+	inputs_.push_back(std::move(s));
+}
+
+// --- Topology ----------------------------------------------------------------------------------
+
+namespace {
+struct CellKey {
+	int64_t x, y, z;
+	bool operator==(const CellKey &o) const { return x == o.x && y == o.y && z == o.z; }
+};
+struct CellHash {
+	size_t operator()(const CellKey &k) const {
+		uint64_t h = uint64_t(k.x) * 0x9E3779B97F4A7C15ull ^ uint64_t(k.y) * 0xC2B2AE3D27D4EB4Full ^ uint64_t(k.z) * 0x165667B19E3779F9ull;
+		return size_t(h ^ (h >> 31));
+	}
+};
+} // namespace
+
+bool Tessellator::build_topology() {
+	normal_matrix_ = xform_.basis.inverse().transposed();
+	world_to_object_ = xform_.basis.inverse();
+	if (std::fabs(xform_.basis.determinant()) < 1e-20) {
+		error_ = "the transform has no volume (zero scale)";
+		return false;
+	}
+	// Mesh size, for the default weld distance.
+	V3 lo(1e300, 1e300, 1e300), hi(-1e300, -1e300, -1e300);
+	size_t vertex_count = 0;
+	for (const SurfaceInput &s : inputs_) {
+		for (const V3 &p : s.positions) {
+			lo = V3(std::min(lo.x, p.x), std::min(lo.y, p.y), std::min(lo.z, p.z));
+			hi = V3(std::max(hi.x, p.x), std::max(hi.y, p.y), std::max(hi.z, p.z));
+		}
+		vertex_count += s.positions.size();
+	}
+	if (vertex_count == 0) {
+		error_ = "the mesh has no vertices";
+		return false;
+	}
+	double diag = (hi - lo).length();
+	double eps = settings_.weld_distance >= 0.0 ? settings_.weld_distance : std::max(diag * 1e-6, 1e-9);
+	double cell = std::max(eps, 1e-12);
+
+	// Corners (one per source vertex) and position groups (corners within eps share one).
+	std::unordered_map<CellKey, std::vector<int>, CellHash> cells;
+	cells.reserve(vertex_count);
+	std::vector<int> corner_base(inputs_.size(), 0);
+	bool all_world = true, any_displaced = false;
+	for (size_t si = 0; si < inputs_.size(); si++) {
+		const SurfaceInput &s = inputs_[si];
+		corner_base[si] = int(corners_.size());
+		if (s.displacement >= 0) {
+			any_displaced = true;
+			all_world = all_world && displacements_[s.displacement].mapping == MAPPING_WORLD;
+		}
+		for (size_t vi = 0; vi < s.positions.size(); vi++) {
+			const V3 &p = s.positions[vi];
+			CellKey k{ (int64_t)std::floor(p.x / cell), (int64_t)std::floor(p.y / cell), (int64_t)std::floor(p.z / cell) };
+			int group = -1;
+			for (int dz = -1; dz <= 1 && group < 0; dz++) {
+				for (int dy = -1; dy <= 1 && group < 0; dy++) {
+					for (int dx = -1; dx <= 1 && group < 0; dx++) {
+						auto it = cells.find(CellKey{ k.x + dx, k.y + dy, k.z + dz });
+						if (it == cells.end()) {
+							continue;
+						}
+						for (int g : it->second) {
+							if ((groups_[g].rest - p).length_squared() <= eps * eps) {
+								group = g;
+								break;
+							}
+						}
+					}
+				}
+			}
+			if (group < 0) {
+				group = int(groups_.size());
+				Group g;
+				g.rest = p;
+				g.world = xform_.xform(p);
+				groups_.push_back(g);
+				cells[k].push_back(group);
+			}
+			Corner c;
+			c.group = group;
+			c.surface = int(si);
+			c.normal = vi < s.normals.size() ? s.normals[vi] : V3();
+			c.uv = vi < s.uv.size() ? s.uv[vi] : V2();
+			c.uv2 = vi < s.uv2.size() ? s.uv2[vi] : V2();
+			if (s.colors.size() >= (vi + 1) * 4) {
+				for (int k4 = 0; k4 < 4; k4++) {
+					c.color[k4] = s.colors[vi * 4 + k4];
+				}
+			}
+			corners_.push_back(c);
+		}
+	}
+	axis_directions_ = settings_.direction_mode == DIRECTION_AXIS || (settings_.direction_mode == DIRECTION_AUTO && any_displaced && all_world);
+
+	// Triangles; area-weighted face normals give each group its displacement direction (one per
+	// position, so every corner there moves the same way: no cracks at hard edges or seams).
+	std::vector<V3> group_normal(groups_.size());
+	std::vector<V3> corner_face_normal(corners_.size());
+	size_t tri_count = 0;
+	for (const SurfaceInput &s : inputs_) {
+		tri_count += (s.indices.empty() ? s.positions.size() : s.indices.size()) / 3;
+	}
+	tris_.reserve(tri_count * 4);
+	edges_.reserve(tri_count * 3);
+	for (size_t si = 0; si < inputs_.size(); si++) {
+		const SurfaceInput &s = inputs_[si];
+		size_t n = s.indices.empty() ? s.positions.size() : s.indices.size();
+		for (size_t i = 0; i + 2 < n; i += 3) {
+			int v[3];
+			bool valid = true;
+			for (int k = 0; k < 3; k++) {
+				v[k] = s.indices.empty() ? int(i + k) : s.indices[i + k];
+				valid = valid && v[k] >= 0 && size_t(v[k]) < s.positions.size();
+			}
+			if (!valid) {
+				error_ = "a surface's index array points past its vertices";
+				return false;
+			}
+			int c0 = corner_base[si] + v[0], c1 = corner_base[si] + v[1], c2 = corner_base[si] + v[2];
+			int g0 = corners_[c0].group, g1 = corners_[c1].group, g2 = corners_[c2].group;
+			if (g0 == g1 || g1 == g2 || g2 == g0) {
+				continue; // collapsed by the weld: no area
+			}
+			// Godot's front faces wind clockwise: the outward normal is (c - a) x (b - a).
+			const V3 &a = groups_[g0].rest, &b = groups_[g1].rest, &c = groups_[g2].rest;
+			V3 fn = (c - a).cross(b - a);
+			group_normal[g0] += fn;
+			group_normal[g1] += fn;
+			group_normal[g2] += fn;
+			corner_face_normal[c0] += fn;
+			corner_face_normal[c1] += fn;
+			corner_face_normal[c2] += fn;
+			new_tri(c0, c1, c2, int(si), 0);
+		}
+	}
+	if (tris_.empty()) {
+		error_ = "the mesh has no triangles";
+		return false;
+	}
+	for (size_t ci = 0; ci < corners_.size(); ci++) {
+		if (corners_[ci].normal.length_squared() < 1e-20) {
+			corners_[ci].normal = corner_face_normal[ci].normalized();
+		}
+	}
+	V3 axis = settings_.direction.normalized();
+	for (size_t g = 0; g < groups_.size(); g++) {
+		groups_[g].dir = axis_directions_ ? (settings_.direction_mode == DIRECTION_AXIS ? axis : V3(0.0, 1.0, 0.0))
+										  : normal_matrix_.xform(group_normal[g]).normalized();
+	}
+	// Open boundary edges (one triangle) lock their groups.
+	if (settings_.lock_borders) {
+		for (const Tri &t : tris_) {
+			for (int k = 0; k < 3; k++) {
+				int ga = corners_[t.c[k]].group, gb = corners_[t.c[(k + 1) % 3]].group;
+				EdgeRec *r = edges_.find(pair_key(ga, gb));
+				if (r != nullptr && r->t[1] < 0 && r->more < 0) {
+					groups_[ga].locked = true;
+					groups_[gb].locked = true;
+				}
+			}
+		}
+	}
+	for (Corner &c : corners_) {
+		c.h = corner_h(c);
+	}
+	stats_.source_triangles = int(tris_.size());
+	return true;
+}
+
+int Tessellator::new_tri(int c0, int c1, int c2, int surface, int level) {
+	Tri t;
+	t.c[0] = c0;
+	t.c[1] = c1;
+	t.c[2] = c2;
+	t.surface = surface;
+	t.level = level;
+	int id = int(tris_.size());
+	tris_.push_back(t);
+	for (int k = 0; k < 3; k++) {
+		edges_.add(pair_key(corners_[t.c[k]].group, corners_[t.c[(k + 1) % 3]].group), id, extra_);
+	}
+	return id;
+}
+
+// --- Sampling (the GADS shaders' mappings, gads_core.gdshaderinc) --------------------------------
+
+static double remap_height(double h, const V2 &remap) {
+	double span = remap.y - remap.x;
+	span = std::fabs(span) < 1e-5 ? 1e-5 : span;
+	return std::clamp((h - remap.x) / span, 0.0, 1.0);
+}
+
+// The plane of a world-planar mapping and of each triplanar projection: uv = (gu.q, gv.q).
+static void triplanar_axes(int axis, const V3 &n, V3 &r_right, V3 &r_up) {
+	if (axis == 0) {
+		double sg = n.x >= 0.0 ? 1.0 : -1.0;
+		r_right = V3(0.0, 0.0, -sg);
+		r_up = V3(0.0, 1.0, 0.0);
+	} else if (axis == 1) {
+		double sg = n.y >= 0.0 ? 1.0 : -1.0;
+		r_right = V3(1.0, 0.0, 0.0);
+		r_up = V3(0.0, 0.0, -sg);
+	} else {
+		double sg = n.z >= 0.0 ? 1.0 : -1.0;
+		r_right = V3(sg, 0.0, 0.0);
+		r_up = V3(0.0, 1.0, 0.0);
+	}
+}
+
+static void triplanar_weights(const V3 &n, double sharpness, double r_w[3]) {
+	double w[3] = { std::pow(std::fabs(n.x), sharpness), std::pow(std::fabs(n.y), sharpness), std::pow(std::fabs(n.z), sharpness) };
+	double sum = std::max(w[0] + w[1] + w[2], 1e-6);
+	for (double &v : w) {
+		v /= sum;
+		v = v < 0.05 ? 0.0 : v;
+	}
+	sum = std::max(w[0] + w[1] + w[2], 1e-6);
+	for (int k = 0; k < 3; k++) {
+		r_w[k] = w[k] / sum;
+	}
+}
+
+// The uv (in texture repeats) of projection `plane` at a world point (plane < 0: the world-planar
+// mapping; 0-2: triplanar axis).
+static V2 planar_uv(const Displacement &d, int plane, const V3 &world, const V3 &n) {
+	V3 q = world - V3(d.planar_offset_m.x, 0.0, d.planar_offset_m.y);
+	V3 gu, gv;
+	if (plane < 0) {
+		double c = std::cos(d.rotation_rad), s = std::sin(d.rotation_rad);
+		gu = V3(c, 0.0, -s) * (1.0 / d.texture_size_m.x);
+		gv = V3(s, 0.0, c) * (1.0 / d.texture_size_m.y);
+	} else {
+		V3 right, up;
+		triplanar_axes(plane, n, right, up);
+		gu = right * (1.0 / d.texture_size_m.x);
+		gv = -up * (1.0 / d.texture_size_m.y);
+	}
+	return V2(gu.dot(q), gv.dot(q));
+}
+
+static V2 uv_transform(const Displacement &d, const V2 &uv) {
+	return V2(uv.x * d.uv_scale.x + d.uv_offset.x, uv.y * d.uv_scale.y + d.uv_offset.y);
+}
+
+double Tessellator::sample_displacement(int surface, const V3 &world, const V3 &dir, const V2 &uv, double lod) const {
+	int di = inputs_[surface].displacement;
+	if (di < 0) {
+		return 0.0;
+	}
+	const Displacement &d = displacements_[di];
+	const HeightMap &map = *maps_[d.height_map];
+	double h = 0.0;
+	if (d.mapping == MAPPING_UV) {
+		h = remap_height(map.sample_lod(uv_transform(d, uv), lod), d.remap);
+	} else if (d.mapping == MAPPING_WORLD) {
+		h = remap_height(map.sample_lod(planar_uv(d, -1, world, dir), lod), d.remap);
+	} else {
+		double w[3];
+		triplanar_weights(dir, d.triplanar_sharpness, w);
+		for (int a = 0; a < 3; a++) {
+			if (w[a] > 0.0) {
+				h += w[a] * remap_height(map.sample_lod(planar_uv(d, a, world, dir), lod), d.remap);
+			}
+		}
+	}
+	return d.height_m * (h - d.center);
+}
+
+double Tessellator::corner_h(const Corner &c) const {
+	const Group &g = groups_[c.group];
+	return sample_displacement(c.surface, g.world, g.dir, c.uv, 0.0);
+}
+
+// --- Error -------------------------------------------------------------------------------------
+
+// Metres per texel on triangle t (for the smallest edge worth splitting).
+double Tessellator::texel_size_m(int t) const {
+	const Tri &tr = tris_[t];
+	int di = inputs_[tr.surface].displacement;
+	if (di < 0) {
+		return 1e30;
+	}
+	const Displacement &d = displacements_[di];
+	const HeightMap &map = *maps_[d.height_map];
+	if (d.mapping != MAPPING_UV) {
+		return d.texture_size_m.x / map.width();
+	}
+	const V3 &a = groups_[corners_[tr.c[0]].group].world, &b = groups_[corners_[tr.c[1]].group].world, &c = groups_[corners_[tr.c[2]].group].world;
+	V2 ta = uv_transform(d, corners_[tr.c[0]].uv), tb = uv_transform(d, corners_[tr.c[1]].uv), tc = uv_transform(d, corners_[tr.c[2]].uv);
+	double area_w = (b - a).cross(c - a).length();
+	double area_t = std::fabs((tb.x - ta.x) * (tc.y - ta.y) - (tb.y - ta.y) * (tc.x - ta.x)) * map.width() * map.height();
+	return area_t > 1e-12 ? std::sqrt(area_w / area_t) : 1e30;
+}
+
+// How far the triangle's own height field deviates from the plane through its corners (m).
+float Tessellator::tri_error(int t) const {
+	const Tri &tr = tris_[t];
+	int di = inputs_[tr.surface].displacement;
+	if (di < 0) {
+		return 0.0f;
+	}
+	const Displacement &d = displacements_[di];
+	const HeightMap &map = *maps_[d.height_map];
+	const Corner *c[3] = { &corners_[tr.c[0]], &corners_[tr.c[1]], &corners_[tr.c[2]] };
+	const Group *g[3] = { &groups_[c[0]->group], &groups_[c[1]->group], &groups_[c[2]->group] };
+	// The projections this triangle samples, their corner uvs (in repeats).
+	int planes[3];
+	int plane_count = 0;
+	if (d.mapping == MAPPING_UV) {
+		planes[plane_count++] = -2;
+	} else if (d.mapping == MAPPING_WORLD) {
+		planes[plane_count++] = -1;
+	} else {
+		bool used[3] = { false, false, false };
+		for (int k = 0; k < 3; k++) {
+			double w[3];
+			triplanar_weights(g[k]->dir, d.triplanar_sharpness, w);
+			for (int a = 0; a < 3; a++) {
+				used[a] = used[a] || w[a] > 0.0;
+			}
+		}
+		for (int a = 0; a < 3; a++) {
+			if (used[a]) {
+				planes[plane_count++] = a;
+			}
+		}
+	}
+	double lo = 1e30, hi = -1e30, longest_texels = 0.0;
+	for (int p = 0; p < plane_count; p++) {
+		V2 uv[3];
+		for (int k = 0; k < 3; k++) {
+			uv[k] = planes[p] == -2 ? uv_transform(d, c[k]->uv) : planar_uv(d, planes[p], g[k]->world, g[k]->dir);
+		}
+		double r_lo, r_hi;
+		map.range(V2(std::min({ uv[0].x, uv[1].x, uv[2].x }), std::min({ uv[0].y, uv[1].y, uv[2].y })),
+				V2(std::max({ uv[0].x, uv[1].x, uv[2].x }), std::max({ uv[0].y, uv[1].y, uv[2].y })), r_lo, r_hi);
+		double a = remap_height(r_lo, d.remap), b = remap_height(r_hi, d.remap);
+		lo = std::min(lo, std::min(a, b));
+		hi = std::max(hi, std::max(a, b));
+		for (int k = 0; k < 3; k++) {
+			V2 e = uv[(k + 1) % 3] - uv[k];
+			longest_texels = std::max(longest_texels, std::hypot(e.x * map.width(), e.y * map.height()));
+		}
+	}
+	// Corner values and the field both stay inside [lo, hi]: the deviation cannot exceed it.
+	double bound = std::fabs(d.height_m) * (hi - lo);
+	if (bound <= settings_.max_error || longest_texels > SCAN_LIMIT_TEXELS) {
+		return float(bound);
+	}
+	// Scan at about 1.5 samples per texel along the longest edge.
+	int n = std::max(2, int(std::ceil(longest_texels * 1.5)));
+	double err = 0.0;
+	for (int i = 0; i <= n; i++) {
+		for (int j = 0; i + j <= n; j++) {
+			double a = double(i) / n, b = double(j) / n, w0 = 1.0 - a - b;
+			V3 world = g[0]->world * w0 + g[1]->world * a + g[2]->world * b;
+			V3 dir = (g[0]->dir * w0 + g[1]->dir * a + g[2]->dir * b).normalized(g[0]->dir);
+			V2 uv = c[0]->uv * w0 + c[1]->uv * a + c[2]->uv * b;
+			double h = sample_displacement(tr.surface, world, dir, uv, 0.0);
+			double lin = c[0]->h * w0 + c[1]->h * a + c[2]->h * b;
+			err = std::max(err, std::fabs(h - lin));
+		}
+	}
+	return float(err);
+}
+
+void Tessellator::evaluate(const std::vector<int> &list) {
+	parallel_for(list.size(), settings_.threads, [&](size_t i) {
+		tris_[list[i]].error = tri_error(list[i]);
+	});
+}
+
+// --- Rivara longest-edge bisection -------------------------------------------------------------
+
+// A total order on edges: world length, then the group pair (so two triangles always agree on
+// which of their edges is longest, and longest-edge paths cannot cycle).
+bool Tessellator::edge_less(int ga, int gb, int ha, int hb) const {
+	if (ga > gb) {
+		std::swap(ga, gb);
+	}
+	if (ha > hb) {
+		std::swap(ha, hb);
+	}
+	double la = edge_len2(ga, gb), lb = edge_len2(ha, hb);
+	if (la != lb) {
+		return la < lb;
+	}
+	return ga != ha ? ga < ha : gb < hb;
+}
+
+int Tessellator::longest_edge(int t) const {
+	const Tri &tr = tris_[t];
+	int best = 0;
+	for (int k = 1; k < 3; k++) {
+		int ga = corners_[tr.c[best]].group, gb = corners_[tr.c[(best + 1) % 3]].group;
+		int ha = corners_[tr.c[k]].group, hb = corners_[tr.c[(k + 1) % 3]].group;
+		if (edge_less(ga, gb, ha, hb)) {
+			best = k;
+		}
+	}
+	return best;
+}
+
+void Tessellator::split_edge(int ga, int gb) {
+	uint64_t key = pair_key(ga, gb);
+	EdgeRec *rec = edges_.find(key);
+	if (rec == nullptr) {
+		return;
+	}
+	std::vector<int> incident;
+	for (int t : rec->t) {
+		if (t >= 0) {
+			incident.push_back(t);
+		}
+	}
+	if (rec->more >= 0) {
+		incident.insert(incident.end(), extra_[rec->more].begin(), extra_[rec->more].end());
+	}
+	edges_.erase(key);
+
+	Group m;
+	const Group &a = groups_[ga], &b = groups_[gb];
+	m.rest = (a.rest + b.rest) * 0.5;
+	m.world = (a.world + b.world) * 0.5;
+	m.dir = axis_directions_ ? a.dir : (a.dir + b.dir).normalized(a.dir);
+	m.locked = a.locked && b.locked && incident.size() == 1; // the midpoint of a border edge
+	m.level = std::max(a.level, b.level) + 1;
+	int gm = int(groups_.size());
+	groups_.push_back(m);
+
+	// One new corner per side of the edge (triangles sharing the same two corners share it).
+	std::vector<std::pair<uint64_t, int>> mids;
+	for (int t : incident) {
+		Tri tr = tris_[t];
+		int i = 0;
+		for (; i < 3; i++) {
+			int x = corners_[tr.c[i]].group, y = corners_[tr.c[(i + 1) % 3]].group;
+			if ((x == ga && y == gb) || (x == gb && y == ga)) {
+				break;
+			}
+		}
+		if (i == 3) {
+			continue;
+		}
+		int ca = tr.c[i], cb = tr.c[(i + 1) % 3], cc = tr.c[(i + 2) % 3];
+		uint64_t ck = pair_key(uint32_t(ca), uint32_t(cb));
+		int cm = -1;
+		for (const auto &p : mids) {
+			if (p.first == ck) {
+				cm = p.second;
+			}
+		}
+		if (cm < 0) {
+			Corner x = corners_[ca], y = corners_[cb], n;
+			n.group = gm;
+			n.surface = x.surface;
+			n.normal = (x.normal + y.normal).normalized(x.normal);
+			n.uv = (x.uv + y.uv) * 0.5;
+			n.uv2 = (x.uv2 + y.uv2) * 0.5;
+			for (int k = 0; k < 4; k++) {
+				n.color[k] = 0.5f * (x.color[k] + y.color[k]);
+			}
+			n.h = corner_h(n);
+			cm = int(corners_.size());
+			corners_.push_back(n);
+			mids.emplace_back(ck, cm);
+		}
+		int gc = corners_[cc].group;
+		tris_[t].alive = false;
+		edges_.remove_tri(pair_key(corners_[cb].group, gc), t, extra_);
+		edges_.remove_tri(pair_key(gc, corners_[ca].group), t, extra_);
+		new_tri(ca, cm, cc, tr.surface, tr.level + 1);
+		new_tri(cm, cb, cc, tr.surface, tr.level + 1);
+	}
+}
+
+void Tessellator::refine(int t) {
+	// Longest-edge propagation: follow neighbours across longest edges until an edge is the
+	// longest of every triangle on it, split it, and repeat until t itself has been split.
+	for (int guard = 0; tris_[t].alive && guard < 4096; guard++) {
+		int cur = t;
+		for (int steps = 0; steps < 4096; steps++) {
+			const Tri &tr = tris_[cur];
+			int e = longest_edge(cur);
+			int ga = corners_[tr.c[e]].group, gb = corners_[tr.c[(e + 1) % 3]].group;
+			uint64_t key = pair_key(ga, gb);
+			EdgeRec *rec = edges_.find(key);
+			int next = -1;
+			auto visit = [&](int n) {
+				if (n >= 0 && n != cur && next < 0) {
+					const Tri &nt = tris_[n];
+					int ne = longest_edge(n);
+					if (pair_key(corners_[nt.c[ne]].group, corners_[nt.c[(ne + 1) % 3]].group) != key) {
+						next = n;
+					}
+				}
+			};
+			if (rec != nullptr) {
+				visit(rec->t[0]);
+				visit(rec->t[1]);
+				if (rec->more >= 0) {
+					for (int n : extra_[rec->more]) {
+						visit(n);
+					}
+				}
+			}
+			if (next < 0) {
+				split_edge(ga, gb);
+				break;
+			}
+			cur = next;
+		}
+	}
+}
+
+// --- Run ---------------------------------------------------------------------------------------
+
+bool Tessellator::run(const std::atomic<bool> &cancel, std::atomic<float> &progress, std::atomic<int> &triangles) {
+	auto start = std::chrono::steady_clock::now();
+	progress = 0.0f;
+	if (!build_topology()) {
+		return false;
+	}
+	std::vector<int> all(tris_.size());
+	for (size_t i = 0; i < all.size(); i++) {
+		all[i] = int(i);
+	}
+	evaluate(all);
+	int alive = int(tris_.size());
+	triangles = alive;
+	const double tol = settings_.max_error;
+	auto eligible = [&](int t) {
+		const Tri &tr = tris_[t];
+		if (!tr.alive || tr.error <= tol || tr.level >= settings_.max_level) {
+			return false;
+		}
+		int e = longest_edge(t);
+		double len = std::sqrt(edge_len2(corners_[tr.c[e]].group, corners_[tr.c[(e + 1) % 3]].group));
+		return len > settings_.min_edge_texels * texel_size_m(t);
+	};
+	// The rounds a triangle can need is about the bisections from its edge down to a texel.
+	int expected_rounds = 1;
+	for (size_t t = 0; t < tris_.size(); t++) {
+		int e = longest_edge(int(t));
+		double len = std::sqrt(edge_len2(corners_[tris_[t].c[e]].group, corners_[tris_[t].c[(e + 1) % 3]].group));
+		double texel = std::max(texel_size_m(int(t)) * settings_.min_edge_texels, 1e-9);
+		if (texel < 1e29) {
+			expected_rounds = std::max(expected_rounds, int(2.0 * std::log2(std::max(len / texel, 1.0))) + 1);
+		}
+	}
+	expected_rounds = std::min(expected_rounds, settings_.max_level);
+	for (;;) {
+		if (cancel) {
+			error_ = "cancelled";
+			return false;
+		}
+		std::vector<int> candidates;
+		for (size_t t = 0; t < tris_.size(); t++) {
+			if (eligible(int(t))) {
+				candidates.push_back(int(t));
+			}
+		}
+		if (candidates.empty()) {
+			break;
+		}
+		std::sort(candidates.begin(), candidates.end(), [&](int x, int y) {
+			return tris_[x].error != tris_[y].error ? tris_[x].error > tris_[y].error : x < y;
+		});
+		size_t first_new = tris_.size();
+		for (int t : candidates) {
+			if (alive >= settings_.max_triangles) {
+				stats_.budget_reached = true;
+				break;
+			}
+			if (tris_[t].alive) {
+				size_t before = tris_.size();
+				refine(t);
+				// Each split kills its triangles and adds two children for each.
+				alive += int(tris_.size() - before) / 2;
+			}
+		}
+		std::vector<int> fresh;
+		for (size_t t = first_new; t < tris_.size(); t++) {
+			if (tris_[t].alive) {
+				fresh.push_back(int(t));
+			}
+		}
+		evaluate(fresh);
+		stats_.rounds++;
+		triangles = alive;
+		progress = float(0.9 * std::min(1.0, double(stats_.rounds) / expected_rounds));
+		if (stats_.budget_reached) {
+			break;
+		}
+	}
+	for (const Tri &tr : tris_) {
+		if (tr.alive && tr.error > tol) {
+			stats_.max_error_left = std::max(stats_.max_error_left, double(tr.error));
+		}
+		if (tr.alive) {
+			stats_.max_level = std::max(stats_.max_level, tr.level);
+		}
+	}
+	if (cancel) {
+		error_ = "cancelled";
+		return false;
+	}
+	build_outputs();
+	stats_.triangles = alive;
+	stats_.milliseconds = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+	progress = 1.0f;
+	return true;
+}
+
+// --- Output ------------------------------------------------------------------------------------
+
+namespace {
+// MikkTSpace over one output surface, written the way Godot's SurfaceTool does
+// (scene/resources/surface_tool.cpp): bitangent negated, sign from it, last write per index wins.
+struct MikkData {
+	SurfaceOutput *out;
+};
+int mikk_faces(const SMikkTSpaceContext *ctx) {
+	return int(static_cast<MikkData *>(ctx->m_pUserData)->out->indices.size() / 3);
+}
+int mikk_face_verts(const SMikkTSpaceContext *, const int) {
+	return 3;
+}
+void mikk_position(const SMikkTSpaceContext *ctx, float r[], const int face, const int vert) {
+	SurfaceOutput *o = static_cast<MikkData *>(ctx->m_pUserData)->out;
+	int v = o->indices[face * 3 + vert];
+	for (int k = 0; k < 3; k++) {
+		r[k] = o->positions[v * 3 + k];
+	}
+}
+void mikk_normal(const SMikkTSpaceContext *ctx, float r[], const int face, const int vert) {
+	SurfaceOutput *o = static_cast<MikkData *>(ctx->m_pUserData)->out;
+	int v = o->indices[face * 3 + vert];
+	for (int k = 0; k < 3; k++) {
+		r[k] = o->normals[v * 3 + k];
+	}
+}
+void mikk_uv(const SMikkTSpaceContext *ctx, float r[], const int face, const int vert) {
+	SurfaceOutput *o = static_cast<MikkData *>(ctx->m_pUserData)->out;
+	int v = o->indices[face * 3 + vert];
+	r[0] = o->uv[v * 2];
+	r[1] = o->uv[v * 2 + 1];
+}
+void mikk_set(const SMikkTSpaceContext *ctx, const float t[], const float b[], const float, const float, const tbool, const int face, const int vert) {
+	SurfaceOutput *o = static_cast<MikkData *>(ctx->m_pUserData)->out;
+	int v = o->indices[face * 3 + vert];
+	V3 tangent(t[0], t[1], t[2]), binormal(-b[0], -b[1], -b[2]);
+	V3 n(o->normals[v * 3], o->normals[v * 3 + 1], o->normals[v * 3 + 2]);
+	o->tangents[v * 4] = float(tangent.x);
+	o->tangents[v * 4 + 1] = float(tangent.y);
+	o->tangents[v * 4 + 2] = float(tangent.z);
+	o->tangents[v * 4 + 3] = binormal.dot(n.cross(tangent)) < 0.0 ? -1.0f : 1.0f;
+}
+} // namespace
+
+void Tessellator::build_outputs() {
+	// Footprint per group (mean length of the edges at it) and texel size per corner.
+	std::vector<double> edge_sum(groups_.size(), 0.0), texel_sum(corners_.size(), 0.0);
+	std::vector<int> edge_n(groups_.size(), 0), texel_n(corners_.size(), 0);
+	std::vector<std::vector<int>> group_corners(groups_.size());
+	std::vector<char> corner_used(corners_.size(), 0);
+	for (size_t t = 0; t < tris_.size(); t++) {
+		const Tri &tr = tris_[t];
+		if (!tr.alive) {
+			continue;
+		}
+		double texel = texel_size_m(int(t));
+		for (int k = 0; k < 3; k++) {
+			int ga = corners_[tr.c[k]].group, gb = corners_[tr.c[(k + 1) % 3]].group;
+			double len = std::sqrt(edge_len2(ga, gb));
+			edge_sum[ga] += len;
+			edge_sum[gb] += len;
+			edge_n[ga]++;
+			edge_n[gb]++;
+			if (texel < 1e29) {
+				texel_sum[tr.c[k]] += texel;
+				texel_n[tr.c[k]]++;
+			}
+			if (!corner_used[tr.c[k]]) {
+				corner_used[tr.c[k]] = 1;
+				group_corners[corners_[tr.c[k]].group].push_back(tr.c[k]);
+			}
+		}
+	}
+	// Final displacement per group: the mean of its corners' samples (they differ across a seam).
+	// Where refinement met the tolerance the full-resolution samples are right by construction
+	// (the error is measured against them). Where it stopped early (budget, smallest edge, deepest
+	// level) they are filtered to the footprint, so coarse triangles do not alias the height map.
+	// The footprint's mip level per corner also goes to the shaders: the geometry carries the
+	// relief down to it, the normal map adds what lies below.
+	std::vector<char> coarse(groups_.size(), 0);
+	std::vector<int> finest(groups_.size(), 0); // the deepest level among a group's triangles
+	for (const Tri &tr : tris_) {
+		if (!tr.alive) {
+			continue;
+		}
+		for (int k = 0; k < 3; k++) {
+			int g = corners_[tr.c[k]].group;
+			finest[g] = std::max(finest[g], tr.level);
+			if (tr.error > settings_.max_error) {
+				coarse[g] = 1;
+			}
+		}
+	}
+	std::vector<double> value(groups_.size(), 0.0);
+	std::vector<float> corner_lod(corners_.size(), 0.0f);
+	parallel_for(groups_.size(), settings_.threads, [&](size_t g) {
+		const std::vector<int> &cs = group_corners[g];
+		double footprint = edge_n[g] > 0 ? edge_sum[g] / edge_n[g] : 0.0;
+		for (int ci : cs) {
+			if (texel_n[ci] > 0) {
+				corner_lod[ci] = float(std::max(0.0, std::log2(std::max(footprint / (texel_sum[ci] / texel_n[ci]), 1e-9))));
+			}
+		}
+		if (cs.empty() || groups_[g].locked) {
+			return;
+		}
+		double sum = 0.0;
+		for (int ci : cs) {
+			double lod = settings_.filter_heights && coarse[g] ? corner_lod[ci] : 0.0;
+			sum += sample_displacement(corners_[ci].surface, groups_[g].world, groups_[g].dir, corners_[ci].uv, lod);
+		}
+		value[g] = sum / double(cs.size());
+	});
+	std::vector<V3> moved(groups_.size());
+	for (size_t g = 0; g < groups_.size(); g++) {
+		moved[g] = groups_[g].rest + world_to_object_.xform(groups_[g].dir * value[g]);
+	}
+	// Normal clusters: corners of a group whose source normals point the same way (within
+	// hard_angle_deg) share a shading normal; hard edges stay hard.
+	std::vector<int> cluster(corners_.size(), -1);
+	int cluster_count = 0;
+	double cos_hard = std::cos(settings_.hard_angle_deg * PI / 180.0);
+	for (const std::vector<int> &cs : group_corners) {
+		std::vector<std::pair<V3, int>> reps;
+		for (int ci : cs) {
+			V3 n = corners_[ci].normal.normalized();
+			int id = -1;
+			for (const auto &r : reps) {
+				if (r.first.dot(n) >= cos_hard) {
+					id = r.second;
+					break;
+				}
+			}
+			if (id < 0) {
+				id = cluster_count++;
+				reps.emplace_back(n, id);
+			}
+			cluster[ci] = id;
+		}
+	}
+	std::vector<V3> cluster_normal(cluster_count);
+	for (const Tri &tr : tris_) {
+		if (!tr.alive) {
+			continue;
+		}
+		const V3 &a = moved[corners_[tr.c[0]].group], &b = moved[corners_[tr.c[1]].group], &c = moved[corners_[tr.c[2]].group];
+		V3 fn = (c - a).cross(b - a);
+		for (int k = 0; k < 3; k++) {
+			cluster_normal[cluster[tr.c[k]]] += fn;
+		}
+	}
+
+	M3 to_object_normal = xform_.basis.transposed();
+	outputs_.assign(inputs_.size(), SurfaceOutput());
+	std::vector<int> out_index(corners_.size(), -1);
+	for (size_t si = 0; si < inputs_.size(); si++) {
+		SurfaceOutput &o = outputs_[si];
+		o.has_uv = !inputs_[si].uv.empty();
+		o.has_uv2 = !inputs_[si].uv2.empty();
+		o.has_colors = !inputs_[si].colors.empty();
+	}
+	for (const Tri &tr : tris_) {
+		if (!tr.alive) {
+			continue;
+		}
+		SurfaceOutput &o = outputs_[tr.surface];
+		for (int k = 0; k < 3; k++) {
+			int ci = tr.c[k];
+			if (out_index[ci] < 0) {
+				const Corner &c = corners_[ci];
+				const Group &g = groups_[c.group];
+				out_index[ci] = int(o.positions.size() / 3);
+				const V3 &p = moved[c.group];
+				o.positions.insert(o.positions.end(), { float(p.x), float(p.y), float(p.z) });
+				V3 n = settings_.geometry_normals ? cluster_normal[cluster[ci]].normalized(c.normal) : c.normal.normalized();
+				o.normals.insert(o.normals.end(), { float(n.x), float(n.y), float(n.z) });
+				o.tangents.insert(o.tangents.end(), { 0.0f, 0.0f, 0.0f, 1.0f });
+				if (o.has_uv) {
+					o.uv.insert(o.uv.end(), { float(c.uv.x), float(c.uv.y) });
+				}
+				if (o.has_uv2) {
+					o.uv2.insert(o.uv2.end(), { float(c.uv2.x), float(c.uv2.y) });
+				}
+				if (o.has_colors) {
+					o.colors.insert(o.colors.end(), { c.color[0], c.color[1], c.color[2], c.color[3] });
+				}
+				// For the shaders: where the vertex was (textures are mapped at the rest position) and
+				// the mip level of its footprint, the direction it moved in and the refinement level of
+				// its finest triangle (debug view).
+				V3 rest_n = to_object_normal.xform(g.dir).normalized();
+				o.custom0.insert(o.custom0.end(), { float(g.rest.x), float(g.rest.y), float(g.rest.z), corner_lod[ci] });
+				o.custom1.insert(o.custom1.end(), { float(rest_n.x), float(rest_n.y), float(rest_n.z), float(finest[c.group]) / 32.0f });
+			}
+			o.indices.push_back(out_index[ci]);
+		}
+	}
+	int vertices = 0;
+	for (SurfaceOutput &o : outputs_) {
+		vertices += int(o.positions.size() / 3);
+		size_t count = o.positions.size() / 3;
+		if (o.has_uv && !o.indices.empty()) {
+			MikkData data{ &o };
+			SMikkTSpaceInterface iface = {};
+			iface.m_getNumFaces = mikk_faces;
+			iface.m_getNumVerticesOfFace = mikk_face_verts;
+			iface.m_getPosition = mikk_position;
+			iface.m_getNormal = mikk_normal;
+			iface.m_getTexCoord = mikk_uv;
+			iface.m_setTSpace = mikk_set;
+			SMikkTSpaceContext ctx = {};
+			ctx.m_pInterface = &iface;
+			ctx.m_pUserData = &data;
+			genTangSpaceDefault(&ctx);
+		} else {
+			// No UVs: any tangent perpendicular to the normal.
+			for (size_t v = 0; v < count; v++) {
+				V3 n(o.normals[v * 3], o.normals[v * 3 + 1], o.normals[v * 3 + 2]);
+				V3 t = (std::fabs(n.y) < 0.999 ? V3(0, 1, 0).cross(n) : V3(1, 0, 0)).normalized(V3(1, 0, 0));
+				o.tangents[v * 4] = float(t.x);
+				o.tangents[v * 4 + 1] = float(t.y);
+				o.tangents[v * 4 + 2] = float(t.z);
+			}
+		}
+	}
+	stats_.vertices = vertices;
+}
+
+} // namespace gads

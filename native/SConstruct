@@ -1,0 +1,54 @@
+#!/usr/bin/env python
+"""Build the GADS GDExtension into addons/gads/native/bin/ (usually via tools/build_native.py).
+
+    scons platform=linux target=template_release
+    scons platform=windows use_mingw=yes target=template_release
+
+godot-cpp is expected in native/godot-cpp (tools/build_native.py clones the pinned revision).
+The library embeds a hash of src/ and thirdparty/ (GADSTessellator.get_build_hash()); a logic test
+compares it with the sources, so a committed binary cannot silently lag behind them.
+"""
+import hashlib
+import os
+
+NATIVE = Dir(".").srcnode().abspath
+SOURCE_EXTENSIONS = (".h", ".hpp", ".c", ".cpp")
+
+
+def source_hash() -> str:
+    """sha256 over "<path>\\n<bytes>" of every source file (.h .hpp .c .cpp) in src/ and
+    thirdparty/, sorted by path (tools/build_native.py and tests/run_logic_tests.gd compute the
+    same)."""
+    files = []
+    for top in ("src", "thirdparty"):
+        for dirpath, _, names in os.walk(os.path.join(NATIVE, top)):
+            for name in names:
+                if name.endswith(".gen.h") or not name.endswith(SOURCE_EXTENSIONS):
+                    continue
+                files.append(os.path.relpath(os.path.join(dirpath, name), NATIVE).replace(os.sep, "/"))
+    h = hashlib.sha256()
+    for rel in sorted(files):
+        h.update(rel.encode("utf-8"))
+        h.update(b"\n")
+        with open(os.path.join(NATIVE, rel), "rb") as f:
+            h.update(f.read())
+    return h.hexdigest()[:16]
+
+
+base = Environment(tools=["default"], PLATFORM="")
+base["build_profile"] = os.path.join(NATIVE, "build_profile.json")
+env = SConscript("godot-cpp/SConstruct", {"env": base, "api_version": "4.7"})
+
+gen = os.path.join(NATIVE, "gen")
+os.makedirs(gen, exist_ok=True)
+with open(os.path.join(gen, "build_hash.gen.h"), "w", encoding="utf-8", newline="\n") as f:
+    f.write('#pragma once\n#define GADS_BUILD_HASH "%s"\n' % source_hash())
+
+env.Append(CPPPATH=["src/", "gen/", "thirdparty/mikktspace/"])
+sources = Glob("src/*.cpp") + Glob("src/tess/*.cpp") + ["thirdparty/mikktspace/mikktspace.c"]
+library = env.SharedLibrary(
+    "../addons/gads/native/bin/libgads{}{}".format(env["suffix"], env["SHLIBSUFFIX"]),
+    source=sources,
+)
+env.NoCache(library)
+Default(library)

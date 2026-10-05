@@ -1,0 +1,10 @@
+[configuration]
+
+entry_symbol = "gads_library_init"
+compatibility_minimum = "4.7"
+reloadable = false
+
+[libraries]
+
+linux.x86_64 = "res://addons/gads/native/bin/libgads.linux.template_release.x86_64.so"
+windows.x86_64 = "res://addons/gads/native/bin/libgads.windows.template_release.x86_64.dll"

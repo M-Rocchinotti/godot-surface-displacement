@@ -25,3 +25,12 @@ __pycache__/
 # Secrets
 .env
 *.env
+
+# Native build: godot-cpp checkout, objects, generated headers (the libraries in
+# addons/gads/native/bin/ are committed)
+native/godot-cpp/
+native/gen/
+native/**/*.o
+native/**/*.os
+native/**/*.obj
+native/.sconsign*.dblite

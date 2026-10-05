@@ -16,6 +16,7 @@
 /docs export-ignore
 /tests export-ignore
 /tools export-ignore
+/native export-ignore
 /icon.svg export-ignore
 /icon.svg.import export-ignore
 /project.godot export-ignore
