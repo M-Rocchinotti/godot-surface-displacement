@@ -35,6 +35,7 @@ func _run() -> void:
 	await _test("pebbles_stay_put", test_pebbles)
 	await _test("lifetime_resize_viewports", test_lifetime)
 	await _test("demo_scenes_render", test_demo_scenes)
+	await _test("demo_camera_flies", test_demo_camera)
 	print("\nfield tests: %d passed, %d failed" % [_passed, _failed])
 	h.clear_scene()
 	h.viewport.queue_free()
@@ -734,3 +735,40 @@ func test_demo_scenes() -> void:
 		scene.queue_free()
 		await h.frames(3)
 	h.make_viewport(SIZE, true)
+
+
+## The demo's fly camera moves while the right mouse button and W are held. (Its script is
+## attached by demo_main.gd; attached after the camera is ready, it never processes.)
+func test_demo_camera() -> void:
+	h.clear_scene()
+	var demo: Node = (load("res://demo/demo_main.tscn") as PackedScene).instantiate()
+	h.viewport.add_child(demo)
+	await h.frames(3)
+	var cam := (demo.get("scene") as Node).get_node("Camera") as Camera3D
+	var start := cam.global_position
+	var forward := -cam.global_basis.z
+	var events: Array[InputEvent] = []
+	var button := InputEventMouseButton.new()
+	button.button_index = MOUSE_BUTTON_RIGHT
+	button.button_mask = MOUSE_BUTTON_MASK_RIGHT
+	events.append(button)
+	var key := InputEventKey.new()
+	key.keycode = KEY_W
+	key.physical_keycode = KEY_W
+	events.append(key)
+	for e in events:
+		e.set("pressed", true)
+		Input.parse_input_event(e)
+	await h.frames(10)
+	var moved := (cam.global_position - start).dot(forward)
+	for e in events:
+		e.set("pressed", false)
+		Input.parse_input_event(e)
+	await h.frames(2)
+	print("  moved %.3f m forward" % moved)
+	check(moved > 0.02, "holding the right mouse button and W flies the demo camera forward")
+	for field: DisplacementField3D in demo.find_children("*", "DisplacementField3D", true, false):
+		if field.is_baking():
+			await field.baked
+	demo.queue_free()
+	await h.frames(3)

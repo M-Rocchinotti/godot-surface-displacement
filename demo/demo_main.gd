@@ -42,6 +42,10 @@ func load_scene(index: int) -> void:
 		scene.queue_free()
 		remove_child(scene)
 	scene = Builder.build(index)
+	var cam := scene.get_node("Camera") as Camera3D
+	# Before the scene enters the tree: Godot turns on _process and input handling for a node's
+	# script when the node becomes ready, so a script attached later never moves the camera.
+	cam.set_script(FlyCamera)
 	add_child(scene)
 	sd = scene.get_node("SurfaceDisplacement") as SurfaceDisplacement
 	if old_sd != null:
@@ -53,8 +57,6 @@ func load_scene(index: int) -> void:
 		sd.debug_view = old_sd.debug_view
 	else:
 		sd.preset = _preset
-	var cam := scene.get_node("Camera") as Camera3D
-	cam.set_script(FlyCamera)
 	cam.current = true
 	_scene_option.select(index)
 	set_view(mini(_view_index, Builder.VIEW_NAMES.size() - 1))
