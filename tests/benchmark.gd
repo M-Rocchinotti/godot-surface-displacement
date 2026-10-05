@@ -9,8 +9,8 @@ extends SceneTree
 ## using the same albedo, normal and ORM textures at the same texel density (plain normal
 ## mapping), measured before and after the rows (median of both). Every row is measured three
 ## times (150 warm-up + 300 sampled frames each) and the median is reported; "added" is the
-## viewport GPU time minus the baseline's. The budget check uses the Low / Medium / High / Epic
-## targets of SDSettings.get_budget_ms(). Exit code 1 if a preset is over budget.
+## viewport GPU time minus the baseline's. The budget check uses the Low / Medium / High / Ultra
+## targets of GADSSettings.get_budget_ms(). Exit code 1 if a preset is over budget.
 ## Results: stdout and build/benchmark_results.md.
 ##
 ##     python tools/godot.py --script tests/benchmark.gd -- --explore
@@ -30,7 +30,7 @@ var _lines: PackedStringArray = []
 func _initialize() -> void:
 	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
 	root.size = Vector2i(640, 360)
-	SDGlobals.ensure_registered()
+	GADSGlobals.ensure_registered()
 	viewport = SubViewport.new()
 	viewport.size = SIZE
 	viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
@@ -44,8 +44,8 @@ func _log(line: String) -> void:
 	_lines.append(line)
 
 
-## [param mode]: "baseline" or an SDSettings.Preset (optionally with feature switches off).
-func build(sd_mode: Variant, features := {}) -> void:
+## [param mode]: "baseline" or an GADSSettings.Preset (optionally with feature switches off).
+func build(gads_mode: Variant, features := {}) -> void:
 	if scene != null:
 		scene.queue_free()
 		await process_frame
@@ -56,11 +56,11 @@ func build(sd_mode: Variant, features := {}) -> void:
 	var plane := PlaneMesh.new()
 	plane.size = Vector2(400, 400)
 	ground.mesh = plane
-	var sd := env_root.get_node("SurfaceDisplacement") as SurfaceDisplacement
+	var gads := env_root.get_node("GADSManager") as GADSManager
 	var base := "res://demo/textures/clean_pebbles/clean_pebbles"
-	if sd_mode is String:
+	if gads_mode is String:
 		var orm := ORMMaterial3D.new()
-		# The plane's UV spans it once; the SD material repeats every texture_size_m (2 m).
+		# The plane's UV spans it once; the GADS material repeats every texture_size_m (2 m).
 		orm.uv1_scale = Vector3(plane.size.x / 2.0, plane.size.y / 2.0, 1.0)
 		orm.albedo_texture = load(base + "_albedo.jpg")
 		orm.normal_enabled = true
@@ -69,27 +69,27 @@ func build(sd_mode: Variant, features := {}) -> void:
 		orm.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS_ANISOTROPIC
 		orm.metallic = 0.0
 		ground.material_override = orm
-		sd.preset = SDSettings.Preset.OFF
+		gads.preset = GADSSettings.Preset.OFF
 	else:
 		var mat := Builder.ground_material("clean_pebbles")
 		ground.material_override = mat
-		var field := DisplacementField3D.new()
+		var field := GADSDisplacementField3D.new()
 		field.layers = [mat]
 		field.bake_on_ready = false
 		env_root.add_child(field)
-		field.add_child(PebbleScatter3D.new())
-		sd.preset = sd_mode
+		field.add_child(GADSPebbleScatter3D.new())
+		gads.preset = gads_mode
 		for key: String in features:
 			if key == "settings":
-				sd.custom_settings = features[key]
-				sd.preset = SDSettings.Preset.CUSTOM
+				gads.custom_settings = features[key]
+				gads.preset = GADSSettings.Preset.CUSTOM
 			elif key == "label":
 				pass
 			elif key == "depth_write":
 				# The opt-in depth write on the ground material itself.
-				SDMaterials.set_depth_write(mat, true)
+				GADSMaterials.set_depth_write(mat, true)
 			else:
-				sd.set(key, features[key])
+				gads.set(key, features[key])
 	env_root.add_child(ground)
 	viewport.add_child(scene)
 	(env_root.get_node("Camera") as Camera3D).current = true
@@ -132,15 +132,15 @@ func measure() -> Dictionary:
 ## Candidate settings for the explore mode: a base preset with near-camera geometry changes.
 static func explore_rows() -> Array:
 	var rows := []
-	for base: SDSettings.Preset in [SDSettings.Preset.HIGH, SDSettings.Preset.EPIC]:
+	for base: GADSSettings.Preset in [GADSSettings.Preset.HIGH, GADSSettings.Preset.ULTRA]:
 		for cfg: Array in [[4, 256, 0.015], [4, 160, 0.02], [4, 128, 0.03], [4, 96, 0.04], [3, 128, 0.03], [3, 96, 0.04], [4, 80, 0.05]]:
-			var s := SDSettings.create_preset(base)
+			var s := GADSSettings.create_preset(base)
 			s.near_field_levels = cfg[0]
 			s.near_field_resolution = cfg[1]
 			s.near_field_spacing = cfg[2]
 			var reach: float = cfg[1] / 2.0 * pow(2.0, cfg[0] - 1) * cfg[2]
 			rows.append([base, {"settings": s, "label": "field %d x %d at %.1f cm (reach %.1f m)" % [cfg[0], cfg[1], cfg[2] * 100.0, reach]}])
-		var no_field := SDSettings.create_preset(base)
+		var no_field := GADSSettings.create_preset(base)
 		no_field.near_field_enabled = false
 		rows.append([base, {"settings": no_field, "label": "no field"}])
 	return rows
@@ -149,7 +149,7 @@ static func explore_rows() -> Array:
 func _run() -> void:
 	var explore := OS.get_cmdline_user_args().has("--explore")
 	await process_frame
-	_log("# Surface Displacement benchmark" + (" (explore)" if explore else ""))
+	_log("# GADS benchmark" + (" (explore)" if explore else ""))
 	_log("")
 	_log("GPU: %s | %s | %dx%d, V-Sync off, %d x (%d warm-up + %d sampled frames), median" % [
 		RenderingServer.get_video_adapter_name(), RenderingServer.get_video_adapter_api_version(), SIZE.x, SIZE.y,
@@ -157,11 +157,11 @@ func _run() -> void:
 	await build("baseline")
 	var base_first := await measure()
 	var rows := explore_rows() if explore else [
-		[SDSettings.Preset.OFF, {}], [SDSettings.Preset.LOW, {}], [SDSettings.Preset.MEDIUM, {}],
-		[SDSettings.Preset.HIGH, {}], [SDSettings.Preset.EPIC, {}],
-		[SDSettings.Preset.EPIC, {"scatter": false}], [SDSettings.Preset.EPIC, {"near_field": false}],
-		[SDSettings.Preset.EPIC, {"near_field": false, "self_shadow": false}],
-		[SDSettings.Preset.MEDIUM, {"depth_write": true}],
+		[GADSSettings.Preset.OFF, {}], [GADSSettings.Preset.LOW, {}], [GADSSettings.Preset.MEDIUM, {}],
+		[GADSSettings.Preset.HIGH, {}], [GADSSettings.Preset.ULTRA, {}],
+		[GADSSettings.Preset.ULTRA, {"scatter": false}], [GADSSettings.Preset.ULTRA, {"near_field": false}],
+		[GADSSettings.Preset.ULTRA, {"near_field": false, "self_shadow": false}],
+		[GADSSettings.Preset.MEDIUM, {"depth_write": true}],
 	]
 	var results := []
 	for row: Array in rows:
@@ -184,8 +184,8 @@ func _run() -> void:
 		var r: Dictionary = results[i]
 		var feature_map: Dictionary = row[1]
 		var added: float = r["gpu"] - base["gpu"]
-		var budget := SDSettings.get_budget_ms(row[0])
-		var budget_row: bool = feature_map.is_empty() and row[0] != SDSettings.Preset.OFF
+		var budget := GADSSettings.get_budget_ms(row[0])
+		var budget_row: bool = feature_map.is_empty() and row[0] != GADSSettings.Preset.OFF
 		var ok := added <= budget
 		if budget_row and not ok:
 			failures += 1
@@ -194,7 +194,7 @@ func _run() -> void:
 			feats = feature_map["label"]
 		elif not feature_map.is_empty():
 			feats = ", ".join(feature_map.keys().map(func(k: String) -> String: return ("+ " if feature_map[k] else "no ") + k.replace("_", " ")))
-		_log("| %s | %s | %.3f | %.3f | %s | %.3f | %s |" % [SDSettings.preset_name(row[0]), feats, r["gpu"], added,
+		_log("| %s | %s | %.3f | %.3f | %s | %.3f | %s |" % [GADSSettings.preset_name(row[0]), feats, r["gpu"], added,
 				"%.1f" % budget if budget_row else "-", r["spread"], ("PASS" if ok else "OVER") if budget_row else "-"])
 	_log("")
 	if not explore:

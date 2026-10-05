@@ -20,7 +20,7 @@ PROBLEMS = [
     re.compile(r"^ERROR:"),
     re.compile(r"was leaked|were leaked|leaked at exit", re.IGNORECASE),
     re.compile(r"resources still in use", re.IGNORECASE),
-    re.compile(r"^WARNING:.*(surface_displacement|Surface Displacement|SurfaceDisplacement|SDGlobals|DisplacementField3D|PebbleScatter3D)"),
+    re.compile(r"^WARNING:.*(addons/gads|GADS)"),
     re.compile(r"SHADER ERROR"),
 ]
 

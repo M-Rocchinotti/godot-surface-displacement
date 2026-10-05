@@ -18,7 +18,7 @@ and which is lossy besides. For those sets the 16-bit Displacement PNG is fetche
 and each set's manifest entry says which file to use in height_source ("exr" or "png16").
 
 Files keep Poly Haven's names and go to <dest>/<asset id>/. The destination is --dest, else
-the SD_TEXTURE_CACHE environment variable, else E:\\dev-cache\\polyhaven-hq. Next to the
+the GADS_TEXTURE_CACHE environment variable, else E:\\dev-cache\\polyhaven-hq. Next to the
 maps each set gets <id>.license.json (license, source page, authors, the exact URLs,
 retrieval date, real-world size), and <dest>/manifest.json lists every set's local paths,
 md5s, byte sizes, real-world size in metres and what its height files contain (EXR channel
@@ -56,7 +56,7 @@ from pathlib import Path
 API = "https://api.polyhaven.com"
 USER_AGENT = "godot-surface-displacement-texture-fetch/0.1 (github.com/M-Rocchinotti)"
 DEFAULT_DEST = Path(r"E:\dev-cache\polyhaven-hq")
-DEST_ENV = "SD_TEXTURE_CACHE"
+DEST_ENV = "GADS_TEXTURE_CACHE"
 LICENSE = "CC0-1.0"
 LICENSE_URL = "https://creativecommons.org/publicdomain/zero/1.0/"
 

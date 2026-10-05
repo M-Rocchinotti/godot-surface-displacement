@@ -28,11 +28,11 @@ FPS = 30
 FONT = "fontfile='C\\:/Windows/Fonts/segoeuib.ttf'" if sys.platform == "win32" else "font=Sans"
 
 SINGLE = {
-    "gravel_path_walk": "Gravel path, eye-level walk (Epic: POM, self-shadowing, near-camera geometry, pebbles)",
-    "gravel_path_grazing": "Gravel path, low sweep across the path (Epic)",
-    "cobblestone_street_walk": "Cobblestone street, eye-level walk (Epic)",
-    "cobblestone_street_grazing": "Cobblestone street, low sweep (Epic)",
-    "brick_wall_walk": "Brick wall and props, walk along the wall (Epic; left box parallax only, right wall baked geometry)",
+    "gravel_path_walk": "Gravel path, eye-level walk (Ultra: POM, self-shadowing, near-camera geometry, pebbles)",
+    "gravel_path_grazing": "Gravel path, low sweep across the path (Ultra)",
+    "cobblestone_street_walk": "Cobblestone street, eye-level walk (Ultra)",
+    "cobblestone_street_grazing": "Cobblestone street, low sweep (Ultra)",
+    "brick_wall_walk": "Brick wall and props, walk along the wall (Ultra; left box parallax only, right wall baked geometry)",
 }
 COMPARE = {
     "compare_gravel_path_grazing": "Gravel path, low sweep: flat normal mapping (left) vs full displacement (right)",

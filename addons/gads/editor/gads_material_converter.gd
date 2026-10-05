@@ -1,0 +1,141 @@
+@tool
+class_name GADSMaterialConverter
+extends RefCounted
+## Converts BaseMaterial3D (StandardMaterial3D / ORMMaterial3D) materials that use a height map,
+## on meshes and CSG shapes, into GADS materials. [method plan] only looks; [method apply] assigns (the
+## editor plugin wraps the same assignments in undo/redo).
+##
+## What carries over: albedo colour and texture, normal map and scale, ORM texture
+## (ORMMaterial3D) or constant roughness / metallic, AO on/off, specular, UV scale and offset,
+## world triplanar mapping and its sharpness, the height map (flipped if the material flips it).
+## The relief depth is BaseMaterial3D's heightmap_scale (hundredths of a texture repeat) turned
+## into metres with [param metres_per_repeat] (default 1 m per texture repeat) - check it per
+## material. Materials with transparency, emission, unshaded shading, object-space triplanar
+## mapping or separate AO / roughness / metallic textures are not converted (reported in
+## "skipped" with the reason).
+
+
+## Slot numbers of an assignment besides surface indices.
+const SLOT_OVERRIDE := -1
+const SLOT_CSG_MATERIAL := -2
+
+
+## {"assignments": [{"node", "surface" (a MeshInstance3D surface, [constant SLOT_OVERRIDE] =
+## material_override, [constant SLOT_CSG_MATERIAL] = a CSG shape's material), "from" (the
+## material that was drawn), "previous" (what the slot held, possibly null), "to"}], "skipped":
+## [{"node", "material", "reason"}], "converted": number of distinct materials}.
+static func plan(roots: Array[Node], metres_per_repeat := 1.0) -> Dictionary:
+	var assignments := []
+	var skipped := []
+	var converted := {}
+	var nodes: Array[Node] = []
+	for r in roots:
+		if r is GeometryInstance3D:
+			nodes.append(r)
+		nodes.append_array(r.find_children("*", "MeshInstance3D", true, false))
+		nodes.append_array(r.find_children("*", "CSGShape3D", true, false))
+	for node in nodes:
+		var gi := node as GeometryInstance3D
+		var slots := []
+		if gi == null:
+			continue
+		elif gi.material_override != null:
+			slots.append([SLOT_OVERRIDE, gi.material_override])
+		elif gi is MeshInstance3D:
+			var mi := gi as MeshInstance3D
+			if mi.mesh == null:
+				continue
+			for s in mi.mesh.get_surface_count():
+				var m := mi.get_surface_override_material(s)
+				slots.append([s, m if m != null else mi.mesh.surface_get_material(s)])
+		elif gi.is_class("CSGShape3D") and "material" in gi:
+			slots.append([SLOT_CSG_MATERIAL, gi.get("material")])
+		for slot: Array in slots:
+			var material := slot[1] as BaseMaterial3D
+			if material == null:
+				continue
+			var reason := skip_reason(material)
+			if not reason.is_empty():
+				skipped.append({"node": gi, "material": material, "reason": reason})
+				continue
+			if not converted.has(material):
+				converted[material] = convert_material(material, metres_per_repeat)
+			assignments.append({"node": gi, "surface": slot[0], "from": slot[1], "previous": current(gi, slot[0]), "to": converted[material]})
+	return {"assignments": assignments, "skipped": skipped, "converted": converted.size()}
+
+
+static func apply(planned: Dictionary) -> void:
+	for a: Dictionary in planned["assignments"]:
+		assign(a["node"], a["surface"], a["to"])
+
+
+## The property behind a slot that is not a surface: material_override, or a CSG shape's material.
+static func slot_property(slot: int) -> String:
+	return "material" if slot == SLOT_CSG_MATERIAL else "material_override"
+
+
+## What [param slot] of [param node] holds (for a surface its override, not the mesh's material).
+static func current(node: GeometryInstance3D, slot: int) -> Material:
+	if slot >= 0:
+		return (node as MeshInstance3D).get_surface_override_material(slot)
+	return node.get(slot_property(slot)) as Material
+
+
+static func assign(node: GeometryInstance3D, slot: int, material: Material) -> void:
+	if slot >= 0:
+		(node as MeshInstance3D).set_surface_override_material(slot, material)
+	else:
+		node.set(slot_property(slot), material)
+
+
+## Why [param m] cannot be converted, or "" if it can.
+static func skip_reason(m: BaseMaterial3D) -> String:
+	if not m.heightmap_enabled or m.heightmap_texture == null:
+		return "no height map (nothing to displace)"
+	if m.transparency != BaseMaterial3D.TRANSPARENCY_DISABLED:
+		return "transparent"
+	if m.shading_mode != BaseMaterial3D.SHADING_MODE_PER_PIXEL:
+		return "not per-pixel shaded"
+	if m.emission_enabled:
+		return "emission is not supported"
+	if m.uv1_triplanar and not m.uv1_world_triplanar:
+		return "object-space triplanar (GADS's triplanar mapping is in world space)"
+	if not m is ORMMaterial3D and (m.roughness_texture != null or m.metallic_texture != null or (m.ao_enabled and m.ao_texture != null)):
+		return "separate AO / roughness / metallic textures (pack them into one ORM texture first)"
+	return ""
+
+
+static func convert_material(m: BaseMaterial3D, metres_per_repeat := 1.0) -> ShaderMaterial:
+	var triplanar := m.uv1_triplanar
+	var mapping := GADSMaterials.Mapping.TRIPLANAR if triplanar else GADSMaterials.Mapping.UV
+	var textures := {"albedo": m.albedo_texture, "height": m.heightmap_texture}
+	if m.normal_enabled and m.normal_texture != null:
+		textures["normal"] = m.normal_texture
+	var params := {
+		"albedo_tint": m.albedo_color,
+		"normal_strength": m.normal_scale if m.normal_enabled else 0.0,
+		"roughness_scale": m.roughness,
+		"metallic_scale": m.metallic,
+		"specular": m.metallic_specular,
+		"ao_strength": 0.0,
+		"height_center": 1.0,
+		"height_remap": Vector2(1.0, 0.0) if m.heightmap_flip_texture else Vector2(0.0, 1.0),
+	}
+	if m is ORMMaterial3D:
+		textures["orm"] = m.orm_texture
+		# ORMMaterial3D reads roughness and metallic from the texture unscaled.
+		params["roughness_scale"] = 1.0
+		params["metallic_scale"] = 1.0
+		params["ao_strength"] = 1.0 if m.ao_enabled else 0.0
+	if triplanar:
+		var scale := m.uv1_scale
+		params["texture_size_m"] = Vector2(1.0 / maxf(scale.x, 1e-4), 1.0 / maxf(scale.z, 1e-4))
+		params["triplanar_sharpness"] = clampf(m.uv1_triplanar_sharpness, 1.0, 16.0)
+		params["height_m"] = m.heightmap_scale * 0.01 * params["texture_size_m"].x
+	else:
+		params["uv_scale"] = Vector2(m.uv1_scale.x, m.uv1_scale.y)
+		params["uv_offset"] = Vector2(m.uv1_offset.x, m.uv1_offset.y)
+		params["height_m"] = m.heightmap_scale * 0.01 * metres_per_repeat
+	var out := GADSMaterials.create(mapping, textures, params)
+	out.resource_name = (m.resource_name if not m.resource_name.is_empty() else "material") + " (GADS)"
+	return out

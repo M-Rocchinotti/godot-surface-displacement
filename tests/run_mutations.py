@@ -19,19 +19,19 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 RUNNER = ROOT / "tools" / "godot.py"
-SH = "addons/surface_displacement/shaders/"
-CORE = SH + "sd_core.gdshaderinc"
-COMMON = SH + "sd_common.gdshaderinc"
-MARCH = SH + "sd_march.gdshaderinc"
-SURFACE = SH + "sd_surface.gdshaderinc"
-FIELD_SH = SH + "sd_field.gdshaderinc"
-GROUND = SH + "sd_ground.gdshaderinc"
-PEBBLES = SH + "sd_pebble_process.gdshader"
-FIELD = "addons/surface_displacement/nodes/displacement_field_3d.gd"
-MANAGER = "addons/surface_displacement/nodes/surface_displacement.gd"
-BAKE = "addons/surface_displacement/core/sd_ground_bake.gd"
-MATERIALS = "addons/surface_displacement/core/sd_materials.gd"
-SCATTER = "addons/surface_displacement/nodes/pebble_scatter_3d.gd"
+SH = "addons/gads/render/shaders/"
+CORE = SH + "gads_core.gdshaderinc"
+COMMON = SH + "gads_common.gdshaderinc"
+MARCH = SH + "gads_march.gdshaderinc"
+SURFACE = SH + "gads_surface.gdshaderinc"
+FIELD_SH = SH + "gads_field.gdshaderinc"
+GROUND = SH + "gads_ground.gdshaderinc"
+PEBBLES = SH + "gads_pebble_process.gdshader"
+FIELD = "addons/gads/terrain/gads_displacement_field_3d.gd"
+MANAGER = "addons/gads/core/gads_manager.gd"
+BAKE = "addons/gads/terrain/gads_ground_bake.gd"
+MATERIALS = "addons/gads/materials/gads_materials.gd"
+SCATTER = "addons/gads/terrain/gads_pebble_scatter_3d.gd"
 DEMO = "demo/demo_main.gd"
 HEIGHT_IMPORT = "demo/textures/clean_pebbles/clean_pebbles_height.exr.import"
 
@@ -42,7 +42,7 @@ MUTATIONS = [
      [(HEIGHT_IMPORT, "mipmaps/generate=true", "mipmaps/generate=false")],
      [("logic", ""), ("render", "shimmer")]),
     ("march reads mip 0", "the march samples the full-size height map at every distance",
-     [(CORE, "	return max(0.5 * log2(max(rho2, 1e-12)) + sd_pom_range.z, 0.0);", "	return 0.0 * rho2;")],
+     [(CORE, "	return max(0.5 * log2(max(rho2, 1e-12)) + gads_pom_range.z, 0.0);", "	return 0.0 * rho2;")],
      [("render", "shimmer")]),
     ("wrong parallax sign", "the view ray walks the relief the wrong way (the crater floor's suspected bug)",
      [(CORE, "	return vec2(dot(p.gu, v), dot(p.gv, v)) * (dot(n, p.axis) / nv);", "	return -vec2(dot(p.gu, v), dot(p.gv, v)) * (dot(n, p.axis) / nv);")],
@@ -66,20 +66,20 @@ MUTATIONS = [
      [(SURFACE, "	LIGHT_VERTEX = VERTEX + offset_view;", "	LIGHT_VERTEX = VERTEX + 0.0 * offset_view;")],
      [("render", "light_vertex")]),
     ("self-shadow ray reversed", "the self-shadow march walks away from the light",
-     [(CORE, "	vec2 duv_dz = vec2(dot(sd_ss_gu, l), dot(sd_ss_gv, l)) * (na / max(n_dot_l, SD_MIN_NDOTV));",
-       "	vec2 duv_dz = -vec2(dot(sd_ss_gu, l), dot(sd_ss_gv, l)) * (na / max(n_dot_l, SD_MIN_NDOTV));")],
+     [(CORE, "	vec2 duv_dz = vec2(dot(gads_ss_gu, l), dot(gads_ss_gv, l)) * (na / max(n_dot_l, GADS_MIN_NDOTV));",
+       "	vec2 duv_dz = -vec2(dot(gads_ss_gu, l), dot(gads_ss_gv, l)) * (na / max(n_dot_l, GADS_MIN_NDOTV));")],
      [("render", "self_shadow")]),
     ("light(): Lambert diffuse", "light() uses Lambert while the engine shades with Burley",
-     [(COMMON, "		float diffuse_brdf_nl = (1.0 / SD_PI) * fd_v * fd_l * c_n_dot_l;", "		float diffuse_brdf_nl = (1.0 / SD_PI) * c_n_dot_l + 0.0 * fd_v * fd_l;")],
+     [(COMMON, "		float diffuse_brdf_nl = (1.0 / GADS_PI) * fd_v * fd_l * c_n_dot_l;", "		float diffuse_brdf_nl = (1.0 / GADS_PI) * c_n_dot_l + 0.0 * fd_v * fd_l;")],
      [("render", "light_function")]),
     ("light(): clamped GGX", "D clamped to 1 (the engine's saturateHalf is not a clamp)",
-     [(COMMON, "	return k * k * (1.0 / SD_PI);", "	return clamp(k * k * (1.0 / SD_PI), 0.0, 1.0);")],
+     [(COMMON, "	return k * k * (1.0 / GADS_PI);", "	return clamp(k * k * (1.0 / GADS_PI), 0.0, 1.0);")],
      [("render", "light_function")]),
     ("light(): no energy compensation", "direct specular without the engine's multiple-scattering term",
      [(COMMON, "		vec3 energy_compensation = 1.0 + f0 * (1.0 / max(e, 1e-4) - 1.0);", "		vec3 energy_compensation = vec3(1.0) + 0.0 * e;")],
      [("render", "light_function")]),
     ("depth-write leak", "every POM variant writes DEPTH, not only the opt-in ones",
-     [(SURFACE, "#ifdef SD_DEPTH_WRITE\n	// With the depth pre-pass on,", "#ifdef SD_POM\n	// With the depth pre-pass on,")],
+     [(SURFACE, "#ifdef GADS_DEPTH_WRITE\n	// With the depth pre-pass on,", "#ifdef GADS_POM\n	// With the depth pre-pass on,")],
      [("render", "depth")]),
     ("depth not rounded", "the opt-in depth write without the rounding that keeps both passes equal",
      [(SURFACE, "	DEPTH = round(depth / depth_step) * depth_step;", "	DEPTH = depth + 0.0 * depth_step;")],
@@ -94,12 +94,12 @@ MUTATIONS = [
      [(FIELD_SH, "	float lod = log2(base_spacing) + (level + m);", "	float lod = -20.0 + 0.0 * (log2(base_spacing) + level + m);")],
      [("field", "vertex")]),
     ("relief pushed down", "the field displaces downwards (the ground would hide it)",
-     [(FIELD_SH, "	float y = ground + lift + sd_field_fade(xz) * sd_fade(view_distance) * sd_field_relief(xz, lod, w);",
-       "	float y = ground + lift - sd_field_fade(xz) * sd_fade(view_distance) * sd_field_relief(xz, lod, w);")],
+     [(FIELD_SH, "	float y = ground + lift + gads_field_fade(xz) * gads_fade(view_distance) * gads_field_relief(xz, lod, w);",
+       "	float y = ground + lift - gads_field_fade(xz) * gads_fade(view_distance) * gads_field_relief(xz, lod, w);")],
      [("field", "vertex")]),
     ("pebbles hashed by window slot", "each pebble's random position, size and turn seeded by its slot in the camera window, not its world cell",
-     [(PEBBLES, "	uint state = sd_hash(uint(world_cell.x) * 73856093u ^ uint(world_cell.y) * 19349663u",
-       "	uint state = sd_hash(uint(cell_xy.x) * 73856093u ^ uint(cell_xy.y) * 19349663u")],
+     [(PEBBLES, "	uint state = gads_hash(uint(world_cell.x) * 73856093u ^ uint(world_cell.y) * 19349663u",
+       "	uint state = gads_hash(uint(cell_xy.x) * 73856093u ^ uint(cell_xy.y) * 19349663u")],
      [("field", "pebbles")]),
     ("bake ignores layers", "every ground surface is captured as 'not displaceable'",
      [(BAKE, "			copy.set_surface_override_material(s, materials[layer_index(surface_material(mi, s), layers) + 1])",
@@ -112,13 +112,13 @@ MUTATIONS = [
      [(FIELD_SH, "		vec2 dxz_dz = v.xz * (n.y / nv);", "		vec2 dxz_dz = -v.xz * (n.y / nv);")],
      [("field", "field_pom")]),
     ("field self-shadow reversed", "the field's self-shadow march walks away from the light",
-     [(FIELD_SH, "	vec2 dxz_dz = vec2(dot(f_ss_x, l), dot(f_ss_z_axis, l)) * (na / max(n_dot_l, SD_MIN_NDOTV));",
-       "	vec2 dxz_dz = -vec2(dot(f_ss_x, l), dot(f_ss_z_axis, l)) * (na / max(n_dot_l, SD_MIN_NDOTV));")],
+     [(FIELD_SH, "	vec2 dxz_dz = vec2(dot(f_ss_x, l), dot(f_ss_z_axis, l)) * (na / max(n_dot_l, GADS_MIN_NDOTV));",
+       "	vec2 dxz_dz = -vec2(dot(f_ss_x, l), dot(f_ss_z_axis, l)) * (na / max(n_dot_l, GADS_MIN_NDOTV));")],
      [("field", "field_pom")]),
     ("ground steps not marked (shader)", "the field treats kerbs as ground (drapes a ramp over them)",
      [(GROUND, "	float limit = ground_decode.z;", "	float limit = 1e9 + 0.0 * ground_decode.z;")],
      [("field", "baked_ground")]),
-    ("ground steps not marked (CPU)", "SDGroundBake.sample() treats kerbs as ground",
+    ("ground steps not marked (CPU)", "GADSGroundBake.sample() treats kerbs as ground",
      [(BAKE, "			ok = ok and covered[n] and absf(h[n] - h[c]) <= step_limit", "			ok = ok and covered[n]")],
      [("logic", "")]),
     ("ground beyond the bake displaced", "texels outside the bake count as covered (the field continues past the ground's edge)",
@@ -130,11 +130,11 @@ MUTATIONS = [
     ("feature switch adds features", "a feature switch turns on what the preset leaves out",
      [(MANAGER, "	base.near_field_enabled = base.near_field_enabled and near_field", "	base.near_field_enabled = near_field")],
      [("logic", "")]),
-    ("local lights never self-shadow", "omni and spot lights ignore sd_pom_steps.w (directional lights only)",
-     [(SURFACE, "	if (LIGHT_IS_DIRECTIONAL || sd_pom_steps.w > 0.5) {", "	if (LIGHT_IS_DIRECTIONAL) {")],
+    ("local lights never self-shadow", "omni and spot lights ignore gads_pom_steps.w (directional lights only)",
+     [(SURFACE, "	if (LIGHT_IS_DIRECTIONAL || gads_pom_steps.w > 0.5) {", "	if (LIGHT_IS_DIRECTIONAL) {")],
      [("render", "local_light")]),
     ("local lights always self-shadow", "omni and spot lights self-shadow whatever the settings say",
-     [(SURFACE, "	if (LIGHT_IS_DIRECTIONAL || sd_pom_steps.w > 0.5) {", "	if (LIGHT_IS_DIRECTIONAL || sd_pom_steps.w > -0.5) {")],
+     [(SURFACE, "	if (LIGHT_IS_DIRECTIONAL || gads_pom_steps.w > 0.5) {", "	if (LIGHT_IS_DIRECTIONAL || gads_pom_steps.w > -0.5) {")],
      [("render", "local_light")]),
     ("field parameters set every time", "the field sets its parameters even when they did not change (the editor's layer refresh every 30 frames then makes the scatter re-upload its textures)",
      [(FIELD, "	if _material.get_shader_parameter(param) != value:", "	if true:")],

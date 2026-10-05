@@ -1,7 +1,7 @@
 #!/usr/bin/env python
-"""Exercise the Surface Displacement editor plugin in a real (headed) editor.
+"""Exercise the GADS editor plugin in a real (headed) editor.
 
-Builds build/editor_check/ from the shipped archive (addons/surface_displacement as users
+Builds build/editor_check/ from the shipped archive (addons/gads as users
 download it, see shipped_archive.py), a small test plugin (tests/editor_check/
 editor_check_plugin.gd) and a generated scene, then starts the editor. The test plugin runs the
 Tools menu actions (add the node, add a field for the selected ground, convert materials, bake
@@ -28,17 +28,17 @@ PROJECT = """config_version=5
 
 [application]
 
-config/name="Surface Displacement editor check"
+config/name="GADS editor check"
 config/features=PackedStringArray("4.7", "Forward Plus")
 
 [editor_plugins]
 
-enabled=PackedStringArray("res://addons/surface_displacement/plugin.cfg", "res://addons/sd_editor_check/plugin.cfg")
+enabled=PackedStringArray("res://addons/gads/plugin.cfg", "res://addons/gads_editor_check/plugin.cfg")
 """
 
 CHECK_CFG = """[plugin]
 
-name="Surface Displacement editor check"
+name="GADS editor check"
 description="Test-only plugin."
 author="tests"
 version="1.0"
@@ -61,7 +61,7 @@ def main() -> int:
     if (ROOT / "tools" / ".godot_path").exists():
         shutil.copy2(ROOT / "tools" / ".godot_path", DEST / "tools" / ".godot_path")
     shutil.copy2(ROOT / "tools" / "godot.py", DEST / "tools" / "godot.py")
-    check_dir = DEST / "addons" / "sd_editor_check"
+    check_dir = DEST / "addons" / "gads_editor_check"
     check_dir.mkdir(parents=True)
     shutil.copy2(ROOT / "tests" / "editor_check" / "editor_check_plugin.gd", check_dir / "editor_check_plugin.gd")
     (check_dir / "plugin.cfg").write_text(CHECK_CFG, encoding="utf-8")
@@ -79,7 +79,7 @@ def main() -> int:
         if line.startswith(("  ok", "  FAIL", "    ")) or "EDITOR CHECK" in line or "SCRIPT ERROR" in line:
             print(line)
     # Messages the check provokes on purpose: the converter reports the material it skips.
-    problems = problems_in(out, [r"Surface Displacement (info|warning):"])
+    problems = problems_in(out, [r"GADS (info|warning):"])
     for p in problems[:15]:
         print("FAIL (log): " + p)
     if code != 0 or "EDITOR CHECK OK" not in out or problems:

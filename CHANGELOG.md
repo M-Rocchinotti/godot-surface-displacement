@@ -4,6 +4,34 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.2.0] - unreleased
+
+### Changed
+
+- **Renamed to GADS (Godot Adaptive Displacement System).** The addon now lives in
+  `addons/gads/`, laid out by subsystem (`core/`, `materials/`, `render/shaders/`, `terrain/`,
+  `editor/`, `import/`). Scenes and scripts need these renames:
+
+  | 0.1 | 0.2 |
+  |---|---|
+  | `addons/surface_displacement/` | `addons/gads/` |
+  | `SurfaceDisplacement` (node) | `GADSManager` |
+  | `SDSettings`, `SDMaterials`, `SDGlobals` | `GADSSettings`, `GADSMaterials`, `GADSGlobals` |
+  | `SDGroundBake`, `SDHeightTools` | `GADSGroundBake`, `GADSHeightTools` |
+  | `SDMaterialConverter`, `SDValidator` | `GADSMaterialConverter`, `GADSValidator` |
+  | `DisplacementField3D`, `PebbleScatter3D` | `GADSDisplacementField3D`, `GADSPebbleScatter3D` |
+  | shader globals `sd_pom_steps`, `sd_pom_range`, `sd_shadow`, `sd_debug`, `sd_dfg` | `gads_pom_steps`, `gads_pom_range`, `gads_shadow`, `gads_debug`, `gads_dfg` |
+  | shaders `shaders/variants/sd_<mapping>_<quality>[_depth].gdshader` | `render/shaders/variants/gads_<mapping>_<quality>[_depth].gdshader` |
+  | shader library `sd_*.gdshaderinc`, `SD_*` defines | `gads_*.gdshaderinc`, `GADS_*` defines |
+  | preset `Epic` | `Ultra` (same settings) |
+  | ground group `sd_ground`, texture metadata `<id>.sd.json` | `gads_ground`, `<id>.gads.json` |
+  | `SDMaterials.is_sd_material()` | `GADSMaterials.is_gads_material()` |
+  | height conversion output `<name>_sd_height.exr` | `<name>_gads_height.exr` |
+
+  Material parameters (`height_m`, `albedo_texture`, ...) keep their names. After updating,
+  enable the plugin once so it registers the `gads_*` shader globals (the `sd_*` entries in
+  Project Settings > Shader Globals can then be removed).
+
 ## [0.1.0] - unreleased (in review)
 
 First version. Requires Godot 4.7+ with the Forward+ renderer.

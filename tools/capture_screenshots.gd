@@ -4,8 +4,8 @@ extends SceneTree
 ##     python tools/godot.py --script tools/capture_screenshots.gd
 ##
 ## For every demo scene and camera view (eye level, grazing) it renders the three comparison
-## modes of the demo - flat (preset Off: normal mapping only), POM (Epic parallax and
-## self-shadowing, no geometry) and POM + geometry (Epic: near-camera geometry and pebbles too)
+## modes of the demo - flat (preset Off: normal mapping only), POM (Ultra parallax and
+## self-shadowing, no geometry) and POM + geometry (Ultra: near-camera geometry and pebbles too)
 ## - and writes each image plus a side-by-side strip. Also a field-rings debug view and the demo
 ## with its UI.
 
@@ -21,7 +21,7 @@ var viewport: SubViewport
 
 func _initialize() -> void:
 	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
-	SDGlobals.ensure_registered()
+	GADSGlobals.ensure_registered()
 	viewport = SubViewport.new()
 	viewport.size = SIZE
 	viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
@@ -42,8 +42,8 @@ func capture() -> Image:
 	return img
 
 
-func set_mode(sd: SurfaceDisplacement, mode: int) -> void:
-	sd.preset = SDSettings.Preset.OFF if mode == 0 else SDSettings.Preset.EPIC
+func set_mode(sd: GADSManager, mode: int) -> void:
+	sd.preset = GADSSettings.Preset.OFF if mode == 0 else GADSSettings.Preset.ULTRA
 	sd.near_field = mode == 2
 	sd.scatter = mode == 2
 	sd.apply()
@@ -57,10 +57,10 @@ func _run() -> void:
 		viewport.add_child(scene)
 		var cam := scene.get_node("Camera") as Camera3D
 		cam.current = true
-		var sd := scene.get_node("SurfaceDisplacement") as SurfaceDisplacement
-		var fields := scene.find_children("*", "DisplacementField3D", true, false)
+		var sd := scene.get_node("GADSManager") as GADSManager
+		var fields := scene.find_children("*", "GADSDisplacementField3D", true, false)
 		await frames(10)
-		for f: DisplacementField3D in fields:
+		for f: GADSDisplacementField3D in fields:
 			if f.is_baking():
 				await f.baked
 		var views: Dictionary = scene.get_meta(&"views")
@@ -78,14 +78,14 @@ func _run() -> void:
 		if index == 0:
 			cam.transform = Builder.view_transform(views["Overview"])
 			set_mode(sd, 2)
-			sd.debug_view = SurfaceDisplacement.DebugView.FIELD_LEVELS
+			sd.debug_view = GADSManager.DebugView.FIELD_LEVELS
 			await frames(30)
 			(await capture()).save_jpg(OUT + "gravel_path_field_levels.jpg", QUALITY)
-			sd.debug_view = SurfaceDisplacement.DebugView.COST
+			sd.debug_view = GADSManager.DebugView.COST
 			cam.transform = Builder.view_transform(views["Eye level"])
 			await frames(20)
 			(await capture()).save_jpg(OUT + "gravel_path_cost.jpg", QUALITY)
-			sd.debug_view = SurfaceDisplacement.DebugView.OFF
+			sd.debug_view = GADSManager.DebugView.OFF
 		scene.queue_free()
 		await frames(5)
 	# The demo with its UI, in its own SubViewport so the capture ignores the desktop size.

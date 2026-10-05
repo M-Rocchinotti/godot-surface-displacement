@@ -2,7 +2,7 @@ extends RefCounted
 ## Builds the demo scenes in code (so they need no editor setup and tests build exactly what the
 ## demo shows): a gravel path, a cobblestone street, rocky ground and a brick wall with props.
 ## Every scene is a Node3D with a WorldEnvironment, a sun, a Camera3D named "Camera", a
-## SurfaceDisplacement node, and "views" metadata: view name -> [camera position, look target].
+## GADSManager node, and "views" metadata: view name -> [camera position, look target].
 
 const TEX := "res://demo/textures/"
 const SCENE_NAMES: Array[String] = ["Gravel path", "Cobblestone street", "Rocky ground", "Brick wall and props"]
@@ -65,16 +65,16 @@ static func make_root(scene_name: String, sun_elevation: float, sun_azimuth: flo
 	cam.near = 0.03
 	cam.far = 400.0
 	root.add_child(cam)
-	var sd := SurfaceDisplacement.new()
-	sd.name = "SurfaceDisplacement"
-	root.add_child(sd)
+	var gads := GADSManager.new()
+	gads.name = "GADSManager"
+	root.add_child(gads)
 	return root
 
 
 static func ground_material(set_id: String, extra := {}) -> ShaderMaterial:
 	var params := {"height_center": 0.0}
 	params.merge(extra, true)
-	var m := SDMaterials.from_texture_set(TEX + set_id, SDMaterials.Mapping.WORLD, params)
+	var m := GADSMaterials.from_texture_set(TEX + set_id, GADSMaterials.Mapping.WORLD, params)
 	m.resource_name = set_id
 	return m
 
@@ -121,14 +121,14 @@ static func _mesh_node(parent: Node3D, node_name: String, mesh: Mesh, material: 
 	return mi
 
 
-static func _field(root: Node3D, layers: Array[ShaderMaterial], scatter: bool) -> DisplacementField3D:
-	var field := DisplacementField3D.new()
-	field.name = "DisplacementField3D"
+static func _field(root: Node3D, layers: Array[ShaderMaterial], scatter: bool) -> GADSDisplacementField3D:
+	var field := GADSDisplacementField3D.new()
+	field.name = "GADSDisplacementField3D"
 	field.layers = layers
 	root.add_child(field)
 	if scatter:
-		var pebbles := PebbleScatter3D.new()
-		pebbles.name = "PebbleScatter3D"
+		var pebbles := GADSPebbleScatter3D.new()
+		pebbles.name = "GADSPebbleScatter3D"
 		field.add_child(pebbles)
 	return field
 
@@ -223,7 +223,7 @@ static func build_gravel_path() -> Node3D:
 	var pebbles := ground_material("clean_pebbles")
 	var dirt := ground_material("forest_ground_04")
 	var terrain := heightfield(Vector2(90, 90), 0.5, func(x: float, z: float) -> float: return terrain_height(x, z))
-	_mesh_node(root, "Terrain", terrain, dirt, Vector3.ZERO, &"sd_ground")
+	_mesh_node(root, "Terrain", terrain, dirt, Vector3.ZERO, &"gads_ground")
 	# The path: a ribbon that follows the terrain 5 mm above it, 2.4 m wide.
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
@@ -253,9 +253,9 @@ static func build_gravel_path() -> Node3D:
 				st.add_index(i)
 	st.generate_normals()
 	st.generate_tangents()
-	_mesh_node(root, "GravelPath", st.commit(), pebbles, Vector3.ZERO, &"sd_ground")
+	_mesh_node(root, "GravelPath", st.commit(), pebbles, Vector3.ZERO, &"gads_ground")
 	_field(root, [pebbles], true)
-	var rock := SDMaterials.from_texture_set(TEX + "rocks_ground_05", SDMaterials.Mapping.TRIPLANAR, {"height_m": 0.06, "height_center": 1.0, "texture_size_m": Vector2(1.5, 1.5)})
+	var rock := GADSMaterials.from_texture_set(TEX + "rocks_ground_05", GADSMaterials.Mapping.TRIPLANAR, {"height_m": 0.06, "height_center": 1.0, "texture_size_m": Vector2(1.5, 1.5)})
 	root.add_child(boulder(rock, Vector3(3.2, terrain_height(3.2, -3.0) + 0.15, -3.0), 0.55, 3))
 	root.add_child(boulder(rock, Vector3(-2.6, terrain_height(-2.6, -9.0) + 0.1, -9.0), 0.4, 5))
 	root.add_child(hero_prop("res://demo/models/hero_rubble_pile.glb", "rubble", Vector3(-3.0, terrain_height(-3.0, 1.5), 1.5), 0.6))
@@ -276,15 +276,15 @@ static func build_cobblestone_street() -> Node3D:
 	var pavers := ground_material("square_cobblestone", {"planar_rotation_deg": 0.0})
 	var street := PlaneMesh.new()
 	street.size = Vector2(8.0, 70.0)
-	_mesh_node(root, "Street", street, cobble, Vector3.ZERO, &"sd_ground")
-	var brick_walls := SDMaterials.from_texture_set(TEX + "brick_wall_001", SDMaterials.Mapping.TRIPLANAR, {"height_center": 1.0})
-	var kerb_mat := SDMaterials.from_texture_set(TEX + "square_cobblestone", SDMaterials.Mapping.TRIPLANAR, {"height_m": 0.01, "height_center": 1.0})
+	_mesh_node(root, "Street", street, cobble, Vector3.ZERO, &"gads_ground")
+	var brick_walls := GADSMaterials.from_texture_set(TEX + "brick_wall_001", GADSMaterials.Mapping.TRIPLANAR, {"height_center": 1.0})
+	var kerb_mat := GADSMaterials.from_texture_set(TEX + "square_cobblestone", GADSMaterials.Mapping.TRIPLANAR, {"height_m": 0.01, "height_center": 1.0})
 	for sx in [-1.0, 1.0]:
 		# Sidewalk: its top is pavers (a field layer, in the ground group); the 15 cm kerb below it
 		# is a box with triplanar pavers (not ground: a vertical step is not a height field).
 		var top := PlaneMesh.new()
 		top.size = Vector2(2.6, 70.0)
-		_mesh_node(root, "SidewalkTop", top, pavers, Vector3(sx * 5.3, 0.15, 0.0), &"sd_ground")
+		_mesh_node(root, "SidewalkTop", top, pavers, Vector3(sx * 5.3, 0.15, 0.0), &"gads_ground")
 		var kerb := BoxMesh.new()
 		kerb.size = Vector3(2.6, 0.146, 70.0)
 		_mesh_node(root, "Kerb", kerb, kerb_mat, Vector3(sx * 5.3, 0.073, 0.0))
@@ -294,7 +294,7 @@ static func build_cobblestone_street() -> Node3D:
 		_mesh_node(root, "Facade", facade, brick_walls, Vector3(sx * 6.9, 3.5, 0.0))
 	_field(root, [cobble, pavers], false)
 	# A UV-mapped wall section with the opt-in depth write, and a crate pushed into it.
-	var wall_mat := SDMaterials.from_texture_set(TEX + "brick_wall_001", SDMaterials.Mapping.UV, {"height_center": 1.0}, SDMaterials.Quality.POM_SELF_SHADOW, true)
+	var wall_mat := GADSMaterials.from_texture_set(TEX + "brick_wall_001", GADSMaterials.Mapping.UV, {"height_center": 1.0}, GADSMaterials.Quality.POM_SELF_SHADOW, true)
 	var wall := _mesh_node(root, "DepthWriteWall", wall_quad(Vector2(3.0, 2.2), 3.0), wall_mat, Vector3(-6.58, 0.15, -6.0))
 	wall.rotation.y = PI * 0.5
 	var crate := BoxMesh.new()
@@ -322,9 +322,9 @@ static func build_rocky_ground() -> Node3D:
 	var root := make_root("Rocky ground", 24.0, 150.0)
 	var rocks := ground_material("rocks_ground_05")
 	var terrain := heightfield(Vector2(70, 70), 0.25, func(x: float, z: float) -> float: return rocky_height(x, z))
-	_mesh_node(root, "Terrain", terrain, rocks, Vector3.ZERO, &"sd_ground")
+	_mesh_node(root, "Terrain", terrain, rocks, Vector3.ZERO, &"gads_ground")
 	_field(root, [rocks], false)
-	var boulder_mat := SDMaterials.from_texture_set(TEX + "rocks_ground_05", SDMaterials.Mapping.TRIPLANAR, {"height_m": 0.08, "height_center": 1.0, "texture_size_m": Vector2(1.5, 1.5)})
+	var boulder_mat := GADSMaterials.from_texture_set(TEX + "rocks_ground_05", GADSMaterials.Mapping.TRIPLANAR, {"height_m": 0.08, "height_center": 1.0, "texture_size_m": Vector2(1.5, 1.5)})
 	root.add_child(boulder(boulder_mat, Vector3(2.5, rocky_height(2.5, -4.0) + 0.2, -4.0), 0.8, 7))
 	root.add_child(hero_prop("res://demo/models/hero_rubble_pile.glb", "rubble", Vector3(-2.0, rocky_height(-2.0, -2.0), -2.0), 0.3))
 	_views(root, {
@@ -342,12 +342,12 @@ static func build_brick_wall() -> Node3D:
 	var floor_mat := ground_material("gravel_stones")
 	var floor_mesh := PlaneMesh.new()
 	floor_mesh.size = Vector2(30.0, 30.0)
-	_mesh_node(root, "Floor", floor_mesh, floor_mat, Vector3.ZERO, &"sd_ground")
+	_mesh_node(root, "Floor", floor_mesh, floor_mat, Vector3.ZERO, &"gads_ground")
 	_field(root, [floor_mat], true)
-	var bricks := SDMaterials.from_texture_set(TEX + "brick_wall_001", SDMaterials.Mapping.UV, {"height_center": 1.0})
+	var bricks := GADSMaterials.from_texture_set(TEX + "brick_wall_001", GADSMaterials.Mapping.UV, {"height_center": 1.0})
 	var back := _mesh_node(root, "BrickWall", wall_quad(Vector2(9.0, 3.0), 3.0), bricks, Vector3(0.0, 0.0, -3.0))
 	back.name = "BrickWall"
-	var bricks_depth := SDMaterials.from_texture_set(TEX + "brick_wall_001", SDMaterials.Mapping.UV, {"height_center": 1.0}, SDMaterials.Quality.POM_SELF_SHADOW, true)
+	var bricks_depth := GADSMaterials.from_texture_set(TEX + "brick_wall_001", GADSMaterials.Mapping.UV, {"height_center": 1.0}, GADSMaterials.Quality.POM_SELF_SHADOW, true)
 	var side := _mesh_node(root, "DepthWriteWall", wall_quad(Vector2(4.0, 3.0), 3.0), bricks_depth, Vector3(-4.5, 0.0, -1.0))
 	side.rotation.y = PI * 0.5
 	var crate := BoxMesh.new()
@@ -359,11 +359,11 @@ static func build_brick_wall() -> Node3D:
 	# The same wall segment twice: parallax only (left) and baked real geometry (right).
 	var box := BoxMesh.new()
 	box.size = Vector3(2.0, 0.9, 0.3)
-	var tri_bricks := SDMaterials.from_texture_set(TEX + "brick_wall_001", SDMaterials.Mapping.TRIPLANAR, {"height_center": 1.0})
+	var tri_bricks := GADSMaterials.from_texture_set(TEX + "brick_wall_001", GADSMaterials.Mapping.TRIPLANAR, {"height_center": 1.0})
 	_mesh_node(root, "PomWallSegment", box, tri_bricks, Vector3(-1.3, 0.45, -0.5))
 	root.add_child(hero_prop("res://demo/models/hero_brick_wall.glb", "brick_wall_001", Vector3(1.3, -0.02, -0.5)))
 	root.add_child(hero_prop("res://demo/models/hero_rubble_pile.glb", "rubble", Vector3(3.2, 0.0, 0.8), 1.2))
-	var rubble := SDMaterials.from_texture_set(TEX + "rubble", SDMaterials.Mapping.TRIPLANAR, {"height_m": 0.05, "height_center": 1.0})
+	var rubble := GADSMaterials.from_texture_set(TEX + "rubble", GADSMaterials.Mapping.TRIPLANAR, {"height_m": 0.05, "height_center": 1.0})
 	var block := BoxMesh.new()
 	block.size = Vector3(0.8, 0.5, 0.6)
 	_mesh_node(root, "RubbleBlock", block, rubble, Vector3(2.2, 0.25, -2.0))

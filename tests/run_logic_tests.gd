@@ -46,126 +46,126 @@ func test_variants() -> void:
 	print("\n== shader variants")
 	var count := 0
 	var ok := true
-	for m in SDMaterials.MAPPING_NAMES.size():
-		for q in SDMaterials.QUALITY_NAMES.size():
+	for m in GADSMaterials.MAPPING_NAMES.size():
+		for q in GADSMaterials.QUALITY_NAMES.size():
 			for depth in [false, true]:
-				var path := SDMaterials.variant_path(m, q, depth)
+				var path := GADSMaterials.variant_path(m, q, depth)
 				var shader := load(path) as Shader
 				if shader == null:
 					ok = false
 					print("  missing variant %s" % path)
 					continue
 				count += 1
-				var info := SDMaterials.parse(shader)
-				var want_depth: bool = depth and q != SDMaterials.Quality.FLAT
+				var info := GADSMaterials.parse(shader)
+				var want_depth: bool = depth and q != GADSMaterials.Quality.FLAT
 				ok = ok and info.get("mapping") == m and info.get("quality") == q and info.get("depth_write") == want_depth
 				# Each variant defines exactly what its name says (the generator is the source).
 				var code := shader.code
-				ok = ok and code.contains("#define SD_POM") == (q != SDMaterials.Quality.FLAT)
-				ok = ok and code.contains("#define SD_SELF_SHADOW") == (q == SDMaterials.Quality.POM_SELF_SHADOW)
-				ok = ok and code.contains("#define SD_DEPTH_WRITE") == want_depth
+				ok = ok and code.contains("#define GADS_POM") == (q != GADSMaterials.Quality.FLAT)
+				ok = ok and code.contains("#define GADS_SELF_SHADOW") == (q == GADSMaterials.Quality.POM_SELF_SHADOW)
+				ok = ok and code.contains("#define GADS_DEPTH_WRITE") == want_depth
 	check(ok, "every mapping x quality x depth variant exists, parses back and defines what its name says (%d loaded)" % count)
-	check(SDMaterials.parse(null).is_empty() and not SDMaterials.is_sd_material(StandardMaterial3D.new()), "other shaders and materials are not taken for SD variants")
-	var mat := SDMaterials.create(SDMaterials.Mapping.UV, {}, {"height_m": 0.02}, SDMaterials.Quality.POM, true)
-	SDMaterials.set_quality(mat, SDMaterials.Quality.FLAT)
-	var flat_info := SDMaterials.parse(mat.shader)
-	SDMaterials.set_quality(mat, SDMaterials.Quality.POM_SELF_SHADOW)
-	var back := SDMaterials.parse(mat.shader)
-	check(flat_info["quality"] == SDMaterials.Quality.FLAT and back["depth_write"] == true and back["quality"] == SDMaterials.Quality.POM_SELF_SHADOW,
+	check(GADSMaterials.parse(null).is_empty() and not GADSMaterials.is_gads_material(StandardMaterial3D.new()), "other shaders and materials are not taken for GADS variants")
+	var mat := GADSMaterials.create(GADSMaterials.Mapping.UV, {}, {"height_m": 0.02}, GADSMaterials.Quality.POM, true)
+	GADSMaterials.set_quality(mat, GADSMaterials.Quality.FLAT)
+	var flat_info := GADSMaterials.parse(mat.shader)
+	GADSMaterials.set_quality(mat, GADSMaterials.Quality.POM_SELF_SHADOW)
+	var back := GADSMaterials.parse(mat.shader)
+	check(flat_info["quality"] == GADSMaterials.Quality.FLAT and back["depth_write"] == true and back["quality"] == GADSMaterials.Quality.POM_SELF_SHADOW,
 			"the opt-in depth write survives a switch to flat and back")
 	check(is_equal_approx(float(mat.get_shader_parameter("height_m")), 0.02), "switching variants keeps the material's parameters")
-	SDMaterials.set_depth_write(mat, false)
-	SDMaterials.set_quality(mat, SDMaterials.Quality.FLAT)
-	SDMaterials.set_quality(mat, SDMaterials.Quality.POM)
-	check(not SDMaterials.parse(mat.shader)["depth_write"], "opting out of the depth write sticks")
+	GADSMaterials.set_depth_write(mat, false)
+	GADSMaterials.set_quality(mat, GADSMaterials.Quality.FLAT)
+	GADSMaterials.set_quality(mat, GADSMaterials.Quality.POM)
+	check(not GADSMaterials.parse(mat.shader)["depth_write"], "opting out of the depth write sticks")
 
 
 # --- Presets -----------------------------------------------------------------------------------
 
 func test_presets() -> void:
 	print("\n== presets")
-	var off := SDSettings.create_preset(SDSettings.Preset.OFF)
-	var low := SDSettings.create_preset(SDSettings.Preset.LOW)
-	var med := SDSettings.create_preset(SDSettings.Preset.MEDIUM)
-	var high := SDSettings.create_preset(SDSettings.Preset.HIGH)
-	var epic := SDSettings.create_preset(SDSettings.Preset.EPIC)
-	check(off.get_quality() == SDMaterials.Quality.FLAT and low.get_quality() == SDMaterials.Quality.POM
-			and med.get_quality() == SDMaterials.Quality.POM_SELF_SHADOW, "Off = flat, Low = POM, Medium and up = POM with self-shadowing")
-	check(not low.near_field_enabled and not med.near_field_enabled and not high.near_field_enabled and epic.near_field_enabled,
-			"near-camera geometry only at Epic")
-	check(epic.scatter_enabled and not high.scatter_enabled, "pebble scatter only at Epic")
+	var off := GADSSettings.create_preset(GADSSettings.Preset.OFF)
+	var low := GADSSettings.create_preset(GADSSettings.Preset.LOW)
+	var med := GADSSettings.create_preset(GADSSettings.Preset.MEDIUM)
+	var high := GADSSettings.create_preset(GADSSettings.Preset.HIGH)
+	var ultra := GADSSettings.create_preset(GADSSettings.Preset.ULTRA)
+	check(off.get_quality() == GADSMaterials.Quality.FLAT and low.get_quality() == GADSMaterials.Quality.POM
+			and med.get_quality() == GADSMaterials.Quality.POM_SELF_SHADOW, "Off = flat, Low = POM, Medium and up = POM with self-shadowing")
+	check(not low.near_field_enabled and not med.near_field_enabled and not high.near_field_enabled and ultra.near_field_enabled,
+			"near-camera geometry only at Ultra")
+	check(ultra.scatter_enabled and not high.scatter_enabled, "pebble scatter only at Ultra")
 	check(low.pom_max_steps <= med.pom_max_steps and med.pom_max_steps <= high.pom_max_steps and low.pom_fade_end <= med.pom_fade_end
 			and med.pom_fade_end <= high.pom_fade_end and low.pom_refine_steps < med.pom_refine_steps and med.pom_refine_steps <= high.pom_refine_steps
-			and high.self_shadow == SDSettings.SelfShadow.SOFT and med.self_shadow == SDSettings.SelfShadow.HARD,
+			and high.self_shadow == GADSSettings.SelfShadow.SOFT and med.self_shadow == GADSSettings.SelfShadow.HARD,
 			"steps, fade distance, refinement and self-shadow quality grow from Low to High")
-	check(epic.self_shadow == SDSettings.SelfShadow.SOFT and epic.pom_max_steps >= med.pom_max_steps and epic.pom_fade_end >= med.pom_fade_end
-			and epic.pom_refine_steps >= med.pom_refine_steps and epic.self_shadow_steps >= med.self_shadow_steps,
-			"Epic keeps soft self-shadowing and at least Medium's parallax next to its geometry")
-	check(high.self_shadow_local_lights and epic.self_shadow_local_lights and not med.self_shadow_local_lights and not low.self_shadow_local_lights,
+	check(ultra.self_shadow == GADSSettings.SelfShadow.SOFT and ultra.pom_max_steps >= med.pom_max_steps and ultra.pom_fade_end >= med.pom_fade_end
+			and ultra.pom_refine_steps >= med.pom_refine_steps and ultra.self_shadow_steps >= med.self_shadow_steps,
+			"Ultra keeps soft self-shadowing and at least Medium's parallax next to its geometry")
+	check(high.self_shadow_local_lights and ultra.self_shadow_local_lights and not med.self_shadow_local_lights and not low.self_shadow_local_lights,
 			"omni and spot lights self-shadow from High up")
 	var budgets := [0.5, 1.2, 2.0, 3.0]
 	var ok := true
 	for p in 4:
-		ok = ok and is_equal_approx(SDSettings.get_budget_ms(p + 1), budgets[p])
-	check(ok, "budgets 0.5 / 1.2 / 2.0 / 3.0 ms for Low / Medium / High / Epic")
+		ok = ok and is_equal_approx(GADSSettings.get_budget_ms(p + 1), budgets[p])
+	check(ok, "budgets 0.5 / 1.2 / 2.0 / 3.0 ms for Low / Medium / High / Ultra")
 
 
-# --- SurfaceDisplacement node ----------------------------------------------------------------
+# --- GADSManager node ----------------------------------------------------------------
 
 func test_manager() -> void:
-	print("\n== SurfaceDisplacement node")
+	print("\n== GADSManager node")
 	var scene := Node3D.new()
-	var sd := SurfaceDisplacement.new()
-	sd.preset = SDSettings.Preset.HIGH
-	scene.add_child(sd)
-	var mat := SDMaterials.create(SDMaterials.Mapping.WORLD, {}, {}, SDMaterials.Quality.POM)
+	var gads := GADSManager.new()
+	gads.preset = GADSSettings.Preset.HIGH
+	scene.add_child(gads)
+	var mat := GADSMaterials.create(GADSMaterials.Mapping.WORLD, {}, {}, GADSMaterials.Quality.POM)
 	var mi := MeshInstance3D.new()
 	mi.mesh = PlaneMesh.new()
 	mi.material_override = mat
 	scene.add_child(mi)
 	root.add_child(scene)
-	sd.apply()
-	check(SDMaterials.parse(mat.shader)["quality"] == SDMaterials.Quality.POM_SELF_SHADOW, "materials in the scene switch to the preset's variant")
-	check(SurfaceDisplacement.find_in(self) == sd, "find_in() finds the node")
-	sd.set_feature(SurfaceDisplacement.Feature.SELF_SHADOW, false)
-	sd.apply()
-	check(SDMaterials.parse(mat.shader)["quality"] == SDMaterials.Quality.POM, "switching self-shadowing off selects the POM variant")
-	sd.set_feature(SurfaceDisplacement.Feature.POM, false)
-	sd.apply()
-	check(SDMaterials.parse(mat.shader)["quality"] == SDMaterials.Quality.FLAT and not sd.is_feature_active(SurfaceDisplacement.Feature.SELF_SHADOW),
+	gads.apply()
+	check(GADSMaterials.parse(mat.shader)["quality"] == GADSMaterials.Quality.POM_SELF_SHADOW, "materials in the scene switch to the preset's variant")
+	check(GADSManager.find_in(self) == gads, "find_in() finds the node")
+	gads.set_feature(GADSManager.Feature.SELF_SHADOW, false)
+	gads.apply()
+	check(GADSMaterials.parse(mat.shader)["quality"] == GADSMaterials.Quality.POM, "switching self-shadowing off selects the POM variant")
+	gads.set_feature(GADSManager.Feature.POM, false)
+	gads.apply()
+	check(GADSMaterials.parse(mat.shader)["quality"] == GADSMaterials.Quality.FLAT and not gads.is_feature_active(GADSManager.Feature.SELF_SHADOW),
 			"switching POM off selects the flat variant and implies no self-shadowing")
-	sd.pom = true
-	sd.self_shadow = true
-	sd.preset = SDSettings.Preset.LOW
-	sd.near_field = true
-	sd.apply()
-	check(not sd.is_feature_active(SurfaceDisplacement.Feature.NEAR_FIELD), "a feature switch cannot add what the preset leaves out")
-	sd.preset = SDSettings.Preset.EPIC
-	sd.near_field = false
-	sd.apply()
-	check(not sd.is_feature_active(SurfaceDisplacement.Feature.SCATTER), "pebble scatter needs the near-camera geometry")
-	var late := SDMaterials.create(SDMaterials.Mapping.UV, {}, {}, SDMaterials.Quality.FLAT)
+	gads.pom = true
+	gads.self_shadow = true
+	gads.preset = GADSSettings.Preset.LOW
+	gads.near_field = true
+	gads.apply()
+	check(not gads.is_feature_active(GADSManager.Feature.NEAR_FIELD), "a feature switch cannot add what the preset leaves out")
+	gads.preset = GADSSettings.Preset.ULTRA
+	gads.near_field = false
+	gads.apply()
+	check(not gads.is_feature_active(GADSManager.Feature.SCATTER), "pebble scatter needs the near-camera geometry")
+	var late := GADSMaterials.create(GADSMaterials.Mapping.UV, {}, {}, GADSMaterials.Quality.FLAT)
 	var mi2 := MeshInstance3D.new()
 	mi2.mesh = PlaneMesh.new()
 	mi2.material_override = late
 	scene.add_child(mi2)
-	check(SDMaterials.parse(late.shader)["quality"] == SDMaterials.Quality.POM_SELF_SHADOW, "materials added later are switched as they enter the tree")
-	sd.enabled = false
-	sd.apply()
-	check(SDMaterials.parse(mat.shader)["quality"] == SDMaterials.Quality.FLAT and is_zero_approx(sd.get_budget_ms()), "enabled = false draws everything flat")
+	check(GADSMaterials.parse(late.shader)["quality"] == GADSMaterials.Quality.POM_SELF_SHADOW, "materials added later are switched as they enter the tree")
+	gads.enabled = false
+	gads.apply()
+	check(GADSMaterials.parse(mat.shader)["quality"] == GADSMaterials.Quality.FLAT and is_zero_approx(gads.get_budget_ms()), "enabled = false draws everything flat")
 	scene.queue_free()
 
 
-## Presets reach SD materials wherever a scene draws them, not only on MeshInstance3D surfaces.
+## Presets reach GADS materials wherever a scene draws them, not only on MeshInstance3D surfaces.
 func test_material_discovery() -> void:
 	print("\n== materials on every kind of geometry")
 	var scene := Node3D.new()
-	var sd := SurfaceDisplacement.new()
-	sd.preset = SDSettings.Preset.HIGH
-	scene.add_child(sd)
+	var gads := GADSManager.new()
+	gads.preset = GADSSettings.Preset.HIGH
+	scene.add_child(gads)
 	var made := {}
 	var flat := func(label: String) -> ShaderMaterial:
-		made[label] = SDMaterials.create(SDMaterials.Mapping.TRIPLANAR, {}, {}, SDMaterials.Quality.FLAT)
+		made[label] = GADSMaterials.create(GADSMaterials.Mapping.TRIPLANAR, {}, {}, GADSMaterials.Quality.FLAT)
 		return made[label]
 	var box := BoxMesh.new()
 	box.material = flat.call("mesh surface")
@@ -210,9 +210,9 @@ func test_material_discovery() -> void:
 	scene.add_child(late)
 	var missed: Array[String] = []
 	for label: String in made:
-		if SDMaterials.parse((made[label] as ShaderMaterial).shader)["quality"] != SDMaterials.Quality.POM_SELF_SHADOW:
+		if GADSMaterials.parse((made[label] as ShaderMaterial).shader)["quality"] != GADSMaterials.Quality.POM_SELF_SHADOW:
 			missed.append(label)
-	check(missed.is_empty(), "the preset reaches SD materials on mesh surfaces, overlays, next passes, CSG shapes, MultiMeshes, GridMaps and particles%s"
+	check(missed.is_empty(), "the preset reaches GADS materials on mesh surfaces, overlays, next passes, CSG shapes, MultiMeshes, GridMaps and particles%s"
 			% ("" if missed.is_empty() else " (missed: %s)" % ", ".join(missed)))
 	scene.queue_free()
 
@@ -222,34 +222,34 @@ func test_validator() -> void:
 	print("\n== Validate Setup")
 	var height := ImageTexture.create_from_image(Image.create(8, 8, true, Image.FORMAT_RH))
 	var good := Node3D.new()
-	var sd := SurfaceDisplacement.new()
-	good.add_child(sd)
-	var ground_mat := SDMaterials.create(SDMaterials.Mapping.WORLD, {"height": height}, {"height_center": 0.0})
+	var gads := GADSManager.new()
+	good.add_child(gads)
+	var ground_mat := GADSMaterials.create(GADSMaterials.Mapping.WORLD, {"height": height}, {"height_center": 0.0})
 	var ground := MeshInstance3D.new()
 	ground.mesh = PlaneMesh.new()
 	ground.material_override = ground_mat
-	ground.add_to_group(&"sd_ground_validator")
+	ground.add_to_group(&"gads_ground_validator")
 	good.add_child(ground)
-	var field := DisplacementField3D.new()
+	var field := GADSDisplacementField3D.new()
 	field.bake_on_ready = false
-	field.ground_group = &"sd_ground_validator"
+	field.ground_group = &"gads_ground_validator"
 	field.layers = [ground_mat]
-	field.add_child(PebbleScatter3D.new())
+	field.add_child(GADSPebbleScatter3D.new())
 	good.add_child(field)
 	root.add_child(good)
-	var clean := SDValidator.validate(good).filter(func(i: Dictionary) -> bool: return i["level"] != "info")
+	var clean := GADSValidator.validate(good).filter(func(i: Dictionary) -> bool: return i["level"] != "info")
 	for i: Dictionary in clean:
 		print("  unexpected: %s" % i["message"])
 	check(clean.is_empty(), "a correct setup gets no errors or warnings")
 	good.queue_free()
 
 	var bad := Node3D.new()
-	var custom := SurfaceDisplacement.new()
-	custom.preset = SDSettings.Preset.CUSTOM
+	var custom := GADSManager.new()
+	custom.preset = GADSSettings.Preset.CUSTOM
 	bad.add_child(custom)
-	bad.add_child(PebbleScatter3D.new())
+	bad.add_child(GADSPebbleScatter3D.new())
 	# A UV-mapped material on a mesh without UVs, and the same on one with UVs.
-	var uv_mat := SDMaterials.create(SDMaterials.Mapping.UV, {"height": height}, {"height_m": 0.0, "height_remap": Vector2(0.4, 0.4)})
+	var uv_mat := GADSMaterials.create(GADSMaterials.Mapping.UV, {"height": height}, {"height_m": 0.0, "height_remap": Vector2(0.4, 0.4)})
 	for with_uv in [false, true]:
 		var st := SurfaceTool.new()
 		st.begin(Mesh.PRIMITIVE_TRIANGLES)
@@ -263,28 +263,28 @@ func test_validator() -> void:
 		mi.mesh = st.commit()
 		mi.material_override = uv_mat
 		bad.add_child(mi)
-	var layer := SDMaterials.create(SDMaterials.Mapping.WORLD, {"height": height}, {"height_center": 0.0})
-	var other_ground := SDMaterials.create(SDMaterials.Mapping.WORLD, {"height": height}, {"height_center": 0.0})
+	var layer := GADSMaterials.create(GADSMaterials.Mapping.WORLD, {"height": height}, {"height_center": 0.0})
+	var other_ground := GADSMaterials.create(GADSMaterials.Mapping.WORLD, {"height": height}, {"height_center": 0.0})
 	other_ground.resource_name = "other_ground"
 	var ground2 := MeshInstance3D.new()
 	ground2.mesh = PlaneMesh.new()
 	ground2.material_override = other_ground
-	ground2.add_to_group(&"sd_ground_validator")
+	ground2.add_to_group(&"gads_ground_validator")
 	bad.add_child(ground2)
-	var many := DisplacementField3D.new()
+	var many := GADSDisplacementField3D.new()
 	many.bake_on_ready = false
-	many.ground_group = &"sd_ground_validator"
+	many.ground_group = &"gads_ground_validator"
 	many.layers = [layer, layer, layer, layer, layer]
-	var stale := SDGroundBake.new()
+	var stale := GADSGroundBake.new()
 	stale.layer_names = PackedStringArray(["res://some_other_layer.tres"])
 	many.ground_bake = stale
 	bad.add_child(many)
 	root.add_child(bad)
-	var messages := "\n".join(SDValidator.validate(bad).map(func(i: Dictionary) -> String: return i["message"]))
+	var messages := "\n".join(GADSValidator.validate(bad).map(func(i: Dictionary) -> String: return i["message"]))
 	var expected := {
 		"Custom preset without settings": "preset Custom without custom_settings",
-		"pebble scatter outside a field": "must be a child of a DisplacementField3D",
-		"UV mapping on a mesh without UVs": "NoUV, surface 0: UV-mapped SD material on a mesh without UVs",
+		"pebble scatter outside a field": "must be a child of a GADSDisplacementField3D",
+		"UV mapping on a mesh without UVs": "NoUV, surface 0: UV-mapped GADS material on a mesh without UVs",
 		"height_m 0": "height_m 0: it draws flat",
 		"a degenerate height_remap": "maps every height to the same value",
 		"more than four layers": "only the first 4 are used",
@@ -305,58 +305,58 @@ func test_validator() -> void:
 func test_settings_changes() -> void:
 	print("\n== settings changes")
 	var scene := Node3D.new()
-	var sd := SurfaceDisplacement.new()
-	var custom := SDSettings.create_preset(SDSettings.Preset.MEDIUM)
-	sd.custom_settings = custom
-	sd.preset = SDSettings.Preset.CUSTOM
-	scene.add_child(sd)
+	var gads := GADSManager.new()
+	var custom := GADSSettings.create_preset(GADSSettings.Preset.MEDIUM)
+	gads.custom_settings = custom
+	gads.preset = GADSSettings.Preset.CUSTOM
+	scene.add_child(gads)
 	root.add_child(scene)
 	await process_frame
 	custom.pom_max_steps = 37
 	custom.self_shadow_local_lights = true
 	await process_frame
 	await process_frame
-	var steps: Vector4 = SDGlobals.get_value(SDGlobals.POM_STEPS)
+	var steps: Vector4 = GADSGlobals.get_value(GADSGlobals.POM_STEPS)
 	check(int(steps.y) == 37 and is_equal_approx(steps.w, 1.0), "a value changed on custom_settings applies at the end of the frame")
-	sd.custom_settings = SDSettings.create_preset(SDSettings.Preset.LOW)
+	gads.custom_settings = GADSSettings.create_preset(GADSSettings.Preset.LOW)
 	await process_frame
 	custom.pom_max_steps = 50
 	await process_frame
 	await process_frame
-	check(int((SDGlobals.get_value(SDGlobals.POM_STEPS) as Vector4).y) == 10, "a replaced settings resource no longer drives the node")
-	sd.preset = SDSettings.Preset.HIGH
-	sd.apply()
-	var high_w := (SDGlobals.get_value(SDGlobals.POM_STEPS) as Vector4).w
-	sd.self_shadow = false
-	sd.apply()
-	var no_shadow_w := (SDGlobals.get_value(SDGlobals.POM_STEPS) as Vector4).w
-	sd.self_shadow = true
-	sd.preset = SDSettings.Preset.MEDIUM
-	sd.apply()
-	var medium_w := (SDGlobals.get_value(SDGlobals.POM_STEPS) as Vector4).w
+	check(int((GADSGlobals.get_value(GADSGlobals.POM_STEPS) as Vector4).y) == 10, "a replaced settings resource no longer drives the node")
+	gads.preset = GADSSettings.Preset.HIGH
+	gads.apply()
+	var high_w := (GADSGlobals.get_value(GADSGlobals.POM_STEPS) as Vector4).w
+	gads.self_shadow = false
+	gads.apply()
+	var no_shadow_w := (GADSGlobals.get_value(GADSGlobals.POM_STEPS) as Vector4).w
+	gads.self_shadow = true
+	gads.preset = GADSSettings.Preset.MEDIUM
+	gads.apply()
+	var medium_w := (GADSGlobals.get_value(GADSGlobals.POM_STEPS) as Vector4).w
 	check(is_equal_approx(high_w, 1.0) and is_zero_approx(no_shadow_w) and is_zero_approx(medium_w),
 			"omni and spot lights self-shadow at High, not at Medium and not with self-shadowing switched off")
 	scene.queue_free()
 	await process_frame
 
 
-# --- DisplacementField3D geometry ------------------------------------------------------------
+# --- GADSDisplacementField3D geometry ------------------------------------------------------------
 
 func test_field_geometry() -> void:
 	print("\n== field geometry")
-	# Epic's field, a node with its defaults, and a dense grid (4 rings of 256 at 1.5 cm).
-	var dense := SDSettings.create_preset(SDSettings.Preset.EPIC)
+	# Ultra's field, a node with its defaults, and a dense grid (4 rings of 256 at 1.5 cm).
+	var dense := GADSSettings.create_preset(GADSSettings.Preset.ULTRA)
 	dense.near_field_levels = 4
 	dense.near_field_resolution = 256
 	dense.near_field_spacing = 0.015
-	var defaults := DisplacementField3D.new()
-	var configs := {"Epic": SDSettings.create_preset(SDSettings.Preset.EPIC), "dense": dense}
-	check(defaults.levels == configs["Epic"].near_field_levels and defaults.resolution == configs["Epic"].near_field_resolution
-			and is_equal_approx(defaults.base_spacing, configs["Epic"].near_field_spacing), "a new field's defaults are Epic's grid")
+	var defaults := GADSDisplacementField3D.new()
+	var configs := {"Ultra": GADSSettings.create_preset(GADSSettings.Preset.ULTRA), "dense": dense}
+	check(defaults.levels == configs["Ultra"].near_field_levels and defaults.resolution == configs["Ultra"].near_field_resolution
+			and is_equal_approx(defaults.base_spacing, configs["Ultra"].near_field_spacing), "a new field's defaults are Ultra's grid")
 	defaults.free()
 	for config_name: String in configs:
-		var s: SDSettings = configs[config_name]
-		var field := DisplacementField3D.new()
+		var s: GADSSettings = configs[config_name]
+		var field := GADSDisplacementField3D.new()
 		field.levels = s.near_field_levels
 		field.resolution = s.near_field_resolution
 		field.base_spacing = s.near_field_spacing
@@ -379,7 +379,7 @@ func test_field_geometry() -> void:
 		check(is_zero_approx(fposmod(o.x, field.get_snap())) or is_equal_approx(fposmod(o.x, field.get_snap()), field.get_snap()),
 				"%s: the origin snaps to the coarsest lattice" % config_name)
 		field.free()
-	var mesh := DisplacementField3D.build_mesh(4, 16)
+	var mesh := GADSDisplacementField3D.build_mesh(4, 16)
 	var arrays := mesh.surface_get_arrays(0)
 	var lattice: PackedVector2Array = arrays[Mesh.ARRAY_TEX_UV]
 	var info: PackedVector2Array = arrays[Mesh.ARRAY_TEX_UV2]
@@ -400,7 +400,7 @@ func test_field_mesh_seams() -> void:
 	print("\n== field seams")
 	var n := 32
 	var levels := 4
-	var mesh := DisplacementField3D.build_mesh(levels, n)
+	var mesh := GADSDisplacementField3D.build_mesh(levels, n)
 	var arrays := mesh.surface_get_arrays(0)
 	var lattice: PackedVector2Array = arrays[Mesh.ARRAY_TEX_UV]
 	var info: PackedVector2Array = arrays[Mesh.ARRAY_TEX_UV2]
@@ -448,7 +448,7 @@ func test_ground_bake_sampling() -> void:
 		for x in n:
 			heights.append(0.1 * x + 0.3 * y)
 			layers.append(0)
-	var bake := SDGroundBake.from_arrays(Vector2i(n, n), heights, layers, Vector2(-1.0, 2.0), 0.5)
+	var bake := GADSGroundBake.from_arrays(Vector2i(n, n), heights, layers, Vector2(-1.0, 2.0), 0.5)
 	var ok := true
 	var normal_ok := true
 	for p: Vector2 in [Vector2(0.1, 3.3), Vector2(0.49, 3.49), Vector2(1.2, 4.1)]:
@@ -480,7 +480,7 @@ func test_ground_bake_sampling() -> void:
 				for x in 5:
 					hs.append(rise_per_texel * x)
 					ls.append(0)
-			var b := SDGroundBake.from_arrays(Vector2i(5, 5), hs, ls, Vector2.ZERO, texel)
+			var b := GADSGroundBake.from_arrays(Vector2i(5, 5), hs, ls, Vector2.ZERO, texel)
 			return b.sample_weights(Vector2(2.5, 2.5) * texel).r > 0.999
 		check(row.call(tan(deg_to_rad(30.0)) * texel) and not row.call(tan(deg_to_rad(45.0)) * texel),
 				"%.2f m texels: a 30-degree slope is ground, a 45-degree slope is a step" % texel)
@@ -490,7 +490,7 @@ func test_ground_bake_sampling() -> void:
 		for x in 8:
 			kerb.append(0.15 if x >= 4 else 0.0)
 			kerb_layers.append(0)
-	var kb := SDGroundBake.from_arrays(Vector2i(8, 5), kerb, kerb_layers, Vector2.ZERO, 0.05)
+	var kb := GADSGroundBake.from_arrays(Vector2i(8, 5), kerb, kerb_layers, Vector2.ZERO, 0.05)
 	check(kb.sample_weights(Vector2(1.5, 2.5) * 0.05).r > 0.999 and kb.sample_weights(Vector2(3.5, 2.5) * 0.05).r < 1e-6
 			and kb.sample_weights(Vector2(4.5, 2.5) * 0.05).r < 1e-6 and kb.sample_weights(Vector2(6.5, 2.5) * 0.05).r > 0.999,
 			"texels on both sides of a 15 cm kerb lose their layer (the field dives there), the others keep it")
@@ -502,7 +502,7 @@ func test_ground_bake_sampling() -> void:
 		for x in 7:
 			flat.append(0.5)
 			mixed.append(-2 if Vector2i(x, y) == Vector2i(3, 3) else (1 if x == 5 else 0))
-	var hb := SDGroundBake.from_arrays(Vector2i(7, 7), flat, mixed, Vector2.ZERO, 0.1)
+	var hb := GADSGroundBake.from_arrays(Vector2i(7, 7), flat, mixed, Vector2.ZERO, 0.1)
 	check(hb.sample_weights(Vector2(0.35, 0.35)).r < 1e-6 and hb.sample_weights(Vector2(0.25, 0.35)).r < 1e-6
 			and absf(hb.sample_height(Vector2(0.35, 0.35)) - 0.5) < 1e-4,
 			"no ground: that cell and its neighbours are not displaceable, its height is its neighbours'")
@@ -534,24 +534,24 @@ func test_node_lifetime() -> void:
 	print("\n== node lifetime")
 	var scene := Builder.build(0)
 	# No rendering device here (--headless): keep the field on its flat-ground fallback.
-	(scene.find_children("*", "DisplacementField3D", true, false)[0] as DisplacementField3D).bake_on_ready = false
+	(scene.find_children("*", "GADSDisplacementField3D", true, false)[0] as GADSDisplacementField3D).bake_on_ready = false
 	root.add_child(scene)
 	for i in 3:
 		await process_frame
-	var field := scene.find_children("*", "DisplacementField3D", true, false)[0] as DisplacementField3D
+	var field := scene.find_children("*", "GADSDisplacementField3D", true, false)[0] as GADSDisplacementField3D
 	check(field.get_mesh_instance() != null and field.get_mesh_instance().get_parent() == field, "the field owns its mesh as an internal child")
 	check(field.get_children(true).has(field.get_mesh_instance()) and not field.get_children(false).has(field.get_mesh_instance()),
 			"which is internal (never saved with the scene)")
 	scene.queue_free()
 	await process_frame
 	await process_frame
-	check(get_nodes_in_group(&"surface_displacement_field").is_empty() and get_nodes_in_group(&"surface_displacement_manager").is_empty(),
+	check(get_nodes_in_group(&"gads_field").is_empty() and get_nodes_in_group(&"gads_manager").is_empty(),
 			"freeing the scene unregisters the field and the manager")
 
 
 # --- Field parameters reach the pebbles, once ----------------------------------------------------
 
-## PebbleScatter3D copies the field's ground and layer parameters. Setting a texture parameter
+## GADSPebbleScatter3D copies the field's ground and layer parameters. Setting a texture parameter
 ## makes the renderer rebuild the material's uniform set, so the copy must happen when the field
 ## changes them, not every frame; and a change must still arrive.
 func test_scatter_parameter_sync() -> void:
@@ -560,11 +560,11 @@ func test_scatter_parameter_sync() -> void:
 	var cam := Camera3D.new()
 	scene.add_child(cam)
 	var height := ImageTexture.create_from_image(Image.create(8, 8, true, Image.FORMAT_RH))
-	var layer := SDMaterials.create(SDMaterials.Mapping.WORLD, {"height": height}, {"height_m": 0.03, "height_center": 0.0})
-	var field := DisplacementField3D.new()
+	var layer := GADSMaterials.create(GADSMaterials.Mapping.WORLD, {"height": height}, {"height_m": 0.03, "height_center": 0.0})
+	var field := GADSDisplacementField3D.new()
 	field.bake_on_ready = false
 	field.layers = [layer]
-	var pebbles := PebbleScatter3D.new()
+	var pebbles := GADSPebbleScatter3D.new()
 	field.add_child(pebbles)
 	scene.add_child(field)
 	root.add_child(scene)

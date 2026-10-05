@@ -1,5 +1,7 @@
 # Surface Displacement benchmark
 
+*Measured before the rename to GADS: "Epic" below is today's Ultra preset, unchanged.*
+
 GPU: NVIDIA GeForce GTX 1080 | 1.4.312 | 1920x1080, V-Sync off, 3 x (150 warm-up + 300 sampled frames), median
 
 Baseline (ORMMaterial3D, same textures and texel density, normal mapping only): viewport GPU 1.408 ms (6 runs before and after the rows, spread 0.030)

@@ -14,7 +14,7 @@ func _initialize() -> void:
 	var height := load("res://height.res") as Texture2D
 	var root := Node3D.new()
 	root.name = "CheckScene"
-	var ground_mat := SDMaterials.create(SDMaterials.Mapping.WORLD, {"height": height}, {"height_center": 0.0, "height_m": 0.03})
+	var ground_mat := GADSMaterials.create(GADSMaterials.Mapping.WORLD, {"height": height}, {"height_center": 0.0, "height_m": 0.03})
 	ground_mat.resource_name = "ground"
 	var ground := MeshInstance3D.new()
 	ground.name = "Ground"

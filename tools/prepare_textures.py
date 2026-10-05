@@ -2,7 +2,7 @@
 """Turn downloaded Poly Haven sets into the demo's texture copies (demo/textures/<id>/).
 
 Input: the cache written by tools/fetch_textures.py (default E:/dev-cache/polyhaven-hq, or the
-SD_TEXTURE_CACHE environment variable, or --cache). Per set it writes:
+GADS_TEXTURE_CACHE environment variable, or --cache). Per set it writes:
 
     <id>_height.exr   16-bit float height, single "R" channel, remapped so the 1st/99th
                       percentiles of the source map become 0/1 (robust against outliers), from the
@@ -12,7 +12,7 @@ SD_TEXTURE_CACHE environment variable, or --cache). Per set it writes:
     *.import          explicit import settings (tools/texture_import.py): mipmaps everywhere,
                       lossless half-float height, BC5 normal map
     <id>.license.json the Poly Haven CC0 record, copied
-    <id>.sd.json      real-world size (m), suggested relief depth (m), source percentiles
+    <id>.gads.json      real-world size (m), suggested relief depth (m), source percentiles
 
     python tools/prepare_textures.py                 # the demo sets at the demo resolutions
     python tools/prepare_textures.py --res 2048 gravel_stones rocks_ground_02
@@ -35,7 +35,7 @@ from png16 import read_png16  # noqa: E402
 from texture_import import write_import  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_CACHE = Path(os.environ.get("SD_TEXTURE_CACHE", "E:/dev-cache/polyhaven-hq"))
+DEFAULT_CACHE = Path(os.environ.get("GADS_TEXTURE_CACHE", "E:/dev-cache/polyhaven-hq"))
 DEFAULT_OUT = ROOT / "demo" / "textures"
 
 # id -> (demo resolution in px, suggested relief depth in metres). The depths are judgement calls
@@ -104,7 +104,7 @@ def prepare(cache: Path, out_root: Path, set_id: str, entry: dict, res: int, hei
         "license": "CC0-1.0",
         "source": f"https://polyhaven.com/a/{set_id}",
     }
-    (out / f"{set_id}.sd.json").write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8", newline="\n")
+    (out / f"{set_id}.gads.json").write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8", newline="\n")
     return meta
 
 

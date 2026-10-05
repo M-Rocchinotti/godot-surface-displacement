@@ -1,10 +1,10 @@
 extends SceneTree
-## Headed render tests of the near-camera geometry (DisplacementField3D), the ground bake, the
+## Headed render tests of the near-camera geometry (GADSDisplacementField3D), the ground bake, the
 ## pebble scatter, node lifetime and the demo scenes:
 ##     python tools/godot.py --script tests/field_tests.gd
 ## Exit code 0 = all passed. Run a subset with: -- --only=name,name
 
-const Harness := preload("res://tests/lib/sd_harness.gd")
+const Harness := preload("res://tests/lib/gads_harness.gd")
 const Builder := preload("res://demo/scenes/demo_builder.gd")
 const SIZE := Vector2i(960, 540)
 const S0 := 0.02
@@ -18,7 +18,7 @@ var _failed := 0
 
 func _initialize() -> void:
 	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
-	SDGlobals.ensure_registered()
+	GADSGlobals.ensure_registered()
 	h = Harness.new(self)
 	h.make_viewport(SIZE, true)
 	_run()
@@ -52,10 +52,10 @@ func _test(test_name: String, fn: Callable) -> void:
 			if not wanted:
 				return
 	print("\n== %s" % test_name)
-	SDSettings.create_preset(SDSettings.Preset.HIGH).apply_globals()
+	GADSSettings.create_preset(GADSSettings.Preset.HIGH).apply_globals()
 	# No distance fade of the parallax relief (it would also scale the geometry).
-	SDGlobals.set_value(SDGlobals.POM_RANGE, Vector4(1000, 2000, 0, 99))
-	SDGlobals.set_value(SDGlobals.DEBUG, Vector4(0, 0.1, 0, 0))
+	GADSGlobals.set_value(GADSGlobals.POM_RANGE, Vector4(1000, 2000, 0, 99))
+	GADSGlobals.set_value(GADSGlobals.DEBUG, Vector4(0, 0.1, 0, 0))
 	await fn.call()
 
 
@@ -71,11 +71,11 @@ func check(condition: bool, what: String) -> void:
 ## A field over flat ground at y = 0 with one layer (world-planar, relief above) using
 ## [param field] as height map, tile [param tile] m, relief [param amp] m, following
 ## [param tracked]. Returns the field.
-func add_field(field: Dictionary, tile: float, amp: float, tracked: Camera3D, quality := SDMaterials.Quality.FLAT) -> DisplacementField3D:
+func add_field(field: Dictionary, tile: float, amp: float, tracked: Camera3D, quality := GADSMaterials.Quality.FLAT) -> GADSDisplacementField3D:
 	var tex := ImageTexture.create_from_image(field["image"])
-	var layer := SDMaterials.create(SDMaterials.Mapping.WORLD, {"height": tex},
-			{"height_m": amp, "height_center": 0.0, "texture_size_m": Vector2(tile, tile)}, SDMaterials.Quality.POM)
-	var f := DisplacementField3D.new()
+	var layer := GADSMaterials.create(GADSMaterials.Mapping.WORLD, {"height": tex},
+			{"height_m": amp, "height_center": 0.0, "texture_size_m": Vector2(tile, tile)}, GADSMaterials.Quality.POM)
+	var f := GADSDisplacementField3D.new()
 	f.levels = LEVELS
 	f.resolution = N
 	f.base_spacing = S0
@@ -133,7 +133,7 @@ func test_vertex_heights() -> void:
 	var centre := origin - Vector2(0.5, 0.5) * S0
 	add_top_camera(centre, S0)
 	var scale := 0.05
-	SDGlobals.set_value(SDGlobals.DEBUG, Vector4(Harness.DEBUG_WORLD_HEIGHT, scale, 0.0, 0.0))
+	GADSGlobals.set_value(GADSGlobals.DEBUG, Vector4(Harness.DEBUG_WORLD_HEIGHT, scale, 0.0, 0.0))
 	await h.frames(5)
 	var img := await h.capture()
 	var mips := []
@@ -167,12 +167,12 @@ func test_vertex_heights() -> void:
 	print("  %d vertices checked (per ring %s), largest error %.4f mm" % [errors.size(), per_ring, worst * 1000.0])
 	check(per_ring[0] > 300 and per_ring[1] > 300 and per_ring[2] > 100, "vertices of the inner three rings are checked")
 	check(worst < 0.00005, "every vertex is at lift + relief of the height map at its ring's mip (within 0.05 mm)")
-	SDGlobals.set_value(SDGlobals.DEBUG, Vector4(0, 0.1, 0, 0))
+	GADSGlobals.set_value(GADSGlobals.DEBUG, Vector4(0, 0.1, 0, 0))
 
 
 ## The field over a baked ground with a gentle slope, a 6 cm kerb, a cell without ground and
 ## ground that is none of the field's layers: every vertex (away from morph bands and the fade)
-## must sit where SDGroundBake.sample() - the CPU twin of sd_ground.gdshaderinc - puts it:
+## must sit where GADSGroundBake.sample() - the CPU twin of gads_ground.gdshaderinc - puts it:
 ## mix(ground - push_down, ground + lift + relief, smoothstep(0.35, 0.65, weight sum)).
 func test_baked_ground() -> void:
 	var tile := 1.28
@@ -196,7 +196,7 @@ func test_baked_ground() -> void:
 			if p.distance_to(Vector2(-1.2, 0.9)) < 0.12:
 				id = -2
 			layer_ids.append(id)
-	var bake := SDGroundBake.from_arrays(cells, heights, layer_ids, bake_origin, texel)
+	var bake := GADSGroundBake.from_arrays(cells, heights, layer_ids, bake_origin, texel)
 	f.ground_bake = bake
 	await h.frames(3)
 	var snap := pow(2.0, LEVELS) * S0
@@ -210,7 +210,7 @@ func test_baked_ground() -> void:
 	# mm, between the 3D and the 2D buffer.)
 	var reference := 0.0
 	var scale := 0.2
-	SDGlobals.set_value(SDGlobals.DEBUG, Vector4(Harness.DEBUG_WORLD_HEIGHT, scale, reference, 0.0))
+	GADSGlobals.set_value(GADSGlobals.DEBUG, Vector4(Harness.DEBUG_WORLD_HEIGHT, scale, reference, 0.0))
 	await h.frames(5)
 	var img := await h.capture()
 	var mips := []
@@ -255,7 +255,7 @@ func test_baked_ground() -> void:
 	print("  %d vertices checked %s, largest error %.4f mm" % [errors.size(), kinds, worst * 1000.0])
 	check(kinds["displaced"] > 1000 and kinds["dived"] > 1000 and kinds["blended"] > 2, "displaced, dived and partly displaced vertices are all checked")
 	check(worst < 0.0003, "every vertex is where the CPU reference of the baked ground puts it (within 0.3 mm)")
-	SDGlobals.set_value(SDGlobals.DEBUG, Vector4(0, 0.1, 0, 0))
+	GADSGlobals.set_value(GADSGlobals.DEBUG, Vector4(0, 0.1, 0, 0))
 
 
 static func percentile(values: Array, q: float) -> float:
@@ -280,15 +280,15 @@ func test_field_pom() -> void:
 			"uv": func(p: Vector3) -> Vector2: return Vector2(p.x, p.z) / tile}
 	var views := {"steep": Vector3(0.25, 1.0, 0.35), "45 deg": Vector3(0.3, 0.75, 0.75), "grazing": Vector3(0.2, 0.42, 1.0)}
 	# Mip 0 forced (LOD bias -10) like the surfaces' test: the reference traces the full-size map.
-	SDGlobals.set_value(SDGlobals.POM_RANGE, Vector4(1000, 2000, -10, 99))
+	GADSGlobals.set_value(GADSGlobals.POM_RANGE, Vector4(1000, 2000, -10, 99))
 	var worst := 0.0
 	for view_name: String in views:
 		h.new_debug_scene()
 		var cam := h.add_camera((views[view_name] as Vector3).normalized() * 1.3, Vector3.ZERO, 60.0)
-		var f := add_field(field, tile, amp, cam, SDMaterials.Quality.POM)
+		var f := add_field(field, tile, amp, cam, GADSMaterials.Quality.POM)
 		var reference := -0.05
 		var scale := 0.1
-		SDGlobals.set_value(SDGlobals.DEBUG, Vector4(Harness.DEBUG_WORLD_HEIGHT, scale, reference, 0.0))
+		GADSGlobals.set_value(GADSGlobals.DEBUG, Vector4(Harness.DEBUG_WORLD_HEIGHT, scale, reference, 0.0))
 		await h.frames(4)
 		var img := await h.capture()
 		var errors := []
@@ -311,16 +311,16 @@ func test_field_pom() -> void:
 		print("  %-8s %4d px  median %.3f mm  p90 %.3f mm" % [view_name, errors.size(), p50, p90])
 		check(errors.size() >= 150 and p50 < 0.2 and p90 < 0.4, "%s: the field's hit within 0.2 mm (median) / 0.4 mm (90 %%) of the traced height field" % view_name)
 		f.free()
-	SDGlobals.set_value(SDGlobals.DEBUG, Vector4(0, 0.1, 0, 0))
+	GADSGlobals.set_value(GADSGlobals.DEBUG, Vector4(0, 0.1, 0, 0))
 
 	# Hard self-shadow, as the surfaces' test does it.
 	h.new_debug_scene()
 	var sun := h.add_sun(25.0, 60.0, false)
 	sun.light_energy = 1.0
 	var cam := h.add_camera(Vector3(0.1, 1.3, 0.6), Vector3(0.0, 0.0, 0.0))
-	add_field(field, tile, amp, cam, SDMaterials.Quality.POM_SELF_SHADOW)
-	SDGlobals.set_value(SDGlobals.SHADOW, Vector4(16, 20, 0, 1))
-	SDGlobals.set_value(SDGlobals.DEBUG, Vector4(Harness.DEBUG_SELF_SHADOW, 0.1, 0.0, 0.0))
+	add_field(field, tile, amp, cam, GADSMaterials.Quality.POM_SELF_SHADOW)
+	GADSGlobals.set_value(GADSGlobals.SHADOW, Vector4(16, 20, 0, 1))
+	GADSGlobals.set_value(GADSGlobals.DEBUG, Vector4(Harness.DEBUG_SELF_SHADOW, 0.1, 0.0, 0.0))
 	await h.frames(4)
 	var img := await h.capture()
 	var to_sun := Harness.light_direction(sun)
@@ -344,8 +344,8 @@ func test_field_pom() -> void:
 	var share := float(agree) / maxf(total, 1.0)
 	print("  self-shadow: %d pixels, %.1f %% in traced shadow, classification agrees on %.1f %%" % [total, 100.0 * shadowed / maxf(total, 1.0), share * 100.0])
 	check(shadowed > total / 10 and share > 0.98, "the field's hard self-shadow agrees with a traced height-field shadow on more than 98 % of pixels")
-	SDGlobals.set_value(SDGlobals.SHADOW, Vector4(8, 20, 0, 1))
-	SDGlobals.set_value(SDGlobals.DEBUG, Vector4(0, 0.1, 0, 0))
+	GADSGlobals.set_value(GADSGlobals.SHADOW, Vector4(8, 20, 0, 1))
+	GADSGlobals.set_value(GADSGlobals.DEBUG, Vector4(0, 0.1, 0, 0))
 
 
 # --- 2. No cracks -------------------------------------------------------------------------------
@@ -357,7 +357,7 @@ func test_no_cracks() -> void:
 	h.new_debug_scene()
 	var cam := h.add_camera(Vector3(0.11, 1.6, 0.07), Vector3(0.0, 0.0, -3.0))
 	var f := add_field(field, 1.0, 0.1, cam)
-	SDGlobals.set_value(SDGlobals.DEBUG, Vector4(Harness.DEBUG_WHITE, 0.1, 0.0, 0.0))
+	GADSGlobals.set_value(GADSGlobals.DEBUG, Vector4(Harness.DEBUG_WHITE, 0.1, 0.0, 0.0))
 	var poses := [[Vector3(0.11, 1.6, 0.07), Vector3(0.0, 0.0, -3.0)], [Vector3(-0.23, 2.5, 0.31), Vector3(1.0, 0.0, -4.0)],
 			[Vector3(0.52, 0.8, -0.17), Vector3(-2.0, 0.0, -2.5)], [Vector3(0.05, 4.0, 0.2), Vector3(0.3, 0.0, -1.5)],
 			[Vector3(-0.41, 1.2, 0.66), Vector3(3.0, 0.0, 1.0)], [Vector3(0.29, 3.2, -0.08), Vector3(-1.0, 0.0, 5.0)]]
@@ -386,7 +386,7 @@ func test_no_cracks() -> void:
 		print("  camera at %s: %d background pixels inside the grid" % [pose[0], black])
 	check(total > 500000, "the views cover the grid (%d pixels)" % total)
 	check(total_black == 0, "no background shows through anywhere in the grid (ring seams are closed)")
-	SDGlobals.set_value(SDGlobals.DEBUG, Vector4(0, 0.1, 0, 0))
+	GADSGlobals.set_value(GADSGlobals.DEBUG, Vector4(0, 0.1, 0, 0))
 
 
 # --- 3. No swimming ----------------------------------------------------------------------------
@@ -404,7 +404,7 @@ func test_no_swimming() -> void:
 	var centre := Vector2(0.2, 0.0)
 	add_top_camera(centre, pixel)
 	var scale := 0.05
-	SDGlobals.set_value(SDGlobals.DEBUG, Vector4(Harness.DEBUG_WORLD_HEIGHT, scale, 0.0, 0.0))
+	GADSGlobals.set_value(GADSGlobals.DEBUG, Vector4(Harness.DEBUG_WORLD_HEIGHT, scale, 0.0, 0.0))
 	await h.frames(4)
 	var morph0 := f.get_morph_range(0)
 	var still_max := 0.0
@@ -434,7 +434,7 @@ func test_no_swimming() -> void:
 	# A 1 cm step moves the morph by 2.6 % of its 0.38 m band; with 5 cm of relief that bounds the
 	# change at about 1.3 mm.
 	check(band_step_max < 0.002, "in the morph band it changes by less than 2 mm per 1 cm step (no pops when the grid snaps)")
-	SDGlobals.set_value(SDGlobals.DEBUG, Vector4(0, 0.1, 0, 0))
+	GADSGlobals.set_value(GADSGlobals.DEBUG, Vector4(0, 0.1, 0, 0))
 
 
 # --- 4. Seamless edge --------------------------------------------------------------------------
@@ -446,7 +446,7 @@ func test_edge_seam() -> void:
 	var results := []
 	for with_field in [true, false]:
 		h.new_lit_scene(Color(0.2, 0.21, 0.24))
-		var mat := SDMaterials.from_texture_set("res://demo/textures/clean_pebbles", SDMaterials.Mapping.WORLD, {"height_center": 0.0})
+		var mat := GADSMaterials.from_texture_set("res://demo/textures/clean_pebbles", GADSMaterials.Mapping.WORLD, {"height_center": 0.0})
 		var plane := PlaneMesh.new()
 		plane.size = Vector2(80, 80)
 		var mi := MeshInstance3D.new()
@@ -456,18 +456,18 @@ func test_edge_seam() -> void:
 		var sun := h.add_sun(30.0, 50.0, true, 40.0)
 		sun.light_energy = 1.4
 		var cam := h.add_camera(Vector3(0.0, 1.7, 0.0), Vector3(0.0, 0.2, -20.0), 70.0)
-		var f := DisplacementField3D.new()
+		var f := GADSDisplacementField3D.new()
 		f.layers = [mat]
 		f.bake_on_ready = false
 		f.camera = cam
 		h.scene.add_child(f)
-		f.set_quality(SDMaterials.Quality.POM_SELF_SHADOW)
+		f.set_quality(GADSMaterials.Quality.POM_SELF_SHADOW)
 		f.visible = with_field
 		await h.frames(8)
 		results.append(await h.capture())
 	# The second scene's camera and field (still alive) have the same transform and settings.
 	var cam := h.scene.find_children("*", "Camera3D", true, false)[0] as Camera3D
-	var f := h.scene.find_children("*", "DisplacementField3D", true, false)[0] as DisplacementField3D
+	var f := h.scene.find_children("*", "GADSDisplacementField3D", true, false)[0] as GADSDisplacementField3D
 	var fade := f.get_fade_range()
 	var band_diff := 0.0
 	var band_n := 0
@@ -542,7 +542,7 @@ func test_ground_bake() -> void:
 	var mesh := Builder.heightfield(Vector2(size, size), step, func(x: float, z: float) -> float: return terrain(x, z))
 	var ground := MeshInstance3D.new()
 	ground.mesh = mesh
-	ground.add_to_group(&"sd_bake_test")
+	ground.add_to_group(&"gads_bake_test")
 	h.scene.add_child(ground)
 	var strip_mat := StandardMaterial3D.new()
 	var strip := MeshInstance3D.new()
@@ -551,12 +551,12 @@ func test_ground_bake() -> void:
 	strip.mesh = strip_mesh
 	strip.material_override = strip_mat
 	strip.position = Vector3(3.0, 1.5, 0.0)
-	strip.add_to_group(&"sd_bake_test")
+	strip.add_to_group(&"gads_bake_test")
 	h.scene.add_child(strip)
 	await h.frames(2)
-	var meshes := SDGroundBake.collect_ground(self, &"sd_bake_test")
+	var meshes := GADSGroundBake.collect_ground(self, &"gads_bake_test")
 	var t0 := Time.get_ticks_msec()
-	var bake := await SDGroundBake.bake(meshes, [strip_mat], 0.05)
+	var bake := await GADSGroundBake.bake(meshes, [strip_mat], 0.05)
 	var ms := Time.get_ticks_msec() - t0
 	check(bake != null and bake.get_size() == Vector2i(320, 320), "a 16 x 16 m ground bakes into 320 x 320 texels of 5 cm (%d ms)" % ms)
 	if bake == null:
@@ -603,7 +603,7 @@ func test_pebbles() -> void:
 	var tracked := add_tracked_camera(Vector3(0.0, 1.7, 0.0))
 	var field := Harness.make_wave_field(64)
 	var f := add_field(field, 1.0, 0.0, tracked)
-	var pebbles := PebbleScatter3D.new()
+	var pebbles := GADSPebbleScatter3D.new()
 	pebbles.valley_bias = 0.0
 	pebbles.radius = 8.0
 	f.add_child(pebbles)
@@ -645,10 +645,10 @@ func test_lifetime() -> void:
 	await h.frames(2)
 	var scene := Builder.build(0)
 	h.viewport.add_child(scene)
-	var sd := scene.get_node("SurfaceDisplacement") as SurfaceDisplacement
+	var gads := scene.get_node("GADSManager") as GADSManager
 	(scene.get_node("Camera") as Camera3D).current = true
-	for preset in [SDSettings.Preset.EPIC, SDSettings.Preset.OFF, SDSettings.Preset.HIGH, SDSettings.Preset.LOW, SDSettings.Preset.EPIC]:
-		sd.preset = preset
+	for preset in [GADSSettings.Preset.ULTRA, GADSSettings.Preset.OFF, GADSSettings.Preset.HIGH, GADSSettings.Preset.LOW, GADSSettings.Preset.ULTRA]:
+		gads.preset = preset
 		await h.frames(6)
 	for size in [Vector2i(1280, 720), Vector2i(320, 180), SIZE]:
 		h.viewport.size = size
@@ -666,18 +666,18 @@ func test_lifetime() -> void:
 	var img := second.get_texture().get_image()
 	check(img != null and not img.is_invisible(), "a second viewport on the same world renders")
 	second.queue_free()
-	var field := scene.find_children("*", "DisplacementField3D", true, false)[0] as DisplacementField3D
+	var field := scene.find_children("*", "GADSDisplacementField3D", true, false)[0] as GADSDisplacementField3D
 	check(field.get_mesh_instance().get_parent() == field, "the field kept its mesh through presets and resizes")
 	scene.queue_free()
 	await h.frames(3)
-	check(get_nodes_in_group(&"surface_displacement_field").is_empty() and get_nodes_in_group(&"surface_displacement_scatter").is_empty()
-			and get_nodes_in_group(&"surface_displacement_manager").is_empty(), "freeing the scene leaves no field, scatter or manager behind")
+	check(get_nodes_in_group(&"gads_field").is_empty() and get_nodes_in_group(&"gads_scatter").is_empty()
+			and get_nodes_in_group(&"gads_manager").is_empty(), "freeing the scene leaves no field, scatter or manager behind")
 	# A scene change while a field bakes its ground: nothing may resume on the freed field (the
 	# log scan of tests/run_all.py fails the suite on the engine's "class instance is gone" error).
 	var baking := Builder.build(0)
 	h.viewport.add_child(baking)
 	await h.frames(1)
-	var baking_field := baking.find_children("*", "DisplacementField3D", true, false)[0] as DisplacementField3D
+	var baking_field := baking.find_children("*", "GADSDisplacementField3D", true, false)[0] as GADSDisplacementField3D
 	check(baking_field.is_baking(), "the gravel path's field bakes its ground at runtime")
 	baking.queue_free()
 	await h.frames(10)
@@ -714,20 +714,20 @@ func test_demo_scenes() -> void:
 		var start := Time.get_ticks_msec()
 		h.viewport.add_child(scene)
 		(scene.get_node("Camera") as Camera3D).current = true
-		var sd := scene.get_node("SurfaceDisplacement") as SurfaceDisplacement
-		for field: DisplacementField3D in scene.find_children("*", "DisplacementField3D", true, false):
+		var gads := scene.get_node("GADSManager") as GADSManager
+		for field: GADSDisplacementField3D in scene.find_children("*", "GADSDisplacementField3D", true, false):
 			if field.is_baking():
 				await field.baked
 			if field.ground_bake != null:
 				print("  %s: ground bake of %s texels in %d ms" % [Builder.SCENE_NAMES[index], field.ground_bake.get_size(), Time.get_ticks_msec() - start])
 		var back_facing := 0
 		for node in scene.find_children("*", "MeshInstance3D", true, false):
-			if node.is_in_group(&"sd_ground"):
+			if node.is_in_group(&"gads_ground"):
 				back_facing += count_back_facing_up((node as MeshInstance3D).mesh)
 		check(back_facing == 0, "%s: every ground triangle faces up (%d do not)" % [Builder.SCENE_NAMES[index], back_facing])
 		var ok := true
-		for preset in [SDSettings.Preset.OFF, SDSettings.Preset.LOW, SDSettings.Preset.MEDIUM, SDSettings.Preset.HIGH, SDSettings.Preset.EPIC]:
-			sd.preset = preset
+		for preset in [GADSSettings.Preset.OFF, GADSSettings.Preset.LOW, GADSSettings.Preset.MEDIUM, GADSSettings.Preset.HIGH, GADSSettings.Preset.ULTRA]:
+			gads.preset = preset
 			await h.frames(12)
 			var img := await h.capture()
 			ok = ok and img != null and not img.is_invisible()
@@ -767,7 +767,7 @@ func test_demo_camera() -> void:
 	await h.frames(2)
 	print("  moved %.3f m forward" % moved)
 	check(moved > 0.02, "holding the right mouse button and W flies the demo camera forward")
-	for field: DisplacementField3D in demo.find_children("*", "DisplacementField3D", true, false):
+	for field: GADSDisplacementField3D in demo.find_children("*", "GADSDisplacementField3D", true, false):
 		if field.is_baking():
 			await field.baked
 	demo.queue_free()

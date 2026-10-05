@@ -7,7 +7,7 @@ extends SceneTree
 ##
 ## Deterministic: the camera follows a fixed path in time t = frame / FPS (real-time speed, one
 ## rendered frame per video frame, whatever the machine's frame rate), after a warm-up at the
-## first pose with the ground bakes finished. Modes: "full" = Epic (parallax, self-shadowing,
+## first pose with the ground bakes finished. Modes: "full" = Ultra (parallax, self-shadowing,
 ## near-camera geometry, pebbles), "flat" = preset Off (normal mapping only).
 
 const Builder := preload("res://demo/scenes/demo_builder.gd")
@@ -63,7 +63,7 @@ func clips() -> Array:
 func _initialize() -> void:
 	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
 	root.size = Vector2i(640, 360)
-	SDGlobals.ensure_registered()
+	GADSGlobals.ensure_registered()
 	_run()
 
 
@@ -93,13 +93,13 @@ func _render(clip_name: String, scene_index: int, mode: String, seconds: float, 
 	viewport.add_child(scene)
 	var cam := scene.get_node("Camera") as Camera3D
 	cam.current = true
-	var sd := scene.get_node("SurfaceDisplacement") as SurfaceDisplacement
-	sd.preset = SDSettings.Preset.EPIC if mode == "full" else SDSettings.Preset.OFF
+	var sd := scene.get_node("GADSManager") as GADSManager
+	sd.preset = GADSSettings.Preset.ULTRA if mode == "full" else GADSSettings.Preset.OFF
 	sd.near_field = mode == "full"
 	sd.scatter = mode == "full"
 	_place(cam, pose.call(0.0))
 	await process_frame
-	for field: DisplacementField3D in scene.find_children("*", "DisplacementField3D", true, false):
+	for field: GADSDisplacementField3D in scene.find_children("*", "GADSDisplacementField3D", true, false):
 		if field.is_baking():
 			await field.baked
 	for i in 30:

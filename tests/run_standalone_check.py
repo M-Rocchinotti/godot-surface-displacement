@@ -22,18 +22,18 @@ import shipped_archive
 
 ROOT = Path(__file__).resolve().parent.parent
 DEST = ROOT / "build" / "standalone"
-GLOBALS = ["sd_pom_steps", "sd_pom_range", "sd_shadow", "sd_debug", "sd_dfg"]
+GLOBALS = ["gads_pom_steps", "gads_pom_range", "gads_shadow", "gads_debug", "gads_dfg"]
 
 PROJECT = """config_version=5
 
 [application]
 
-config/name="Surface Displacement standalone check"
+config/name="GADS standalone check"
 config/features=PackedStringArray("4.7", "Forward Plus")
 
 [editor_plugins]
 
-enabled=PackedStringArray("res://addons/surface_displacement/plugin.cfg")
+enabled=PackedStringArray("res://addons/gads/plugin.cfg")
 """
 
 
@@ -53,7 +53,7 @@ def main() -> int:
         print("FAIL: " + issue)
     if issues:
         return 1
-    print(f"archive: {len(names)} entries, only LICENSE and addons/surface_displacement")
+    print(f"archive: {len(names)} entries, only LICENSE and addons/gads")
     (DEST / "tools").mkdir()
     shutil.copy2(ROOT / "tools" / "godot.py", DEST / "tools" / "godot.py")
     if (ROOT / "tools" / ".godot_path").exists():

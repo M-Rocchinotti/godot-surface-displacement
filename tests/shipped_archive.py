@@ -48,7 +48,7 @@ def problems(names: list[str], dest: Path) -> list[str]:
         if entry not in ("LICENSE", "addons"):
             out.append(f"unexpected top-level entry in the archive: {entry}")
     addons = sorted({n.split("/")[1] for n in names if n.startswith("addons/") and n.count("/") >= 1 and n.split("/")[1]})
-    if addons != ["surface_displacement"]:
+    if addons != ["gads"]:
         out.append(f"unexpected addons in the archive: {addons}")
     # Relative links in shipped Markdown must point at shipped files.
     for name in names:

@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Rebuild addons/surface_displacement/textures/sd_dfg_lut.exr.
+"""Rebuild addons/gads/render/textures/gads_dfg_lut.exr.
 
 The self-shadowing variants replace Godot's direct-light BRDF with a custom light() function,
 and Godot scales direct specular light by a multiple-scattering energy compensation
@@ -23,7 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from exr import write_exr  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
-OUT = ROOT / "addons" / "surface_displacement" / "textures" / "sd_dfg_lut.exr"
+OUT = ROOT / "addons" / "gads" / "render" / "textures" / "gads_dfg_lut.exr"
 SAMPLE_COUNT = 1024
 SIZE = 128
 

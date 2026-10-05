@@ -1,7 +1,7 @@
 @tool
 extends EditorPlugin
 ## Editor-side test, run by tests/run_editor_check.py inside a throwaway project: exercises the
-## Surface Displacement plugin's Tools actions and their undo/redo in a real editor, checks what
+## GADS plugin's Tools actions and their undo/redo in a real editor, checks what
 ## a save writes, prints "EDITOR CHECK OK" or "EDITOR CHECK FAIL", then quits the editor.
 
 var _frames := 0
@@ -43,33 +43,33 @@ func _run() -> void:
 	if root == null:
 		_finish()
 		return
-	_sd_plugin = load("res://addons/surface_displacement/plugin.gd").new()
+	_sd_plugin = load("res://addons/gads/plugin.gd").new()
 	var manager := EditorInterface.get_editor_undo_redo()
 	var ur := manager.get_history_undo_redo(manager.get_object_history_id(root))
 	var project_text := FileAccess.get_file_as_string("res://project.godot")
-	_check(project_text.contains("sd_pom_steps=") and project_text.contains("sd_dfg="), "the plugin registered its shader globals in project.godot")
+	_check(project_text.contains("gads_pom_steps=") and project_text.contains("gads_dfg="), "the plugin registered its shader globals in project.godot")
 
-	# 1. SurfaceDisplacement node, undo, redo.
+	# 1. GADSManager node, undo, redo.
 	_sd_plugin.add_manager_node()
-	_check(root.find_children("*", "SurfaceDisplacement", true, false).size() == 1, "Add SurfaceDisplacement Node adds one")
+	_check(root.find_children("*", "GADSManager", true, false).size() == 1, "Add GADSManager Node adds one")
 	ur.undo()
-	_check(root.find_children("*", "SurfaceDisplacement", true, false).is_empty(), "undo removes it")
+	_check(root.find_children("*", "GADSManager", true, false).is_empty(), "undo removes it")
 	ur.redo()
-	_check(root.find_children("*", "SurfaceDisplacement", true, false).size() == 1, "redo adds it back")
+	_check(root.find_children("*", "GADSManager", true, false).size() == 1, "redo adds it back")
 
 	# 2. Field for the selected ground.
 	var ground := root.get_node("Ground") as MeshInstance3D
 	EditorInterface.get_selection().clear()
 	EditorInterface.get_selection().add_node(ground)
 	_sd_plugin.add_field_for_selection()
-	var fields := root.find_children("*", "DisplacementField3D", true, false)
-	var field := fields[0] as DisplacementField3D if fields.size() == 1 else null
-	_check(field != null and field.layers.size() == 1 and field.layers[0] == ground.material_override and ground.is_in_group(&"sd_ground"),
-			"Add DisplacementField3D uses the selected ground's material as its layer and puts the ground in the group")
+	var fields := root.find_children("*", "GADSDisplacementField3D", true, false)
+	var field := fields[0] as GADSDisplacementField3D if fields.size() == 1 else null
+	_check(field != null and field.layers.size() == 1 and field.layers[0] == ground.material_override and ground.is_in_group(&"gads_ground"),
+			"Add GADSDisplacementField3D uses the selected ground's material as its layer and puts the ground in the group")
 	ur.undo()
-	_check(root.find_children("*", "DisplacementField3D", true, false).is_empty() and not ground.is_in_group(&"sd_ground"), "undo removes the field and the group")
+	_check(root.find_children("*", "GADSDisplacementField3D", true, false).is_empty() and not ground.is_in_group(&"gads_ground"), "undo removes the field and the group")
 	ur.redo()
-	field = root.find_children("*", "DisplacementField3D", true, false)[0] as DisplacementField3D
+	field = root.find_children("*", "GADSDisplacementField3D", true, false)[0] as GADSDisplacementField3D
 
 	# 3. Material conversion.
 	var box := root.get_node("HeightBox") as MeshInstance3D
@@ -82,14 +82,14 @@ func _run() -> void:
 	EditorInterface.get_selection().add_node(glass)
 	EditorInterface.get_selection().add_node(csg)
 	_sd_plugin.convert_selection()
-	var info := SDMaterials.parse((box.material_override as ShaderMaterial).shader) if box.material_override is ShaderMaterial else {}
-	_check(not info.is_empty() and info["mapping"] == SDMaterials.Mapping.UV and glass.material_override is StandardMaterial3D,
-			"Convert Materials turns the height-map material into a UV-mapped SD material and skips the transparent one")
-	_check(SDMaterials.is_sd_material(csg.get("material")), "it converts a CSG shape's material too")
+	var info := GADSMaterials.parse((box.material_override as ShaderMaterial).shader) if box.material_override is ShaderMaterial else {}
+	_check(not info.is_empty() and info["mapping"] == GADSMaterials.Mapping.UV and glass.material_override is StandardMaterial3D,
+			"Convert Materials turns the height-map material into a UV-mapped GADS material and skips the transparent one")
+	_check(GADSMaterials.is_gads_material(csg.get("material")), "it converts a CSG shape's material too")
 	ur.undo()
 	_check(box.material_override == old and csg.get("material") == old_csg, "undo restores the original materials")
 	ur.redo()
-	_check(box.material_override is ShaderMaterial and SDMaterials.is_sd_material(csg.get("material")), "redo converts again")
+	_check(box.material_override is ShaderMaterial and GADSMaterials.is_gads_material(csg.get("material")), "redo converts again")
 
 	# 4. Ground bake (renders in the editor).
 	EditorInterface.get_selection().clear()
@@ -116,15 +116,15 @@ func _run() -> void:
 	ground.position.y = 0.0
 
 	# 5. Validation.
-	var issues := SDValidator.validate(root)
+	var issues := GADSValidator.validate(root)
 	var errors := issues.filter(func(i: Dictionary) -> bool: return i["level"] == "error")
 	_check(errors.is_empty(), "Validate Setup finds no errors (%d issues)" % issues.size())
 
 	# 6. Height-map preparation.
-	var stats := SDHeightTools.convert_to_half_exr("res://height_source.png", "res://height_source_sd_height.exr")
-	_check(not stats.is_empty() and FileAccess.file_exists("res://height_source_sd_height.exr") and FileAccess.file_exists("res://height_source_sd_height.exr.import"),
+	var stats := GADSHeightTools.convert_to_half_exr("res://height_source.png", "res://height_source_gads_height.exr")
+	_check(not stats.is_empty() and FileAccess.file_exists("res://height_source_gads_height.exr") and FileAccess.file_exists("res://height_source_gads_height.exr.import"),
 			"Prepare Height Maps writes a 16-bit EXR with its import settings (source levels: %d)" % stats.get("levels", 0))
-	var exr := Image.load_from_file(ProjectSettings.globalize_path("res://height_source_sd_height.exr"))
+	var exr := Image.load_from_file(ProjectSettings.globalize_path("res://height_source_gads_height.exr"))
 	_check(exr != null and exr.get_format() == Image.FORMAT_RH and absf(exr.get_pixel(31, 0).r - 1.0) < 0.01 and absf(exr.get_pixel(0, 0).r) < 0.01,
 			"it is one half-float channel, remapped to 0-1")
 
@@ -133,12 +133,12 @@ func _run() -> void:
 	await _frames_wait(5)
 	var text := FileAccess.get_file_as_string("res://check_scene.tscn")
 	_check(not text.contains("FieldMesh") and not text.contains("Pebbles"), "the field's internal mesh is not saved with the scene")
-	_check(text.contains("sd_world_pom_ss.gdshader"), "the editor does not switch the saved material's variant")
+	_check(text.contains("gads_world_pom_ss.gdshader"), "the editor does not switch the saved material's variant")
 	# The node's default preset (Medium) has no near-camera geometry; in the editor that must not
 	# hide the field or change its saved properties.
 	_check(field.visible and not text.contains("visible = false") and not text.contains("resolution = "),
-			"the SurfaceDisplacement node leaves the field's saved properties alone in the editor")
-	_check(text.contains("check_scene_ground.res") and not text.contains("sd_ground_bake.gd"), "the field keeps its bake as a reference to the file (nothing embedded)")
+			"the GADSManager node leaves the field's saved properties alone in the editor")
+	_check(text.contains("check_scene_ground.res") and not text.contains("gads_ground_bake.gd"), "the field keeps its bake as a reference to the file (nothing embedded)")
 	_finish()
 
 

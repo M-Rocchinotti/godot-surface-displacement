@@ -10,9 +10,9 @@ config_version=5
 
 [application]
 
-config/name="Surface Displacement Demo"
-config/description="Demo and test project for the Surface Displacement addon: parallax occlusion mapping, near-camera displaced ground geometry and pebble scatter for Godot 4.7 (Forward+)."
-config/version="0.1.0"
+config/name="GADS Demo"
+config/description="Demo and test project for the GADS addon: parallax occlusion mapping, near-camera displaced ground geometry and pebble scatter for Godot 4.7 (Forward+)."
+config/version="0.2.0"
 run/main_scene="res://demo/demo_main.tscn"
 config/features=PackedStringArray("4.7", "Forward Plus")
 config/icon="res://icon.svg"
@@ -24,27 +24,27 @@ window/size/viewport_height=720
 
 [editor_plugins]
 
-enabled=PackedStringArray("res://addons/surface_displacement/plugin.cfg")
+enabled=PackedStringArray("res://addons/gads/plugin.cfg")
 
 [shader_globals]
 
-sd_pom_steps={
+gads_pom_steps={
 "type": "vec4",
 "value": Vector4(8, 20, 3, 0)
 }
-sd_pom_range={
+gads_pom_range={
 "type": "vec4",
 "value": Vector4(18, 30, 0, 6)
 }
-sd_shadow={
+gads_shadow={
 "type": "vec4",
 "value": Vector4(6, 15, 0, 1)
 }
-sd_debug={
+gads_debug={
 "type": "vec4",
 "value": Vector4(0, 0.1, 0, 0)
 }
-sd_dfg={
+gads_dfg={
 "type": "sampler2D",
-"value": "res://addons/surface_displacement/textures/sd_dfg_lut.exr"
+"value": "res://addons/gads/render/textures/gads_dfg_lut.exr"
 }

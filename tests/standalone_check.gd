@@ -1,7 +1,7 @@
 extends SceneTree
-## Runs inside a FRESH project that contains nothing but addons/surface_displacement (see
+## Runs inside a FRESH project that contains nothing but addons/gads (see
 ## tests/run_standalone_check.py): builds a ground with a generated height map, a
-## SurfaceDisplacement node at Epic, a DisplacementField3D and a PebbleScatter3D, and checks
+## GADSManager node at Ultra, a GADSDisplacementField3D and a GADSPebbleScatter3D, and checks
 ## that the parallax relief and the field's geometry render.
 var vp: SubViewport
 var cam: Camera3D
@@ -28,7 +28,7 @@ func _initialize() -> void:
 		for x in 128:
 			img.set_pixel(x, y, Color(0.5 + 0.5 * sin(x * TAU / 32.0) * cos(y * TAU / 32.0), 0, 0))
 	img.generate_mipmaps()
-	var mat := SDMaterials.create(SDMaterials.Mapping.WORLD, {"height": ImageTexture.create_from_image(img)},
+	var mat := GADSMaterials.create(GADSMaterials.Mapping.WORLD, {"height": ImageTexture.create_from_image(img)},
 			{"height_m": 0.05, "height_center": 0.0, "texture_size_m": Vector2(1, 1)})
 	var ground := MeshInstance3D.new()
 	var plane := PlaneMesh.new()
@@ -36,24 +36,24 @@ func _initialize() -> void:
 	ground.mesh = plane
 	ground.material_override = mat
 	scene.add_child(ground)
-	var field := DisplacementField3D.new()
+	var field := GADSDisplacementField3D.new()
 	field.layers = [mat]
 	scene.add_child(field)
-	field.add_child(PebbleScatter3D.new())
-	var sd := SurfaceDisplacement.new()
-	sd.preset = SDSettings.Preset.EPIC
-	scene.add_child(sd)
+	field.add_child(GADSPebbleScatter3D.new())
+	var gads := GADSManager.new()
+	gads.preset = GADSSettings.Preset.ULTRA
+	scene.add_child(gads)
 	cam = Camera3D.new()
 	scene.add_child(cam)
 	cam.look_at_from_position(Vector3(0.2, 1.7, 3.0), Vector3(0, 0, 0))
 	cam.current = true
-	_run(sd)
+	_run(gads)
 
 
-func _run(sd: SurfaceDisplacement) -> void:
+func _run(gads: GADSManager) -> void:
 	for i in 60:
 		await process_frame
-	sd.debug_view = SurfaceDisplacement.DebugView.HIT_OFFSET
+	gads.debug_view = GADSManager.DebugView.HIT_OFFSET
 	for i in 5:
 		await process_frame
 	await RenderingServer.frame_post_draw
@@ -64,8 +64,8 @@ func _run(sd: SurfaceDisplacement) -> void:
 			var c := hit.get_pixel(x, y)
 			if absf(c.r - 0.5) + absf(c.g - 0.5) + absf(c.b - 0.5) > 0.01:
 				moved += 1
-	var fields := get_nodes_in_group(&"surface_displacement_field")
-	var ok := moved > 500 and fields.size() == 1 and (fields[0] as DisplacementField3D).get_mesh_instance().mesh != null
+	var fields := get_nodes_in_group(&"gads_field")
+	var ok := moved > 500 and fields.size() == 1 and (fields[0] as GADSDisplacementField3D).get_mesh_instance().mesh != null
 	print("  pixels with a parallax offset: %d, fields: %d" % [moved, fields.size()])
 	print("STANDALONE OK" if ok else "STANDALONE FAIL")
 	vp.queue_free()

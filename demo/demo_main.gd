@@ -1,21 +1,21 @@
 extends Node
-## Surface Displacement demo: four scenes, presets, per-feature switches, a flat / POM /
+## GADS demo: four scenes, presets, per-feature switches, a flat / POM /
 ## POM + geometry comparison, debug views and a frame-time overlay.
 ## Keys: 1-4 scene, V next camera view, P next preset, B next comparison mode, H hide the panel;
 ## hold the right mouse button and use WASD/QE to fly (Shift fast, Alt slow).
 
 const Builder := preload("res://demo/scenes/demo_builder.gd")
 const FlyCamera := preload("res://demo/fly_camera.gd")
-const PRESETS: Array[String] = ["Off", "Low", "Medium", "High", "Epic"]
+const PRESETS: Array[String] = ["Off", "Low", "Medium", "High", "Ultra"]
 const COMPARE: Array[String] = ["Flat (normal map)", "POM", "POM + geometry"]
 const DEBUG_VIEWS := [["Final", 0], ["Hit offset", 1], ["Cost (steps)", 2], ["Relief height", 3], ["Normals", 4], ["Self-shadow", 5], ["Field levels", 8]]
 const PANEL_WIDTH := 300.0
 
 var scene: Node3D
-var sd: SurfaceDisplacement
+var gads: GADSManager
 var _scene_index := 0
 var _view_index := 0
-var _preset := SDSettings.Preset.EPIC
+var _preset := GADSSettings.Preset.ULTRA
 var _panel: PanelContainer
 var _scene_option: OptionButton
 var _view_option: OptionButton
@@ -37,7 +37,7 @@ func _ready() -> void:
 ## Builds scene [param index] (see demo_builder.gd) and keeps the current quality settings.
 func load_scene(index: int) -> void:
 	_scene_index = index
-	var old_sd := sd
+	var old_gads := gads
 	if scene != null:
 		scene.queue_free()
 		remove_child(scene)
@@ -47,16 +47,16 @@ func load_scene(index: int) -> void:
 	# script when the node becomes ready, so a script attached later never moves the camera.
 	cam.set_script(FlyCamera)
 	add_child(scene)
-	sd = scene.get_node("SurfaceDisplacement") as SurfaceDisplacement
-	if old_sd != null:
-		sd.preset = old_sd.preset
-		sd.pom = old_sd.pom
-		sd.self_shadow = old_sd.self_shadow
-		sd.near_field = old_sd.near_field
-		sd.scatter = old_sd.scatter
-		sd.debug_view = old_sd.debug_view
+	gads = scene.get_node("GADSManager") as GADSManager
+	if old_gads != null:
+		gads.preset = old_gads.preset
+		gads.pom = old_gads.pom
+		gads.self_shadow = old_gads.self_shadow
+		gads.near_field = old_gads.near_field
+		gads.scatter = old_gads.scatter
+		gads.debug_view = old_gads.debug_view
 	else:
-		sd.preset = _preset
+		gads.preset = _preset
 	cam.current = true
 	_scene_option.select(index)
 	set_view(mini(_view_index, Builder.VIEW_NAMES.size() - 1))
@@ -72,44 +72,44 @@ func set_view(index: int) -> void:
 	_view_option.select(index)
 
 
-## Flat: preset Off. POM: Epic parallax without geometry or pebbles. POM + geometry: Epic, all on.
+## Flat: preset Off. POM: Ultra parallax without geometry or pebbles. POM + geometry: Ultra, all on.
 func set_compare(mode: int) -> void:
-	sd.preset = SDSettings.Preset.OFF if mode == 0 else SDSettings.Preset.EPIC
-	sd.pom = true
-	sd.self_shadow = true
-	sd.near_field = mode == 2
-	sd.scatter = mode == 2
+	gads.preset = GADSSettings.Preset.OFF if mode == 0 else GADSSettings.Preset.ULTRA
+	gads.pom = true
+	gads.self_shadow = true
+	gads.near_field = mode == 2
+	gads.scatter = mode == 2
 	_sync_ui()
 
 
 func _compare_mode() -> int:
-	if sd.preset == SDSettings.Preset.OFF:
+	if gads.preset == GADSSettings.Preset.OFF:
 		return 0
-	if not sd.is_feature_active(SurfaceDisplacement.Feature.NEAR_FIELD):
+	if not gads.is_feature_active(GADSManager.Feature.NEAR_FIELD):
 		return 1
 	return 2
 
 
 func _sync_ui() -> void:
-	_preset_option.select(sd.preset if sd.preset != SDSettings.Preset.CUSTOM else SDSettings.Preset.MEDIUM)
+	_preset_option.select(gads.preset if gads.preset != GADSSettings.Preset.CUSTOM else GADSSettings.Preset.MEDIUM)
 	for feature: int in _feature_checks:
 		var check := _feature_checks[feature] as CheckButton
-		check.set_pressed_no_signal([sd.pom, sd.self_shadow, sd.near_field, sd.scatter][feature])
+		check.set_pressed_no_signal([gads.pom, gads.self_shadow, gads.near_field, gads.scatter][feature])
 	var mode := _compare_mode()
 	for i in _compare_buttons.size():
 		_compare_buttons[i].set_pressed_no_signal(i == mode)
 	for i in DEBUG_VIEWS.size():
-		if DEBUG_VIEWS[i][1] == int(sd.debug_view):
+		if DEBUG_VIEWS[i][1] == int(gads.debug_view):
 			_debug_option.select(i)
 
 
 func _process(delta: float) -> void:
 	_frame_ms = lerpf(_frame_ms, delta * 1000.0, 0.1)
 	_gpu_ms = lerpf(_gpu_ms, RenderingServer.viewport_get_measured_render_time_gpu(get_viewport().get_viewport_rid()), 0.1)
-	if Engine.get_process_frames() % 10 == 0 and sd != null:
-		var budget := sd.get_budget_ms()
+	if Engine.get_process_frames() % 10 == 0 and gads != null:
+		var budget := gads.get_budget_ms()
 		_stats.text = "%d fps   frame %.2f ms   GPU %.2f ms\n%s preset, added-cost target %s   (%s)" % [
-			Engine.get_frames_per_second(), _frame_ms, _gpu_ms, SDSettings.preset_name(sd.preset),
+			Engine.get_frames_per_second(), _frame_ms, _gpu_ms, GADSSettings.preset_name(gads.preset),
 			"%.1f ms" % budget if budget < INF else "-", RenderingServer.get_video_adapter_name()]
 
 
@@ -123,7 +123,7 @@ func _unhandled_key_input(event: InputEvent) -> void:
 		KEY_V:
 			set_view((_view_index + 1) % Builder.VIEW_NAMES.size())
 		KEY_P:
-			sd.preset = ((int(sd.preset) + 1) % PRESETS.size()) as SDSettings.Preset
+			gads.preset = ((int(gads.preset) + 1) % PRESETS.size()) as GADSSettings.Preset
 			_sync_ui()
 		KEY_B:
 			set_compare((_compare_mode() + 1) % COMPARE.size())
@@ -161,7 +161,7 @@ func _build_ui() -> void:
 	box.add_theme_constant_override("separation", 6)
 	_panel.add_child(box)
 	var title := Label.new()
-	title.text = "Surface Displacement"
+	title.text = "GADS"
 	title.add_theme_font_size_override("font_size", 18)
 	box.add_child(title)
 
@@ -169,14 +169,14 @@ func _build_ui() -> void:
 	_view_option = _option(box, "Camera  (V)", Builder.VIEW_NAMES, func(i: int) -> void: set_view(i))
 	_section(box, "Quality")
 	_preset_option = _option(box, "Preset  (P)", PRESETS, func(i: int) -> void:
-		sd.preset = i as SDSettings.Preset
+		gads.preset = i as GADSSettings.Preset
 		_sync_ui())
 	var names := ["Parallax occlusion (POM)", "Self-shadowing", "Near-camera geometry", "Pebble scatter"]
 	for feature in names.size():
 		var check := CheckButton.new()
 		check.text = names[feature]
 		check.toggled.connect(func(on: bool) -> void:
-			sd.set_feature(feature as SurfaceDisplacement.Feature, on)
+			gads.set_feature(feature as GADSManager.Feature, on)
 			_sync_ui())
 		box.add_child(check)
 		_feature_checks[feature] = check
@@ -197,7 +197,7 @@ func _build_ui() -> void:
 		_compare_buttons.append(b)
 	_section(box, "Debug")
 	_debug_option = _option(box, "View", DEBUG_VIEWS.map(func(v: Array) -> String: return v[0]), func(i: int) -> void:
-		sd.debug_view = DEBUG_VIEWS[i][1] as SurfaceDisplacement.DebugView)
+		gads.debug_view = DEBUG_VIEWS[i][1] as GADSManager.DebugView)
 	var hint := Label.new()
 	hint.text = "Right mouse + WASD/QE: fly   H: hide panel"
 	hint.add_theme_font_size_override("font_size", 12)

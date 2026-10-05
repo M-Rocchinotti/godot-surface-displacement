@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Run every Surface Displacement test suite and scan the engine logs for problems.
+"""Run every GADS test suite and scan the engine logs for problems.
 
     python tests/run_all.py              # import, variants, logic, render, field, demo and editor
                                          # smoke, shipped archive, editor plugin, Blender bake

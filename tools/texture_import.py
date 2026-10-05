@@ -1,4 +1,4 @@
-"""Write Godot `.import` files with explicit settings for Surface Displacement textures.
+"""Write Godot `.import` files with explicit settings for GADS textures.
 
 Godot decides import settings on first import. Without an explicit `.import`, a texture used only
 by a ShaderMaterial is imported as a 2D texture WITHOUT mipmaps (the bug that made the crater's

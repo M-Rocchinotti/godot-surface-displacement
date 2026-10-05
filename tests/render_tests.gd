@@ -6,7 +6,7 @@ extends SceneTree
 ## Godot's own shading). Exit code 0 = all passed. Measured values are printed so the README can
 ## quote them. Run a subset with: python tools/godot.py --script tests/render_tests.gd -- --only=name,name
 
-const Harness := preload("res://tests/lib/sd_harness.gd")
+const Harness := preload("res://tests/lib/gads_harness.gd")
 const SIZE := Vector2i(960, 540)
 const OFFSET_SCALE := 0.1
 
@@ -17,7 +17,7 @@ var _failed := 0
 
 func _initialize() -> void:
 	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
-	SDGlobals.ensure_registered()
+	GADSGlobals.ensure_registered()
 	h = Harness.new(self)
 	h.make_viewport(SIZE, true)
 	_run()
@@ -70,17 +70,17 @@ func check(condition: bool, what: String) -> void:
 ## Medium quality, no fade, mip 0 forced (LOD bias -10), self-shadow off, debug off.
 func _reset_globals() -> void:
 	set_quality(8, 24, 3)
-	SDGlobals.set_value(SDGlobals.POM_RANGE, Vector4(1000, 2000, -10, 99))
-	SDGlobals.set_value(SDGlobals.SHADOW, Vector4(8, 20, 0, 0))
-	SDGlobals.set_value(SDGlobals.DEBUG, Vector4(0, OFFSET_SCALE, 0, 0))
+	GADSGlobals.set_value(GADSGlobals.POM_RANGE, Vector4(1000, 2000, -10, 99))
+	GADSGlobals.set_value(GADSGlobals.SHADOW, Vector4(8, 20, 0, 0))
+	GADSGlobals.set_value(GADSGlobals.DEBUG, Vector4(0, OFFSET_SCALE, 0, 0))
 
 
 func set_quality(min_steps: int, max_steps: int, refine: int) -> void:
-	SDGlobals.set_value(SDGlobals.POM_STEPS, Vector4(min_steps, max_steps, refine, 0))
+	GADSGlobals.set_value(GADSGlobals.POM_STEPS, Vector4(min_steps, max_steps, refine, 0))
 
 
 func debug_view(view: int) -> void:
-	SDGlobals.set_value(SDGlobals.DEBUG, Vector4(view, OFFSET_SCALE, 0, 0))
+	GADSGlobals.set_value(GADSGlobals.DEBUG, Vector4(view, OFFSET_SCALE, 0, 0))
 
 
 static func percentile(values: Array, q: float) -> float:
@@ -116,7 +116,7 @@ func test_emission_passthrough() -> void:
 # --- 2. POM against the exact ray / height-field intersection --------------------------------
 
 ## Surfaces: [name, mapping, corners (a, b, c, d), relief axis, uv Callable(foot point), extra
-## shader parameters]. Their uv functions follow the documented conventions (sd_core.gdshaderinc)
+## shader parameters]. Their uv functions follow the documented conventions (gads_core.gdshaderinc)
 ## and are written here independently of the shader.
 func _surfaces(tile: float) -> Array:
 	var rot := deg_to_rad(30.0)
@@ -144,13 +144,13 @@ func _surfaces(tile: float) -> Array:
 	var wall_x := [Vector3(0, -s, s), Vector3(0, -s, -s), Vector3(0, s, -s), Vector3(0, s, s)]
 	var wall_mz := [Vector3(s, -s, 0), Vector3(-s, -s, 0), Vector3(-s, s, 0), Vector3(s, s, 0)]
 	return [
-		["world floor, relief above", SDMaterials.Mapping.WORLD, floor_pts, floor_uvs, Vector3.UP, world_uv, {"height_center": 0.0, "planar_rotation_deg": 30.0, "planar_offset_m": off}],
-		["world floor, relief below", SDMaterials.Mapping.WORLD, floor_pts, floor_uvs, Vector3.UP, world_uv, {"height_center": 1.0, "planar_rotation_deg": 30.0, "planar_offset_m": off}],
-		["uv floor", SDMaterials.Mapping.UV, floor_pts, floor_uvs, Vector3.UP, uv_floor, {"height_center": 1.0}],
-		["uv wall facing +Z", SDMaterials.Mapping.UV, wall_pts, wall_uvs, Vector3.BACK, uv_wall, {"height_center": 0.5}],
-		["triplanar floor", SDMaterials.Mapping.TRIPLANAR, floor_pts, floor_uvs, Vector3.UP, tri.call(1, 1.0), {"height_center": 1.0, "planar_offset_m": off}],
-		["triplanar wall facing +X", SDMaterials.Mapping.TRIPLANAR, wall_x, wall_uvs, Vector3.RIGHT, tri.call(0, 1.0), {"height_center": 1.0, "planar_offset_m": off}],
-		["triplanar wall facing -Z", SDMaterials.Mapping.TRIPLANAR, wall_mz, wall_uvs, Vector3.FORWARD, tri.call(2, -1.0), {"height_center": 0.0, "planar_offset_m": off}],
+		["world floor, relief above", GADSMaterials.Mapping.WORLD, floor_pts, floor_uvs, Vector3.UP, world_uv, {"height_center": 0.0, "planar_rotation_deg": 30.0, "planar_offset_m": off}],
+		["world floor, relief below", GADSMaterials.Mapping.WORLD, floor_pts, floor_uvs, Vector3.UP, world_uv, {"height_center": 1.0, "planar_rotation_deg": 30.0, "planar_offset_m": off}],
+		["uv floor", GADSMaterials.Mapping.UV, floor_pts, floor_uvs, Vector3.UP, uv_floor, {"height_center": 1.0}],
+		["uv wall facing +Z", GADSMaterials.Mapping.UV, wall_pts, wall_uvs, Vector3.BACK, uv_wall, {"height_center": 0.5}],
+		["triplanar floor", GADSMaterials.Mapping.TRIPLANAR, floor_pts, floor_uvs, Vector3.UP, tri.call(1, 1.0), {"height_center": 1.0, "planar_offset_m": off}],
+		["triplanar wall facing +X", GADSMaterials.Mapping.TRIPLANAR, wall_x, wall_uvs, Vector3.RIGHT, tri.call(0, 1.0), {"height_center": 1.0, "planar_offset_m": off}],
+		["triplanar wall facing -Z", GADSMaterials.Mapping.TRIPLANAR, wall_mz, wall_uvs, Vector3.FORWARD, tri.call(2, -1.0), {"height_center": 0.0, "planar_offset_m": off}],
 	]
 
 
@@ -162,7 +162,7 @@ func measure_pom_error(surface: Array, field: Dictionary, tex: Texture2D, amp: f
 	h.new_debug_scene()
 	var params: Dictionary = {"height_m": amp, "texture_size_m": Vector2(tile, tile)}
 	params.merge(surface[6], true)
-	var mat := SDMaterials.create(surface[1], {"height": tex}, params, SDMaterials.Quality.POM)
+	var mat := GADSMaterials.create(surface[1], {"height": tex}, params, GADSMaterials.Quality.POM)
 	var pts: Array = surface[2]
 	h.add_quad(pts[0], pts[1], pts[2], pts[3], surface[3], mat)
 	var axis: Vector3 = surface[4]
@@ -232,8 +232,8 @@ func test_height_remap() -> void:
 	var images := []
 	for pair: Array in [[field, Vector2(0.0, 1.0)], [inverted, Vector2(1.0, 0.0)]]:
 		var tex := ImageTexture.create_from_image((pair[0] as Dictionary)["image"])
-		var mat := SDMaterials.create(SDMaterials.Mapping.WORLD, {"height": tex},
-				{"height_m": 0.05, "height_center": 0.0, "texture_size_m": Vector2(1.0, 1.0), "height_remap": pair[1]}, SDMaterials.Quality.POM)
+		var mat := GADSMaterials.create(GADSMaterials.Mapping.WORLD, {"height": tex},
+				{"height_m": 0.05, "height_center": 0.0, "texture_size_m": Vector2(1.0, 1.0), "height_remap": pair[1]}, GADSMaterials.Quality.POM)
 		h.new_debug_scene()
 		h.add_quad(Vector3(-2, 0, 2), Vector3(2, 0, 2), Vector3(2, 0, -2), Vector3(-2, 0, -2),
 				[Vector2(0, 1), Vector2(1, 1), Vector2(1, 0), Vector2(0, 0)], mat)
@@ -266,9 +266,9 @@ func test_world_planar_walls() -> void:
 	var bad := 0
 	var lit := 0
 	var total := 0
-	for quality in [SDMaterials.Quality.FLAT, SDMaterials.Quality.POM_SELF_SHADOW]:
+	for quality in [GADSMaterials.Quality.FLAT, GADSMaterials.Quality.POM_SELF_SHADOW]:
 		h.new_lit_scene(Color(0.2, 0.2, 0.2))
-		var mat := SDMaterials.create(SDMaterials.Mapping.WORLD, textures, {"height_m": 0.03, "height_center": 0.0}, quality)
+		var mat := GADSMaterials.create(GADSMaterials.Mapping.WORLD, textures, {"height_m": 0.03, "height_center": 0.0}, quality)
 		var box := MeshInstance3D.new()
 		box.mesh = BoxMesh.new()
 		box.material_override = mat
@@ -290,30 +290,30 @@ func test_world_planar_walls() -> void:
 
 
 func test_globals_and_defaults() -> void:
-	SDSettings.create_preset(SDSettings.Preset.HIGH).apply_globals()
-	var steps: Vector4 = SDGlobals.get_value(SDGlobals.POM_STEPS)
-	var shadow: Vector4 = SDGlobals.get_value(SDGlobals.SHADOW)
+	GADSSettings.create_preset(GADSSettings.Preset.HIGH).apply_globals()
+	var steps: Vector4 = GADSGlobals.get_value(GADSGlobals.POM_STEPS)
+	var shadow: Vector4 = GADSGlobals.get_value(GADSGlobals.SHADOW)
 	check(steps == Vector4(10, 28, 4, 1) and shadow.z > 0.0 and shadow.w == 1.0,
 			"a preset writes its steps, soft self-shadow and local lights' self-shadow into the globals")
-	SDSettings.create_preset(SDSettings.Preset.MEDIUM).apply_globals()
-	shadow = SDGlobals.get_value(SDGlobals.SHADOW)
+	GADSSettings.create_preset(GADSSettings.Preset.MEDIUM).apply_globals()
+	shadow = GADSGlobals.get_value(GADSGlobals.SHADOW)
 	check(shadow.z == 0.0 and shadow.w == 1.0, "Medium: hard self-shadow")
 	# The globals' registered defaults are Medium's, so materials look right before any node runs.
 	var medium_ok := true
-	for name: StringName in [SDGlobals.POM_STEPS, SDGlobals.POM_RANGE, SDGlobals.SHADOW]:
-		medium_ok = medium_ok and SDGlobals.definitions()[name][2] == SDGlobals.get_value(name)
-		medium_ok = medium_ok and ProjectSettings.get_setting("shader_globals/" + String(name))["value"] == SDGlobals.get_value(name)
+	for name: StringName in [GADSGlobals.POM_STEPS, GADSGlobals.POM_RANGE, GADSGlobals.SHADOW]:
+		medium_ok = medium_ok and GADSGlobals.definitions()[name][2] == GADSGlobals.get_value(name)
+		medium_ok = medium_ok and ProjectSettings.get_setting("shader_globals/" + String(name))["value"] == GADSGlobals.get_value(name)
 	check(medium_ok, "the registered defaults and this project's shader globals are the Medium preset")
-	var shader := SDMaterials.get_shader(SDMaterials.Mapping.WORLD, SDMaterials.Quality.POM)
+	var shader := GADSMaterials.get_shader(GADSMaterials.Mapping.WORLD, GADSMaterials.Quality.POM)
 	var mismatches := []
-	for name: String in SDMaterials.PARAMETER_DEFAULTS:
-		var want: Variant = SDMaterials.PARAMETER_DEFAULTS[name]
+	for name: String in GADSMaterials.PARAMETER_DEFAULTS:
+		var want: Variant = GADSMaterials.PARAMETER_DEFAULTS[name]
 		var got: Variant = RenderingServer.shader_get_parameter_default(shader.get_rid(), name)
 		if not _same_value(got, want):
-			mismatches.append("%s: shader %s, SDMaterials %s" % [name, got, want])
+			mismatches.append("%s: shader %s, GADSMaterials %s" % [name, got, want])
 	for m: String in mismatches:
 		print("  " + m)
-	check(mismatches.is_empty(), "SDMaterials.PARAMETER_DEFAULTS equal the shader's uniform defaults (%d parameters)" % SDMaterials.PARAMETER_DEFAULTS.size())
+	check(mismatches.is_empty(), "GADSMaterials.PARAMETER_DEFAULTS equal the shader's uniform defaults (%d parameters)" % GADSMaterials.PARAMETER_DEFAULTS.size())
 	_reset_globals()
 
 
@@ -360,7 +360,7 @@ func test_pom_no_swimming() -> void:
 	h.new_debug_scene()
 	var params: Dictionary = {"height_m": amp, "texture_size_m": Vector2(tile, tile)}
 	params.merge(surface[6], true)
-	var mat := SDMaterials.create(surface[1], {"height": tex}, params, SDMaterials.Quality.POM)
+	var mat := GADSMaterials.create(surface[1], {"height": tex}, params, GADSMaterials.Quality.POM)
 	var pts: Array = surface[2]
 	h.add_quad(pts[0], pts[1], pts[2], pts[3], surface[3], mat)
 	var ref_surface := {"point": Vector3.ZERO, "normal": Vector3.UP, "axis": Vector3.UP, "uv": surface[5], "amp": amp,
@@ -407,7 +407,7 @@ func test_triplanar_planes() -> void:
 	h.new_debug_scene()
 	var field := Harness.make_wave_field(128)
 	var tex := ImageTexture.create_from_image(field["image"])
-	var mat := SDMaterials.create(SDMaterials.Mapping.TRIPLANAR, {"height": tex}, {"height_m": 0.03, "height_center": 1.0}, SDMaterials.Quality.POM)
+	var mat := GADSMaterials.create(GADSMaterials.Mapping.TRIPLANAR, {"height": tex}, {"height_m": 0.03, "height_center": 1.0}, GADSMaterials.Quality.POM)
 	var s := 1.5
 	h.add_quad(Vector3(-s, 0, s), Vector3(0, 0, s), Vector3(0, 0, -s), Vector3(-s, 0, -s),
 			[Vector2(0, 1), Vector2(1, 1), Vector2(1, 0), Vector2(0, 0)], mat)
@@ -454,7 +454,7 @@ func test_brdf_parity() -> void:
 	var base := "res://demo/textures/gravel_stones/gravel_stones"
 	var textures := {"albedo": load(base + "_albedo.jpg"), "normal": load(base + "_normal.jpg"), "orm": load(base + "_arm.jpg"),
 			"height": load(base + "_height.exr")}
-	SDGlobals.set_value(SDGlobals.SHADOW, Vector4(8, 20, 0, 0))
+	GADSGlobals.set_value(GADSGlobals.SHADOW, Vector4(8, 20, 0, 0))
 	# The grazing metal case reads the energy-compensation table where it varies most (low n.v,
 	# roughness 0.2-0.45); it caught a table integrated without the engine's sample rotation.
 	var steep := Vector3(0.3, 1.4, 2.0)
@@ -463,8 +463,8 @@ func test_brdf_parity() -> void:
 			["metal, grazing view", {"height_m": 0.0, "metallic_scale": 1.0, "roughness_scale": 0.35}, grazing]]
 	for case: Array in cases:
 		var images := []
-		for quality in [SDMaterials.Quality.POM, SDMaterials.Quality.POM_SELF_SHADOW]:
-			images.append(await _render_lit_plane(SDMaterials.create(SDMaterials.Mapping.UV, textures, case[1], quality), true, case[2]))
+		for quality in [GADSMaterials.Quality.POM, GADSMaterials.Quality.POM_SELF_SHADOW]:
+			images.append(await _render_lit_plane(GADSMaterials.create(GADSMaterials.Mapping.UV, textures, case[1], quality), true, case[2]))
 		var diff := _relative_difference(images[0], images[1])
 		print("  %s: light() vs built-in: mean %.3f %%, p99 %.3f %%, max %.3f %% (%d px)" % [case[0], diff["mean"] * 100.0, diff["p99"] * 100.0, diff["max"] * 100.0, diff["count"]])
 		# What remains is float rounding and the soft-light size term that light() cannot see
@@ -482,7 +482,7 @@ func test_brdf_parity() -> void:
 	orm.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS_ANISOTROPIC
 	var standard := await _render_lit_plane(orm, false)
 	# ORMMaterial3D takes metallic straight from the texture's blue channel (no scale).
-	var flat := await _render_lit_plane(SDMaterials.create(SDMaterials.Mapping.UV, textures, {"metallic_scale": 1.0}, SDMaterials.Quality.FLAT), false)
+	var flat := await _render_lit_plane(GADSMaterials.create(GADSMaterials.Mapping.UV, textures, {"metallic_scale": 1.0}, GADSMaterials.Quality.FLAT), false)
 	var d2 := _relative_difference(standard, flat)
 	print("  flat variant vs ORMMaterial3D: p99 %.3f %%, max %.3f %%" % [d2["p99"] * 100.0, d2["max"] * 100.0])
 	check(d2["max"] < 0.001, "the flat variant samples and normal-maps exactly like ORMMaterial3D")
@@ -555,7 +555,7 @@ func test_light_vertex() -> void:
 			data[y * size + x] = clampf((0.35 - absf(u - 0.5)) / 0.008 + 0.5, 0.0, 1.0) if absf(u - 0.5) < 0.36 else 0.0
 	var field := Harness.field_from_data(data, size)
 	var tex := ImageTexture.create_from_image(field["image"])
-	var mat := SDMaterials.create(SDMaterials.Mapping.WORLD, {"height": tex}, {"height_m": amp, "height_center": 0.0, "texture_size_m": Vector2(1, 1)}, SDMaterials.Quality.POM)
+	var mat := GADSMaterials.create(GADSMaterials.Mapping.WORLD, {"height": tex}, {"height_m": amp, "height_center": 0.0, "texture_size_m": Vector2(1, 1)}, GADSMaterials.Quality.POM)
 	h.new_lit_scene(Color(0.05, 0.05, 0.05))
 	var s := 3.0
 	h.add_quad(Vector3(-s, 0, s), Vector3(s, 0, s), Vector3(s, 0, -s), Vector3(-s, 0, -s),
@@ -620,7 +620,7 @@ func test_self_shadow() -> void:
 	var amp := 0.05
 	var field := Harness.make_stone_field(512, 70, 11)
 	var tex := ImageTexture.create_from_image(field["image"])
-	var mat := SDMaterials.create(SDMaterials.Mapping.WORLD, {"height": tex}, {"height_m": amp, "height_center": 0.0, "texture_size_m": Vector2(tile, tile)}, SDMaterials.Quality.POM_SELF_SHADOW)
+	var mat := GADSMaterials.create(GADSMaterials.Mapping.WORLD, {"height": tex}, {"height_m": amp, "height_center": 0.0, "texture_size_m": Vector2(tile, tile)}, GADSMaterials.Quality.POM_SELF_SHADOW)
 	h.new_debug_scene()
 	var s := 2.0
 	h.add_quad(Vector3(-s, 0, s), Vector3(s, 0, s), Vector3(s, 0, -s), Vector3(-s, 0, -s),
@@ -628,7 +628,7 @@ func test_self_shadow() -> void:
 	var sun := h.add_sun(25.0, 60.0, false)
 	sun.light_energy = 1.0
 	var cam := h.add_camera(Vector3(0.1, 1.3, 0.6), Vector3(0.0, 0.0, 0.0))
-	SDGlobals.set_value(SDGlobals.SHADOW, Vector4(16, 20, 0, 1))
+	GADSGlobals.set_value(GADSGlobals.SHADOW, Vector4(16, 20, 0, 1))
 	debug_view(Harness.DEBUG_SELF_SHADOW)
 	await h.frames(3)
 	var img := await h.capture()
@@ -659,7 +659,7 @@ func test_self_shadow() -> void:
 	print("  %d pixels, %.1f %% in traced shadow, classification agrees on %.1f %%" % [total, 100.0 * shadowed / maxf(total, 1.0), share * 100.0])
 	check(shadowed > total / 10, "the sun is low enough to cast relief shadows")
 	check(share > 0.98, "hard self-shadow agrees with a traced height-field shadow on more than 98 % of pixels")
-	SDGlobals.set_value(SDGlobals.SHADOW, Vector4(16, 20, 0, 0))
+	GADSGlobals.set_value(GADSGlobals.SHADOW, Vector4(16, 20, 0, 0))
 	await h.frames(2)
 	var off := await h.capture()
 	# On the traced relief, where a wrong shadow would show (also a black one); not every non-black
@@ -672,7 +672,7 @@ func test_self_shadow() -> void:
 	debug_view(Harness.DEBUG_OFF)
 
 
-## Omni and spot lights self-shadow the relief when sd_pom_steps.w is 1. Lit by one low local
+## Omni and spot lights self-shadow the relief when gads_pom_steps.w is 1. Lit by one low local
 ## light and nothing else (no ambient), a pixel is dark exactly where the CPU height-field shadow
 ## towards the light's position says so; with the flag off the light ignores the relief.
 func test_local_light_self_shadow() -> void:
@@ -680,7 +680,7 @@ func test_local_light_self_shadow() -> void:
 	var amp := 0.05
 	var field := Harness.make_stone_field(512, 70, 11)
 	var tex := ImageTexture.create_from_image(field["image"])
-	var mat := SDMaterials.create(SDMaterials.Mapping.WORLD, {"height": tex}, {"height_m": amp, "height_center": 0.0, "texture_size_m": Vector2(tile, tile)}, SDMaterials.Quality.POM_SELF_SHADOW)
+	var mat := GADSMaterials.create(GADSMaterials.Mapping.WORLD, {"height": tex}, {"height_m": amp, "height_center": 0.0, "texture_size_m": Vector2(tile, tile)}, GADSMaterials.Quality.POM_SELF_SHADOW)
 	var surface := {"point": Vector3.ZERO, "normal": Vector3.UP, "axis": Vector3.UP, "amp": amp, "center": 0.0, "field": field,
 			"uv": func(p: Vector3) -> Vector2: return Vector2(p.x, p.z) / tile}
 	var omni := OmniLight3D.new()
@@ -698,14 +698,14 @@ func test_local_light_self_shadow() -> void:
 		# Low and to the side, so the stones throw long shadows over the view.
 		light.look_at_from_position(Vector3(-1.6, 0.45, -0.9), Vector3(0.2, 0.0, 0.1))
 		var cam := h.add_camera(Vector3(0.1, 1.3, 0.6), Vector3(0.0, 0.0, 0.0))
-		SDGlobals.set_value(SDGlobals.SHADOW, Vector4(16, 20, 0, 1))
+		GADSGlobals.set_value(GADSGlobals.SHADOW, Vector4(16, 20, 0, 1))
 		var images := []
 		for local in [1.0, 0.0]:
-			SDGlobals.set_value(SDGlobals.POM_STEPS, Vector4(8, 24, 3, local))
+			GADSGlobals.set_value(GADSGlobals.POM_STEPS, Vector4(8, 24, 3, local))
 			await h.frames(3)
 			images.append(await h.capture())
 		# Self-shadowing switched off by strength: the reference for "the light ignores the relief".
-		SDGlobals.set_value(SDGlobals.SHADOW, Vector4(16, 20, 0, 0))
+		GADSGlobals.set_value(GADSGlobals.SHADOW, Vector4(16, 20, 0, 0))
 		await h.frames(3)
 		var unshadowed := await h.capture()
 		var on: Image = images[0]
@@ -761,7 +761,7 @@ func test_depth_write() -> void:
 	var views := [Vector3(0.9, 0.5, 0.9), Vector3(-0.7, -0.4, 1.1), Vector3(0.2, 0.9, 0.8), Vector3(-1.0, 0.2, 0.5)]
 	for depth in [true, false]:
 		h.new_debug_scene()
-		var mat := SDMaterials.create(SDMaterials.Mapping.UV, {"height": tex}, {"height_m": amp, "height_center": 1.0}, SDMaterials.Quality.POM, depth)
+		var mat := GADSMaterials.create(GADSMaterials.Mapping.UV, {"height": tex}, {"height_m": amp, "height_center": 1.0}, GADSMaterials.Quality.POM, depth)
 		h.add_quad(Vector3(-s, -s, 0), Vector3(s, -s, 0), Vector3(s, s, 0), Vector3(-s, s, 0),
 				[Vector2(0, 2 * s), Vector2(2 * s, 2 * s), Vector2(2 * s, 0), Vector2(0, 0)].map(func(v: Vector2) -> Vector2: return v / tile), mat)
 		var red := StandardMaterial3D.new()
@@ -813,7 +813,7 @@ func test_depth_write() -> void:
 		print("  %s: %d pixels where relief and plane disagree about the box, box as predicted by the %s on %.1f %%; %d of %d wall pixels empty (4 views)" % [
 				label, total, "relief" if depth else "flat plane", share * 100.0, holes, wall_px])
 		check(total > 500 and share > 0.95, "%s: the box is hidden exactly where the %s is in front of it" % [label, "traced relief" if depth else "flat wall plane"])
-		# Without the rounding in sd_surface.gdshaderinc about 1.3 % of the depth-writing wall's
+		# Without the rounding in gads_surface.gdshaderinc about 1.3 % of the depth-writing wall's
 		# pixels drop out (pre-pass and colour pass disagree in the last bit); with it, at most a
 		# few per million may.
 		var limit := 0.00002 if depth else 0.0
@@ -847,9 +847,9 @@ func test_mip_shimmer() -> void:
 	var results := {}
 	var mat: ShaderMaterial
 	var cam: Camera3D
-	for quality in [SDMaterials.Quality.FLAT, SDMaterials.Quality.POM]:
+	for quality in [GADSMaterials.Quality.FLAT, GADSMaterials.Quality.POM]:
 		h.new_lit_scene(Color(0.2, 0.2, 0.22))
-		mat = SDMaterials.from_texture_set("res://demo/textures/clean_pebbles", SDMaterials.Mapping.WORLD, {"height_center": 0.0, "height_m": 0.04}, quality)
+		mat = GADSMaterials.from_texture_set("res://demo/textures/clean_pebbles", GADSMaterials.Mapping.WORLD, {"height_center": 0.0, "height_m": 0.04}, quality)
 		var plane := PlaneMesh.new()
 		plane.size = Vector2(200, 200)
 		var mi := MeshInstance3D.new()
@@ -859,15 +859,15 @@ func test_mip_shimmer() -> void:
 		var sun := h.add_sun(30.0, 40.0, false)
 		sun.light_energy = 1.5
 		cam = h.add_camera(Vector3(0, 1.7, 0), Vector3(0, 0.3, -30))
-		SDGlobals.set_value(SDGlobals.POM_RANGE, Vector4(1000, 2000, 0, 99))
+		GADSGlobals.set_value(GADSGlobals.POM_RANGE, Vector4(1000, 2000, 0, 99))
 		var frames: Array[Image] = []
 		for f in 16:
 			cam.look_at_from_position(Vector3(0.0013 * f, 1.7, 0.0), Vector3(0.0013 * f, 0.3, -30.0))
 			await h.frames(2)
 			frames.append(await h.capture())
 		results[quality] = _flicker(frames, cam)
-	var ratio: float = results[SDMaterials.Quality.POM] / maxf(results[SDMaterials.Quality.FLAT], 1e-6)
-	print("  mean per-pixel flicker 10-60 m away: flat %.5f, POM %.5f (x%.2f)" % [results[SDMaterials.Quality.FLAT], results[SDMaterials.Quality.POM], ratio])
+	var ratio: float = results[GADSMaterials.Quality.POM] / maxf(results[GADSMaterials.Quality.FLAT], 1e-6)
+	print("  mean per-pixel flicker 10-60 m away: flat %.5f, POM %.5f (x%.2f)" % [results[GADSMaterials.Quality.FLAT], results[GADSMaterials.Quality.POM], ratio])
 	# Measured: x1.02 with mip-correct sampling, x1.8 when the march reads mip 0 (mutation check).
 	check(ratio < 1.3, "POM adds less than 30 % flicker over plain normal mapping at a distance")
 	# The march's mip level itself (blue of the Cost view = level / 8), against the level the
@@ -877,7 +877,7 @@ func test_mip_shimmer() -> void:
 	debug_view(Harness.DEBUG_COST)
 	await h.frames(2)
 	var cost := await h.capture()
-	var size_m: Vector2 = SDMaterials.get_param(mat, "texture_size_m")
+	var size_m: Vector2 = GADSMaterials.get_param(mat, "texture_size_m")
 	var texels := float((mat.get_shader_parameter("height_texture") as Texture2D).get_width())
 	var errors := []
 	# Even pixels: their screen-space derivatives are the differences to the next pixel.
@@ -913,7 +913,7 @@ func test_distance_fade() -> void:
 	var field := Harness.make_stone_field(256, 40, 2)
 	var tex := ImageTexture.create_from_image(field["image"])
 	h.new_debug_scene()
-	var mat := SDMaterials.create(SDMaterials.Mapping.WORLD, {"height": tex}, {"height_m": 0.05, "height_center": 0.0, "texture_size_m": Vector2(1, 1)}, SDMaterials.Quality.POM)
+	var mat := GADSMaterials.create(GADSMaterials.Mapping.WORLD, {"height": tex}, {"height_m": 0.05, "height_center": 0.0, "texture_size_m": Vector2(1, 1)}, GADSMaterials.Quality.POM)
 	var plane := PlaneMesh.new()
 	plane.size = Vector2(60, 60)
 	var mi := MeshInstance3D.new()
@@ -921,7 +921,7 @@ func test_distance_fade() -> void:
 	mi.material_override = mat
 	h.scene.add_child(mi)
 	var cam := h.add_camera(Vector3(0, 1.7, 0), Vector3(0, 0, -8))
-	SDGlobals.set_value(SDGlobals.POM_RANGE, Vector4(6, 10, 0, 99))
+	GADSGlobals.set_value(GADSGlobals.POM_RANGE, Vector4(6, 10, 0, 99))
 	debug_view(Harness.DEBUG_HIT_OFFSET)
 	await h.frames(3)
 	var img := await h.capture()
