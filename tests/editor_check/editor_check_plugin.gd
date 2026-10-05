@@ -1,7 +1,8 @@
 @tool
 extends EditorPlugin
 ## Editor-side test, run by tests/run_editor_check.py inside a throwaway project: exercises the
-## GADS plugin's Tools actions and their undo/redo in a real editor, checks what
+## GADS plugin's Tools actions (including making and baking a GADSMeshInstance3D) and their
+## undo/redo in a real editor, checks what
 ## a save writes, prints "EDITOR CHECK OK" or "EDITOR CHECK FAIL", then quits the editor.
 
 var _frames := 0
@@ -128,10 +129,40 @@ func _run() -> void:
 	_check(exr != null and exr.get_format() == Image.FORMAT_RH and absf(exr.get_pixel(31, 0).r - 1.0) < 0.01 and absf(exr.get_pixel(0, 0).r) < 0.01,
 			"it is one half-float channel, remapped to 0-1")
 
-	# 7. What a save writes.
+	# 7. Baked displacement: make the converted box a GADSMeshInstance3D, bake it, undo and redo.
+	var box_mesh := box.mesh
+	EditorInterface.get_selection().clear()
+	EditorInterface.get_selection().add_node(box)
+	_sd_plugin.convert_selected_meshes()
+	var baked_box := root.get_node("HeightBox") as GADSMeshInstance3D
+	_check(baked_box != null and baked_box.source_mesh == box_mesh and baked_box.mesh == box_mesh and not baked_box.baked,
+			"Make Selected Meshes GADSMeshInstance3D keeps the mesh as the source")
+	ur.undo()
+	_check(not root.get_node("HeightBox") is GADSMeshInstance3D and box.mesh == box_mesh, "undo makes it a plain MeshInstance3D again")
+	ur.redo()
+	baked_box = root.get_node("HeightBox") as GADSMeshInstance3D
+	EditorInterface.edit_node(baked_box)
+	await _frames_wait(5)
+	var buttons := EditorInterface.get_inspector().find_children("*", "Button", true, false).filter(
+			func(b: Button) -> bool: return b.text in ["Bake", "Rebuild", "Clear"])
+	_check(buttons.size() == 3, "the inspector shows Bake, Rebuild and Clear")
+	_sd_plugin.bake_selected_meshes()
+	var baked_path: String = baked_box.bake_stats.get("path", "") if baked_box != null else ""
+	_check(baked_box != null and baked_box.baked and baked_path.begins_with("res://gads_baked/") and FileAccess.file_exists(baked_path)
+			and baked_box.mesh.resource_path == baked_path and baked_box.bake_stats.get("triangles", 0) > 12,
+			"Bake Selected GADSMeshInstance3D bakes it into res://gads_baked/ (%d triangles)" % (baked_box.bake_stats.get("triangles", 0) if baked_box != null else 0))
+	ur.undo()
+	_check(not baked_box.baked and baked_box.mesh == box_mesh, "undo shows the source mesh again")
+	ur.redo()
+	_check(baked_box.baked and baked_box.mesh.resource_path == baked_path, "redo shows the bake again")
+	EditorInterface.get_selection().clear()
+
+	# 8. What a save writes.
 	EditorInterface.save_scene()
 	await _frames_wait(5)
 	var text := FileAccess.get_file_as_string("res://check_scene.tscn")
+	_check(text.contains('path="%s"' % baked_path) and text.contains("source_mesh") and text.contains("instance_shader_parameters/gads_baked = 1.0"),
+			"the baked box refers to its bake file, keeps its source mesh and the baked flag")
 	_check(not text.contains("FieldMesh") and not text.contains("Pebbles"), "the field's internal mesh is not saved with the scene")
 	_check(text.contains("gads_world_pom_ss.gdshader"), "the editor does not switch the saved material's variant")
 	# The node's default preset (Medium) has no near-camera geometry; in the editor that must not

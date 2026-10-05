@@ -33,10 +33,12 @@ BAKE = "addons/gads/terrain/gads_ground_bake.gd"
 MATERIALS = "addons/gads/materials/gads_materials.gd"
 SCATTER = "addons/gads/terrain/gads_pebble_scatter_3d.gd"
 DEMO = "demo/demo_main.gd"
+MESH_NODE = "addons/gads/geometry/gads_mesh_instance_3d.gd"
+MESH_BAKER = "addons/gads/geometry/gads_mesh_baker.gd"
 HEIGHT_IMPORT = "demo/textures/clean_pebbles/clean_pebbles_height.exr.import"
 
 # (name, what it breaks, [(file, old, new)], [(suite, name filter)]); suite is "logic",
-# "render" (tests/render_tests.gd) or "field" (tests/field_tests.gd).
+# "render" (tests/render_tests.gd), "field" (tests/field_tests.gd) or "bake" (tests/bake_tests.gd).
 MUTATIONS = [
     ("no mipmaps", "the demo height map imported without mipmaps (the crater's POM bug)",
      [(HEIGHT_IMPORT, "mipmaps/generate=true", "mipmaps/generate=false")],
@@ -152,12 +154,28 @@ MUTATIONS = [
     ("demo camera script after ready", "the demo attaches its fly camera script after the camera is ready",
      [(DEMO, "	cam.set_script(FlyCamera)\n	add_child(scene)", "	add_child(scene)\n	cam.set_script(FlyCamera)")],
      [("field", "demo_camera")]),
+    ("baked mesh still marches", "a baked mesh runs the parallax march over relief its geometry already has",
+     [(SURFACE, "	float amp = gads_baked > 0.5 ? 0.0 : height_m * fade;", "	float amp = height_m * fade;")],
+     [("bake", "renders")]),
+    ("baked normal map lit twice", "a baked mesh applies the full normal map on top of its geometry's slope",
+     [(SURFACE, "	if (gads_baked > 0.5) {\n		nm = gads_detail_normal(nm, p, uv_hit);\n	}\n	NORMAL_MAP = nm;", "	NORMAL_MAP = nm;")],
+     [("bake", "renders")]),
+    ("bake key ignores the basis", "scaling or rotating a baked mesh does not make its bake stale",
+     [(MESH_BAKER, "	parts.append(_rounded(basis_values))", "	pass")],
+     [("bake", "staleness")]),
+    ("bake cache ignored", "every bake runs again although a bake of the same inputs is saved",
+     [(MESH_NODE, "	if not force and ResourceLoader.exists(paths[0])", "	if false and ResourceLoader.exists(paths[0])")],
+     [("bake", "node_bake")]),
+    ("bake collision body saved", "the collision body is an ordinary child, saved with the scene",
+     [(MESH_NODE, "		add_child(_body, false, Node.INTERNAL_MODE_BACK)", "		add_child(_body)")],
+     [("bake", "collision")]),
 ]
 
 SUITES = {
     "logic": (["--headless", "--script", "tests/run_logic_tests.gd"], r"logic tests: \d+ passed, \d+ failed"),
     "render": (["--script", "tests/render_tests.gd"], r"render tests: \d+ passed, \d+ failed"),
     "field": (["--script", "tests/field_tests.gd"], r"field tests: \d+ passed, \d+ failed"),
+    "bake": (["--script", "tests/bake_tests.gd"], r"bake tests: \d+ passed, \d+ failed"),
 }
 
 

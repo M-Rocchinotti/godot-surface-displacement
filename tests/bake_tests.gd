@@ -1,0 +1,648 @@
+extends SceneTree
+## Tests of the baked displacement (GADSMeshBaker, GADSMeshInstance3D and the native
+## tessellator), headed because some compare renders:
+##     python tools/godot.py --script tests/bake_tests.gd [-- --only=name,name]
+## Geometry is checked against the height field it was baked from (accuracy, adaptivity, closed
+## surfaces across seams and hard edges, budget, determinism, scale, triangle shape, normals,
+## tangents, the shaders' rest data, LODs); the node's cache, staleness, collision and save / load;
+## and renders of a baked mesh against the same material's parallax. Exit code 0 = all passed.
+## With --headless (a dummy renderer) everything but the renders runs.
+
+const Harness := preload("res://tests/lib/gads_harness.gd")
+const CACHE_DIR := "user://gads_bake_tests"
+const SIZE := Vector2i(640, 360)
+
+var h: Harness
+var _passed := 0
+var _failed := 0
+
+
+func _initialize() -> void:
+	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
+	GADSGlobals.ensure_registered()
+	h = Harness.new(self)
+	h.make_viewport(SIZE, true)
+	_run()
+
+
+func _run() -> void:
+	if not GADSMeshBaker.is_available():
+		# The library ships for Linux and Windows x86_64; elsewhere there is nothing to test.
+		var expected := OS.get_name() in ["Linux", "Windows"] and Engine.get_architecture_name() == "x86_64"
+		print("bake tests: native library not loaded%s" % (" (it should be on this platform)" if expected else ", skipped"))
+		print("\nbake tests: %d passed, %d failed" % [0, 1 if expected else 0])
+		quit(1 if expected else 0)
+		return
+	_remove_cache()
+	await process_frame # _initialize runs before the root enters the tree.
+	await _test("library_matches_sources", test_library_matches_sources)
+	await _test("follows_the_height_field", test_accuracy)
+	await _test("refines_only_where_the_relief_is", test_adaptivity)
+	await _test("closed_meshes_stay_closed", test_watertight)
+	await _test("locked_borders_stay", test_locked_borders)
+	await _test("triangle_budget", test_budget)
+	await _test("deterministic", test_determinism)
+	await _test("scaled_and_rotated_nodes", test_transform)
+	await _test("triangle_shape", test_angles)
+	await _test("normals_tangents_and_rest_data", test_attributes)
+	await _test("lods", test_lods)
+	await _test("cancel", test_cancel)
+	await _test("node_bake_cache_and_clear", test_node)
+	await _test("staleness", test_staleness)
+	await _test("collision", test_collision)
+	await _test("save_and_load", test_save_load)
+	if DisplayServer.get_name() != "headless":
+		await _test("renders_like_parallax", test_render)
+	print("\nbake tests: %d passed, %d failed" % [_passed, _failed])
+	h.clear_scene()
+	h.viewport.queue_free()
+	_remove_cache()
+	await h.frames(3)
+	quit(1 if _failed > 0 else 0)
+
+
+func _test(test_name: String, fn: Callable) -> void:
+	for arg in OS.get_cmdline_user_args():
+		if arg.begins_with("--only="):
+			var wanted := false
+			for part in arg.trim_prefix("--only=").split(","):
+				wanted = wanted or test_name.contains(part)
+			if not wanted:
+				return
+	print("\n== %s" % test_name)
+	GADSGlobals.set_value(GADSGlobals.POM_STEPS, Vector4(8, 24, 3, 0))
+	GADSGlobals.set_value(GADSGlobals.POM_RANGE, Vector4(1000, 2000, -10, 99))
+	GADSGlobals.set_value(GADSGlobals.SHADOW, Vector4(8, 20, 0, 0))
+	GADSGlobals.set_value(GADSGlobals.DEBUG, Vector4(0, 0.1, 0, 0))
+	await fn.call()
+
+
+func check(condition: bool, what: String) -> void:
+	if condition:
+		_passed += 1
+		print("  ok   %s" % what)
+	else:
+		_failed += 1
+		print("  FAIL %s" % what)
+
+
+func _remove_cache() -> void:
+	var dir := DirAccess.open(CACHE_DIR)
+	if dir == null:
+		return
+	for f in dir.get_files():
+		dir.remove(f)
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(CACHE_DIR))
+
+
+# --- Fixtures -----------------------------------------------------------------------------------
+
+## A Gaussian bump in the middle of the tile: h = exp(-r^2 / (2 sigma^2)), sigma in uv.
+static func bump_field(size: int, sigma: float) -> Dictionary:
+	var data := PackedFloat32Array()
+	data.resize(size * size)
+	for y in size:
+		for x in size:
+			var d := Vector2((x + 0.5) / size - 0.5, (y + 0.5) / size - 0.5)
+			data[y * size + x] = exp(-d.length_squared() / (2.0 * sigma * sigma))
+	return Harness.field_from_data(data, size)
+
+
+## A normal map that matches field on a tile of tile_m metres with relief depth amp (m): the
+## GADS convention (x along +u, y along -v, see gads_apply_normal_map).
+static func normal_map_of(field: Dictionary, tile_m: float, amp: float) -> ImageTexture:
+	var size: int = field["size"]
+	var data: PackedFloat32Array = field["data"]
+	var texel_m := tile_m / size
+	var img := Image.create(size, size, false, Image.FORMAT_RGB8)
+	for y in size:
+		for x in size:
+			var du := (data[y * size + posmod(x + 1, size)] - data[y * size + posmod(x - 1, size)]) * amp / (2.0 * texel_m)
+			var dv := (data[posmod(y + 1, size) * size + x] - data[posmod(y - 1, size) * size + x]) * amp / (2.0 * texel_m)
+			var n := Vector3(-du, dv, 1.0).normalized()
+			img.set_pixel(x, y, Color(n.x * 0.5 + 0.5, n.y * 0.5 + 0.5, n.z * 0.5 + 0.5))
+	img.generate_mipmaps()
+	return ImageTexture.create_from_image(img)
+
+
+func uv_material(field: Dictionary, amp: float, params := {}) -> ShaderMaterial:
+	var p := {"height_m": amp, "height_center": 0.0}
+	p.merge(params, true)
+	return GADSMaterials.create(GADSMaterials.Mapping.UV, {"height": ImageTexture.create_from_image(field["image"])}, p, GADSMaterials.Quality.POM)
+
+
+static func plane(size := 2.0) -> PlaneMesh:
+	var m := PlaneMesh.new()
+	m.size = Vector2(size, size)
+	return m
+
+
+## Bakes mesh with one material on every surface; returns the baker (check .mesh / .error).
+func bake_with(mesh: Mesh, material: Material, settings: Dictionary, xform := Transform3D.IDENTITY) -> GADSMeshBaker:
+	var materials: Array[Material] = []
+	for s in mesh.get_surface_count():
+		materials.append(material)
+	var baker := GADSMeshBaker.new()
+	var full := {"max_error": 0.0005, "max_triangles": 200000, "lods": false}
+	full.merge(settings, true)
+	baker.setup(mesh, materials, xform, full)
+	baker.run()
+	return baker
+
+
+static func triangles_of(mesh: Mesh) -> Array:
+	var out := []
+	for s in mesh.get_surface_count():
+		var arrays := mesh.surface_get_arrays(s)
+		var v: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+		var idx: PackedInt32Array = arrays[Mesh.ARRAY_INDEX]
+		for i in range(0, idx.size(), 3):
+			out.append([v[idx[i]], v[idx[i + 1]], v[idx[i + 2]]])
+	return out
+
+
+static func triangle_count(mesh: Mesh) -> int:
+	var n := 0
+	for s in mesh.get_surface_count():
+		n += (mesh.surface_get_arrays(s)[Mesh.ARRAY_INDEX] as PackedInt32Array).size() / 3
+	return n
+
+
+# --- Tests --------------------------------------------------------------------------------------
+
+## The shipped library embeds a hash of native/src and native/thirdparty (tools/build_native.py
+## --hash): a source change without a rebuild fails here.
+func test_library_matches_sources() -> void:
+	var files: Array[String] = []
+	for top in ["src", "thirdparty"]:
+		_collect_sources("res://native/" + top, top, files)
+	files.sort()
+	var ctx := HashingContext.new()
+	ctx.start(HashingContext.HASH_SHA256)
+	for rel in files:
+		ctx.update((rel + "\n").to_utf8_buffer())
+		ctx.update(FileAccess.get_file_as_bytes("res://native/" + rel))
+	var source_hash := ctx.finish().hex_encode().left(16)
+	var built: String = ClassDB.class_call_static("GADSTessellator", "get_build_hash")
+	print("  sources %s, library %s" % [source_hash, built])
+	check(built == source_hash, "the library was built from the current native sources (python tools/build_native.py)")
+
+
+func _collect_sources(dir_path: String, rel: String, out: Array[String]) -> void:
+	var dir := DirAccess.open(dir_path)
+	if dir == null:
+		return
+	for f in dir.get_files():
+		if f.get_extension() in ["h", "hpp", "c", "cpp"] and not f.ends_with(".gen.h"):
+			out.append(rel + "/" + f)
+	for d in dir.get_directories():
+		_collect_sources(dir_path + "/" + d, rel + "/" + d, out)
+
+
+func test_accuracy() -> void:
+	var field := bump_field(256, 0.08)
+	var amp := 0.06
+	var tolerance := 0.0005
+	var baker := bake_with(plane(), uv_material(field, amp), {"max_error": tolerance})
+	check(baker.mesh != null, "a plane bakes (%s)" % baker.error)
+	if baker.mesh == null:
+		return
+	# Points inside the triangles against the field at the same uv.
+	var arrays := baker.mesh.surface_get_arrays(0)
+	var v: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+	var uv: PackedVector2Array = arrays[Mesh.ARRAY_TEX_UV]
+	var idx: PackedInt32Array = arrays[Mesh.ARRAY_INDEX]
+	var worst := 0.0
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 3
+	for i in range(0, idx.size(), 3):
+		for k in 3:
+			var a := rng.randf()
+			var b := rng.randf() * (1.0 - a)
+			var c := 1.0 - a - b
+			var p := v[idx[i]] * a + v[idx[i + 1]] * b + v[idx[i + 2]] * c
+			var t := uv[idx[i]] * a + uv[idx[i + 1]] * b + uv[idx[i + 2]] * c
+			worst = maxf(worst, absf(p.y - amp * Harness.sample_field(field, t)))
+	print("  %d triangles, largest distance to the height field %.3f mm (tolerance %.1f mm)" % [idx.size() / 3, worst * 1000.0, tolerance * 1000.0])
+	check(worst < 2.0 * tolerance, "the geometry stays within twice the tolerance of the height field (footprint filtering adds a little)")
+	var peak := 0.0
+	for p in v:
+		peak = maxf(peak, p.y)
+	check(absf(peak - amp) < 0.002, "the bump's top is %.1f mm high (%.1f mm)" % [peak * 1000.0, amp * 1000.0])
+
+
+func test_adaptivity() -> void:
+	var field := bump_field(256, 0.06)
+	var baker := bake_with(plane(), uv_material(field, 0.05), {"max_error": 0.0005})
+	var near := 0
+	var far := 0
+	for t: Array in triangles_of(baker.mesh):
+		var c: Vector3 = (t[0] + t[1] + t[2]) / 3.0
+		var r := Vector2(c.x, c.z).length()
+		if r < 0.3:
+			near += 1
+		elif r > 0.7:
+			far += 1
+	# Areas: inner disc 0.28 m2, outer region 4 - 1.54 = 2.46 m2.
+	var density_near := near / (PI * 0.09)
+	var density_far := far / (4.0 - PI * 0.49)
+	print("  %d triangles within 0.3 m of the bump, %d beyond 0.7 m (density ratio %.0f)" % [near, far, density_near / maxf(density_far, 1e-6)])
+	check(density_near > 20.0 * density_far, "triangles go where the relief is")
+	check(baker.stats["source_triangles"] == 2 and baker.stats["triangles"] == triangle_count(baker.mesh), "statistics count the triangles")
+
+
+## Every edge of a closed source mesh still has exactly two triangles after the bake (no cracks or
+## T-junctions at UV seams, hard edges or poles).
+func test_watertight() -> void:
+	var field := Harness.make_wave_field(128)
+	var tex := ImageTexture.create_from_image(field["image"])
+	var sphere := SphereMesh.new()
+	var cylinder := CylinderMesh.new()
+	var box := BoxMesh.new()
+	var cases := [
+		["box, triplanar", box, GADSMaterials.Mapping.TRIPLANAR],
+		["box, uv", box, GADSMaterials.Mapping.UV],
+		["sphere, uv", sphere, GADSMaterials.Mapping.UV],
+		["cylinder, world", cylinder, GADSMaterials.Mapping.WORLD],
+	]
+	for c: Array in cases:
+		var mat := GADSMaterials.create(c[2], {"height": tex}, {"height_m": 0.04, "height_center": 0.5, "texture_size_m": Vector2(0.5, 0.5)}, GADSMaterials.Quality.POM)
+		var baker := bake_with(c[1], mat, {"max_error": 0.001, "max_triangles": 60000})
+		if baker.mesh == null:
+			check(false, "%s bakes (%s)" % [c[0], baker.error])
+			continue
+		var edges := {}
+		for t: Array in triangles_of(baker.mesh):
+			var keys := [_weld(t[0]), _weld(t[1]), _weld(t[2])]
+			if keys[0] == keys[1] or keys[1] == keys[2] or keys[0] == keys[2]:
+				continue # Degenerate (a pole): no edge of its own.
+			for k in 3:
+				var a: Vector3i = keys[k]
+				var b: Vector3i = keys[(k + 1) % 3]
+				var key := [a, b] if [a.x, a.y, a.z] < [b.x, b.y, b.z] else [b, a]
+				edges[key] = edges.get(key, 0) + 1
+		var open := 0
+		for key in edges:
+			if edges[key] != 2:
+				open += 1
+		print("  %s: %d triangles, %d edges, %d not shared by exactly two" % [c[0], triangle_count(baker.mesh), edges.size(), open])
+		check(open == 0, "%s stays closed" % c[0])
+
+
+static func _weld(p: Vector3) -> Vector3i:
+	return Vector3i((p * 1e5).round())
+
+
+func test_locked_borders() -> void:
+	var field := Harness.make_wave_field(128)
+	var mat := uv_material(field, 0.05, {"height_center": 0.5})
+	var free := bake_with(plane(), mat, {"max_error": 0.001})
+	var locked := bake_with(plane(), mat, {"max_error": 0.001, "lock_borders": true})
+	var moved_free := 0.0
+	var moved_locked := 0.0
+	for pair: Array in [[free, "free"], [locked, "locked"]]:
+		for p: Vector3 in (pair[0] as GADSMeshBaker).mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX]:
+			if absf(absf(p.x) - 1.0) < 1e-5 or absf(absf(p.z) - 1.0) < 1e-5:
+				if pair[1] == "free":
+					moved_free = maxf(moved_free, absf(p.y))
+				else:
+					moved_locked = maxf(moved_locked, absf(p.y))
+	print("  border vertices move up to %.2f mm (free), %.4f mm (locked)" % [moved_free * 1000.0, moved_locked * 1000.0])
+	check(moved_free > 0.001 and moved_locked < 1e-6, "lock_borders keeps open edges in place")
+
+
+func test_budget() -> void:
+	var field := Harness.make_stone_field(256, 40, 5)
+	var baker := bake_with(plane(), uv_material(field, 0.05), {"max_error": 0.00005, "max_triangles": 3000})
+	var n := triangle_count(baker.mesh)
+	print("  %d triangles for a budget of 3000; %.2f mm left" % [n, float(baker.stats["max_error_left"]) * 1000.0])
+	check(n <= 3000 and n > 2000, "the budget caps the triangle count")
+	check(baker.stats["budget_reached"] and baker.stats["max_error_left"] > 0.00005, "the statistics say the budget stopped it, and how far off it is")
+
+
+func test_determinism() -> void:
+	var field := Harness.make_stone_field(256, 40, 9)
+	var mat := uv_material(field, 0.05)
+	var a := bake_with(plane(), mat, {"threads": 4})
+	var b := bake_with(plane(), mat, {"threads": 4})
+	var c := bake_with(plane(), mat, {"threads": 1})
+	var va: PackedVector3Array = a.mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX]
+	var ia: PackedInt32Array = a.mesh.surface_get_arrays(0)[Mesh.ARRAY_INDEX]
+	check(va == b.mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX] and ia == b.mesh.surface_get_arrays(0)[Mesh.ARRAY_INDEX], "two bakes are identical")
+	check(va == c.mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX] and ia == c.mesh.surface_get_arrays(0)[Mesh.ARRAY_INDEX], "the thread count does not change the result")
+
+
+## height_m is in metres in the world: on a node scaled by 2 the object-space displacement is half.
+## Rotated onto a wall it still moves along the surface normal.
+func test_transform() -> void:
+	var field := bump_field(128, 0.1)
+	var mat := uv_material(field, 0.05)
+	var scaled := bake_with(plane(), mat, {}, Transform3D(Basis.from_scale(Vector3(2, 2, 2)), Vector3(5, 0, 0)))
+	var wall := bake_with(plane(), mat, {}, Transform3D(Basis(Vector3.RIGHT, PI / 2.0), Vector3.ZERO))
+	var peak_scaled := 0.0
+	var peak_wall := 0.0
+	var off_axis := 0.0
+	for p: Vector3 in scaled.mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX]:
+		peak_scaled = maxf(peak_scaled, p.y)
+	for p: Vector3 in wall.mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX]:
+		peak_wall = maxf(peak_wall, p.y)
+	print("  peak in object space: %.2f mm at scale 2, %.2f mm on a wall" % [peak_scaled * 1000.0, peak_wall * 1000.0])
+	check(absf(peak_scaled - 0.025) < 0.001, "scale 2 halves the object-space displacement")
+	check(absf(peak_wall - 0.05) < 0.001, "a rotated plane moves along its own normal")
+	# The error is measured in world metres. Scaled by 2 the bump is 4 times the area at a quarter
+	# of the curvature, so it needs about as many triangles; measured in object units (half the
+	# displacement there) it would need about half as many.
+	var unscaled := triangle_count(bake_with(plane(), mat, {}).mesh)
+	var ratio := float(triangle_count(scaled.mesh)) / unscaled
+	print("  triangles at scale 2 / scale 1: %.2f" % ratio)
+	check(ratio > 0.75 and ratio < 1.33, "the tolerance is in world metres")
+
+
+## Longest-edge bisection keeps the angles of the source: a plane's right triangles stay 45-45-90.
+func test_angles() -> void:
+	var field := Harness.make_stone_field(256, 40, 11)
+	var baker := bake_with(plane(), uv_material(field, 0.05), {"max_triangles": 40000})
+	var arrays := baker.mesh.surface_get_arrays(0)
+	var rest: PackedFloat32Array = arrays[Mesh.ARRAY_CUSTOM0]
+	var idx: PackedInt32Array = arrays[Mesh.ARRAY_INDEX]
+	var smallest := 180.0
+	for i in range(0, idx.size(), 3):
+		var p: Array[Vector3] = []
+		for k in 3:
+			var j := idx[i + k] * 4
+			p.append(Vector3(rest[j], rest[j + 1], rest[j + 2]))
+		for k in 3:
+			var e1 := p[(k + 1) % 3] - p[k]
+			var e2 := p[(k + 2) % 3] - p[k]
+			smallest = minf(smallest, rad_to_deg(e1.angle_to(e2)))
+	print("  smallest angle %.2f deg over %d triangles" % [smallest, idx.size() / 3])
+	check(smallest > 44.9, "no sliver triangles")
+
+
+func test_attributes() -> void:
+	var field := bump_field(256, 0.06)
+	var baker := bake_with(plane(), uv_material(field, 0.08), {})
+	var mesh := baker.mesh
+	check((mesh.surface_get_format(0) & Mesh.ARRAY_FORMAT_CUSTOM0) != 0 and (mesh.surface_get_format(0) & Mesh.ARRAY_FORMAT_CUSTOM1) != 0, "the mesh carries CUSTOM0 and CUSTOM1")
+	var a := mesh.surface_get_arrays(0)
+	var v: PackedVector3Array = a[Mesh.ARRAY_VERTEX]
+	var n: PackedVector3Array = a[Mesh.ARRAY_NORMAL]
+	var t: PackedFloat32Array = a[Mesh.ARRAY_TANGENT]
+	var c0: PackedFloat32Array = a[Mesh.ARRAY_CUSTOM0]
+	var c1: PackedFloat32Array = a[Mesh.ARRAY_CUSTOM1]
+	var flat_ok := true
+	var tilt := 0.0
+	var tangent_ok := true
+	var rest_ok := true
+	var levels_ok := true
+	for i in v.size():
+		var tangent := Vector3(t[i * 4], t[i * 4 + 1], t[i * 4 + 2])
+		tangent_ok = tangent_ok and absf(tangent.dot(n[i])) < 0.02 and absf(absf(t[i * 4 + 3]) - 1.0) < 1e-6
+		var r := Vector2(v[i].x, v[i].z).length()
+		if r > 0.8:
+			flat_ok = flat_ok and n[i].dot(Vector3.UP) > 0.9999 and tangent.dot(Vector3.RIGHT) > 0.999
+		tilt = maxf(tilt, rad_to_deg(n[i].angle_to(Vector3.UP)))
+		rest_ok = rest_ok and is_equal_approx(c0[i * 4], v[i].x) and is_equal_approx(c0[i * 4 + 2], v[i].z) and absf(c0[i * 4 + 1]) < 1e-6
+		rest_ok = rest_ok and Vector3(c1[i * 4], c1[i * 4 + 1], c1[i * 4 + 2]).is_equal_approx(Vector3.UP)
+		levels_ok = levels_ok and c1[i * 4 + 3] >= 0.0 and c1[i * 4 + 3] * 32.0 <= 24.0 and c0[i * 4 + 3] >= 0.0
+	print("  normals tilt up to %.1f deg on the bump" % tilt)
+	check(flat_ok, "far from the bump normals point up and tangents along +u")
+	check(tilt > 20.0, "on the bump the normals follow the slope")
+	check(tangent_ok, "tangents are perpendicular to the normals with a +-1 sign")
+	check(rest_ok, "CUSTOM0 holds the rest position, CUSTOM1 the rest normal")
+	check(levels_ok, "refinement levels and footprint mip levels are in range")
+
+
+func test_lods() -> void:
+	var field := bump_field(256, 0.06)
+	var baker := bake_with(plane(), uv_material(field, 0.08), {"lods": true, "max_error": 0.0002})
+	var surface := RenderingServer.mesh_get_surface(baker.mesh.get_rid(), 0)
+	var lods: Array = surface.get("lods", [])
+	print("  %d LODs for %d triangles" % [lods.size(), triangle_count(baker.mesh)])
+	check(lods.size() >= 2, "the baked mesh has LODs")
+	var plain := bake_with(plane(), uv_material(field, 0.08), {"lods": false, "max_error": 0.0002})
+	check(baker.mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX] == plain.mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX], "LODs share the full mesh's vertices")
+
+
+func test_cancel() -> void:
+	var field := Harness.make_stone_field(512, 200, 13)
+	var materials: Array[Material] = [uv_material(field, 0.05)]
+	var baker := GADSMeshBaker.new()
+	baker.setup(plane(), materials, Transform3D.IDENTITY, {"max_error": 0.00001, "max_triangles": 5000000, "lods": false})
+	var started := Time.get_ticks_msec()
+	check(baker.start(), "a background bake starts")
+	baker.cancel()
+	var ok := baker.finish()
+	var ms := Time.get_ticks_msec() - started
+	print("  cancelled after %d ms" % ms)
+	check(not ok and baker.error == "cancelled" and baker.mesh == null, "cancel stops the bake without a result")
+	check(ms < 2000, "cancel takes effect promptly")
+
+
+func _make_node(material: Material) -> GADSMeshInstance3D:
+	var node := GADSMeshInstance3D.new()
+	node.name = "Baked"
+	node.source_mesh = plane()
+	node.material_override = material
+	node.cache_directory = CACHE_DIR
+	node.quality = GADSMeshInstance3D.Quality.LOW
+	return node
+
+
+func test_node() -> void:
+	var field := bump_field(128, 0.08)
+	var node := _make_node(uv_material(field, 0.05))
+	root.add_child(node)
+	var source := node.source_mesh
+	check(node.mesh == source and not node.baked, "an unbaked node draws its source mesh")
+	var progress := []
+	node.bake_progress.connect(func(p: float, _t: int) -> void: progress.append(p))
+	var finished := []
+	node.bake_finished.connect(func(ok: bool) -> void: finished.append(ok))
+	check(node.bake_async() == OK and node.is_baking(), "a background bake starts")
+	check(node.bake_async() == ERR_BUSY, "a second bake waits for the first")
+	while node.is_baking():
+		await process_frame
+	check(finished == [true] and node.baked and node.mesh != source and node.mesh is ArrayMesh, "it finishes with the baked mesh shown")
+	check(node.get_instance_shader_parameter(&"gads_baked") == 1.0, "the materials are told the mesh is baked")
+	var path: String = node.bake_stats.get("path", "")
+	check(path.begins_with(CACHE_DIR) and FileAccess.file_exists(path) and node.mesh.resource_path == path, "the bake is a cache file the scene refers to (%s)" % path)
+	print("  %s" % node.get_bake_summary().replace("\n", " | "))
+	var first := node.mesh
+	node.clear_bake()
+	check(not node.baked and node.mesh == source and node.get_instance_shader_parameter(&"gads_baked") == 0.0, "Clear shows the source mesh again")
+	var t0 := Time.get_ticks_msec()
+	check(node.bake() == OK and node.bake_stats.get("cached", false) and node.mesh == first, "baking the same inputs again takes the cached file (%d ms)" % (Time.get_ticks_msec() - t0))
+	check(node.bake(true) == OK and not node.bake_stats.get("cached", false), "Rebuild ignores the cache")
+	check(source == node.source_mesh and (source as PlaneMesh).size == Vector2(2, 2), "the source mesh is untouched")
+	node.queue_free()
+	await process_frame
+
+
+func test_staleness() -> void:
+	var field := bump_field(128, 0.08)
+	var mat := uv_material(field, 0.05)
+	var node := _make_node(mat)
+	root.add_child(node)
+	node.bake()
+	check(not node.is_bake_stale(), "fresh after the bake")
+	node.position = Vector3(3, 0, 1)
+	check(not node.is_bake_stale(), "moving a UV-mapped mesh keeps the bake")
+	node.scale = Vector3(2, 2, 2)
+	check(node.is_bake_stale(), "scaling it does not (the tolerance is in metres)")
+	node.scale = Vector3.ONE
+	mat.set_shader_parameter("height_m", 0.06)
+	check(node.is_bake_stale(), "a new relief depth makes it stale")
+	mat.set_shader_parameter("height_m", 0.05)
+	node.quality = GADSMeshInstance3D.Quality.HIGH
+	check(node.is_bake_stale(), "a new quality makes it stale")
+	node.quality = GADSMeshInstance3D.Quality.LOW
+	(node.source_mesh as PlaneMesh).subdivide_width = 3
+	check(node.is_bake_stale(), "an edited source mesh makes it stale")
+	node.queue_free()
+	var world := GADSMaterials.create(GADSMaterials.Mapping.WORLD, {"height": ImageTexture.create_from_image(field["image"])}, {"height_m": 0.05, "height_center": 0.0}, GADSMaterials.Quality.POM)
+	var planar := _make_node(world)
+	root.add_child(planar)
+	planar.bake()
+	planar.position = Vector3(0.3, 0, 0)
+	check(planar.is_bake_stale(), "moving a world-mapped mesh makes it stale")
+	check(not planar._get_configuration_warnings().is_empty(), "the node warns about a stale bake")
+	planar.queue_free()
+	await process_frame
+
+
+func test_collision() -> void:
+	var field := bump_field(128, 0.1)
+	var node := _make_node(uv_material(field, 0.2))
+	node.collision = GADSMeshBaker.Collision.TRIMESH
+	node.collision_max_triangles = 2000
+	root.add_child(node)
+	check(node.bake() == OK, "a bake with collision")
+	var bodies := node.get_children(true).filter(func(c: Node) -> bool: return c is StaticBody3D)
+	check(bodies.size() == 1 and node.get_child_count(false) == 0, "an internal static body (not part of the scene)")
+	var shape := node.collision_shape as ConcavePolygonShape3D
+	var tris := shape.get_faces().size() / 3 if shape != null else 0
+	print("  collision %d triangles, render %d" % [tris, node.bake_stats.get("triangles", 0)])
+	check(shape != null and tris <= 2000 and tris < int(node.bake_stats["triangles"]), "the collision shape has its own, lower resolution")
+	await physics_frame
+	await physics_frame
+	var space := node.get_world_3d().direct_space_state
+	var hit := space.intersect_ray(PhysicsRayQueryParameters3D.create(Vector3(0, 1, 0), Vector3(0, -1, 0)))
+	var hit_y: float = hit["position"].y if not hit.is_empty() else -1.0
+	print("  a ray down the bump's centre hits at %.1f mm (relief top 200 mm)" % (hit_y * 1000.0))
+	check(absf(hit_y - 0.2) < 0.01, "the shape follows the relief")
+	node.collision = GADSMeshBaker.Collision.NONE
+	check(node.get_children(true).filter(func(c: Node) -> bool: return c is StaticBody3D and not c.is_queued_for_deletion()).is_empty(), "collision NONE removes the body")
+	node.queue_free()
+	await process_frame
+
+
+func test_save_load() -> void:
+	var field := bump_field(64, 0.08)
+	var node := _make_node(uv_material(field, 0.05))
+	root.add_child(node)
+	node.bake()
+	var baked_path := node.mesh.resource_path
+	var packed := PackedScene.new()
+	check(packed.pack(node) == OK, "the node packs")
+	var scene_path := CACHE_DIR.path_join("scene.tscn")
+	check(ResourceSaver.save(packed, scene_path) == OK, "the scene saves")
+	node.queue_free()
+	await process_frame
+	var text := FileAccess.get_file_as_string(scene_path)
+	check(text.contains('path="%s"' % baked_path) and not text.contains("GADSCollision"), "the scene refers to the baked file and holds no collision node")
+	var copy := (ResourceLoader.load(scene_path, "", ResourceLoader.CACHE_MODE_IGNORE) as PackedScene).instantiate() as GADSMeshInstance3D
+	root.add_child(copy)
+	check(copy.baked and copy.mesh != null and copy.mesh.resource_path == baked_path, "the loaded node shows the baked mesh")
+	check(copy.source_mesh is PlaneMesh and copy.get_instance_shader_parameter(&"gads_baked") == 1.0, "with its source mesh and the baked flag for the materials")
+	check(not copy.is_bake_stale(), "and the bake is still current")
+	copy.queue_free()
+	await process_frame
+
+
+## A baked mesh lit like the parallax version of the same material (with a normal map that matches
+## the height map) looks the same: textures are mapped at the rest position and the normal map
+## adds only the detail finer than the triangles. Applying the full normal map on top of the
+## geometry's own slope would tilt the flanks twice.
+func test_render() -> void:
+	var field := bump_field(256, 0.07)
+	var amp := 0.12
+	var normal := normal_map_of(field, 2.0, amp)
+	var params := {"height_m": amp, "height_center": 0.0}
+	var textures := {"height": ImageTexture.create_from_image(field["image"]), "normal": normal}
+	var s := h.new_lit_scene(Color(0.15, 0.15, 0.15))
+	h.add_sun(35.0, 30.0, false)
+	h.add_camera(Vector3(0, 2.2, 1.6), Vector3(0, 0, 0), 50.0)
+	var pom_mat := GADSMaterials.create(GADSMaterials.Mapping.UV, textures, params, GADSMaterials.Quality.POM)
+	var mi := MeshInstance3D.new()
+	mi.mesh = plane()
+	mi.material_override = pom_mat
+	s.add_child(mi)
+	await h.frames(4)
+	var pom := await h.capture()
+	mi.queue_free()
+	var node := _make_node(GADSMaterials.create(GADSMaterials.Mapping.UV, textures, params, GADSMaterials.Quality.POM))
+	node.quality = GADSMeshInstance3D.Quality.HIGH
+	s.add_child(node)
+	node.bake()
+	await h.frames(4)
+	var baked := await h.capture()
+	# The same, but with the full normal map applied on the geometry (what the shader must not do).
+	node.set_instance_shader_parameter(&"gads_baked", 0.0)
+	var naive_mat := GADSMaterials.create(GADSMaterials.Mapping.UV, textures, {"height_m": 0.0}, GADSMaterials.Quality.FLAT)
+	node.material_override = naive_mat
+	await h.frames(4)
+	var naive := await h.capture()
+	# Compared where the relief shows: the pixels where parallax differs from the flat plane.
+	node.material_override = GADSMaterials.create(GADSMaterials.Mapping.UV, {}, {"height_m": 0.0}, GADSMaterials.Quality.FLAT)
+	node.mesh = node.source_mesh
+	await h.frames(4)
+	var flat := await h.capture()
+	node.mesh = load(node.bake_stats["path"])
+	var mask := []
+	for y in range(0, SIZE.y, 2):
+		for x in range(0, SIZE.x, 2):
+			if _difference(pom.get_pixel(x, y), flat.get_pixel(x, y)) > 0.02:
+				mask.append(Vector2i(x, y))
+	var d_baked := _mean_difference(pom, baked, mask)
+	var d_naive := _mean_difference(pom, naive, mask)
+	print("  on the %d pixels where the relief shows, mean difference to parallax: baked %.4f, normal map on top of the geometry %.4f" % [mask.size(), d_baked, d_naive])
+	check(mask.size() > 1000, "the relief covers enough of the image to compare")
+	check(d_baked < 0.02, "the baked mesh renders like the parallax material")
+	check(d_naive > 2.0 * d_baked, "the normal map is not applied on top of the geometry's slope")
+	# The baked mesh skips the march: the cost view shows steps only without the baked flag.
+	node.material_override = GADSMaterials.create(GADSMaterials.Mapping.UV, textures, params, GADSMaterials.Quality.POM)
+	GADSGlobals.set_value(GADSGlobals.POM_STEPS, Vector4(8, 24, 3, 0))
+	GADSGlobals.set_value(GADSGlobals.DEBUG, Vector4(GADSManager.DebugView.COST, 0.1, 0, 0))
+	var steps := []
+	for flag in [0.0, 1.0]:
+		node.set_instance_shader_parameter(&"gads_baked", flag)
+		await h.frames(3)
+		var cost := await h.capture()
+		var most := 0.0
+		for y in range(0, SIZE.y, 4):
+			for x in range(0, SIZE.x, 4):
+				most = maxf(most, cost.get_pixel(x, y).r)
+		steps.append(most * 64.0)
+	print("  most parallax steps per pixel: %.0f without the baked flag, %.0f with it" % steps)
+	check(steps[0] > 0.0 and steps[1] == 0.0, "a baked mesh marches no parallax steps")
+	GADSGlobals.set_value(GADSGlobals.DEBUG, Vector4(GADSManager.DebugView.TESSELLATION, 0.1, 0, 0))
+	await h.frames(3)
+	var tess := await h.capture()
+	var centre := tess.get_pixel(SIZE.x / 2, SIZE.y / 2)
+	var edge := tess.get_pixel(SIZE.x / 2, int(SIZE.y * 0.85)) # 0.9 m from the bump, on the plane
+	print("  tessellation view: centre %s, near edge %s" % [centre, edge])
+	check(centre.r > centre.b and edge.b > edge.r, "the tessellation view shows the dense bump warm and the flat plane cold")
+	node.queue_free()
+	await process_frame
+
+
+static func _difference(a: Color, b: Color) -> float:
+	return (absf(a.r - b.r) + absf(a.g - b.g) + absf(a.b - b.b)) / 3.0
+
+
+static func _mean_difference(a: Image, b: Image, pixels: Array) -> float:
+	var sum := 0.0
+	for p: Vector2i in pixels:
+		sum += _difference(a.get_pixelv(p), b.get_pixelv(p))
+	return sum / maxf(pixels.size(), 1.0)

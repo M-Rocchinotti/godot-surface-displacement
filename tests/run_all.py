@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Run every GADS test suite and scan the engine logs for problems.
 
-    python tests/run_all.py              # import, variants, logic, render, field, demo and editor
+    python tests/run_all.py              # import, variants, logic, render, field, bake, demo and editor
                                          # smoke, shipped archive, editor plugin, Blender bake
     python tests/run_all.py --bench      # ... plus the 1080p preset benchmark (waits for an idle GPU)
     python tests/run_all.py --mutations  # ... plus tests/run_mutations.py (slow)
@@ -31,6 +31,7 @@ SUITES = [
     ("logic tests", ["--headless", "--script", "tests/run_logic_tests.gd"], r"logic tests: (\d+) passed, (\d+) failed"),
     ("render tests", ["--script", "tests/render_tests.gd"], r"render tests: (\d+) passed, (\d+) failed"),
     ("field tests", ["--script", "tests/field_tests.gd"], r"field tests: (\d+) passed, (\d+) failed"),
+    ("bake tests", ["--script", "tests/bake_tests.gd"], r"bake tests: (\d+) passed, (\d+) failed"),
     ("demo smoke", ["res://demo/demo_main.tscn", "--quit-after", "400"], None),
     ("editor smoke", ["--editor", "res://demo/demo_main.tscn", "--quit-after", "300"], None),
 ]

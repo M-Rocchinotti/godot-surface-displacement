@@ -5,7 +5,7 @@ Builds build/editor_check/ from the shipped archive (addons/gads as users
 download it, see shipped_archive.py), a small test plugin (tests/editor_check/
 editor_check_plugin.gd) and a generated scene, then starts the editor. The test plugin runs the
 Tools menu actions (add the node, add a field for the selected ground, convert materials, bake
-the ground, validate, prepare a height map), checks undo/redo and what an editor save writes,
+the ground, validate, prepare a height map, make a mesh a GADSMeshInstance3D and bake it), checks undo/redo and what an editor save writes,
 prints "EDITOR CHECK OK" and quits. Fails on a failed check, engine errors or leak reports in
 the logs. Exit code 0 = passed.
 
