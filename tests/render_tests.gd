@@ -34,6 +34,7 @@ func _run() -> void:
 	await _test("light_function_matches_godot", test_brdf_parity)
 	await _test("light_vertex_moves_shadows_onto_relief", test_light_vertex)
 	await _test("self_shadow_matches_height_field", test_self_shadow)
+	await _test("local_light_self_shadow_matches_height_field", test_local_light_self_shadow)
 	await _test("depth_write_opt_in", test_depth_write)
 	await _test("mip_shimmer_at_distance", test_mip_shimmer)
 	await _test("relief_fades_with_distance", test_distance_fade)
@@ -292,7 +293,8 @@ func test_globals_and_defaults() -> void:
 	SDSettings.create_preset(SDSettings.Preset.HIGH).apply_globals()
 	var steps: Vector4 = SDGlobals.get_value(SDGlobals.POM_STEPS)
 	var shadow: Vector4 = SDGlobals.get_value(SDGlobals.SHADOW)
-	check(steps == Vector4(10, 28, 4, 0) and shadow.z > 0.0 and shadow.w == 1.0, "a preset writes its steps and soft self-shadow into the globals")
+	check(steps == Vector4(10, 28, 4, 1) and shadow.z > 0.0 and shadow.w == 1.0,
+			"a preset writes its steps, soft self-shadow and local lights' self-shadow into the globals")
 	SDSettings.create_preset(SDSettings.Preset.MEDIUM).apply_globals()
 	shadow = SDGlobals.get_value(SDGlobals.SHADOW)
 	check(shadow.z == 0.0 and shadow.w == 1.0, "Medium: hard self-shadow")
@@ -668,6 +670,77 @@ func test_self_shadow() -> void:
 		min_off = minf(min_off, off.get_pixelv(p).r)
 	check(min_off > 0.999, "strength 0 switches it off (factor 1 on all %d relief pixels)" % on_relief.size())
 	debug_view(Harness.DEBUG_OFF)
+
+
+## Omni and spot lights self-shadow the relief when sd_pom_steps.w is 1. Lit by one low local
+## light and nothing else (no ambient), a pixel is dark exactly where the CPU height-field shadow
+## towards the light's position says so; with the flag off the light ignores the relief.
+func test_local_light_self_shadow() -> void:
+	var tile := 1.0
+	var amp := 0.05
+	var field := Harness.make_stone_field(512, 70, 11)
+	var tex := ImageTexture.create_from_image(field["image"])
+	var mat := SDMaterials.create(SDMaterials.Mapping.WORLD, {"height": tex}, {"height_m": amp, "height_center": 0.0, "texture_size_m": Vector2(tile, tile)}, SDMaterials.Quality.POM_SELF_SHADOW)
+	var surface := {"point": Vector3.ZERO, "normal": Vector3.UP, "axis": Vector3.UP, "amp": amp, "center": 0.0, "field": field,
+			"uv": func(p: Vector3) -> Vector2: return Vector2(p.x, p.z) / tile}
+	var omni := OmniLight3D.new()
+	omni.omni_range = 8.0
+	var spot := SpotLight3D.new()
+	spot.spot_range = 8.0
+	spot.spot_angle = 70.0
+	for light: Light3D in [omni, spot]:
+		h.new_debug_scene()
+		var s := 2.0
+		h.add_quad(Vector3(-s, 0, s), Vector3(s, 0, s), Vector3(s, 0, -s), Vector3(-s, 0, -s),
+				[Vector2(0, 1), Vector2(1, 1), Vector2(1, 0), Vector2(0, 0)], mat)
+		light.light_energy = 3.0
+		h.scene.add_child(light)
+		# Low and to the side, so the stones throw long shadows over the view.
+		light.look_at_from_position(Vector3(-1.6, 0.45, -0.9), Vector3(0.2, 0.0, 0.1))
+		var cam := h.add_camera(Vector3(0.1, 1.3, 0.6), Vector3(0.0, 0.0, 0.0))
+		SDGlobals.set_value(SDGlobals.SHADOW, Vector4(16, 20, 0, 1))
+		var images := []
+		for local in [1.0, 0.0]:
+			SDGlobals.set_value(SDGlobals.POM_STEPS, Vector4(8, 24, 3, local))
+			await h.frames(3)
+			images.append(await h.capture())
+		# Self-shadowing switched off by strength: the reference for "the light ignores the relief".
+		SDGlobals.set_value(SDGlobals.SHADOW, Vector4(16, 20, 0, 0))
+		await h.frames(3)
+		var unshadowed := await h.capture()
+		var on: Image = images[0]
+		var off: Image = images[1]
+		var agree := 0
+		var total := 0
+		var shadowed := 0
+		var off_differs := 0
+		for py in range(4, SIZE.y, 10):
+			for px in range(4, SIZE.x, 10):
+				var lit_off := Harness.luminance(off.get_pixel(px, py))
+				if absf(lit_off - Harness.luminance(unshadowed.get_pixel(px, py))) > 1e-4:
+					off_differs += 1
+				var o := cam.project_ray_origin(Vector2(px, py) + Vector2(0.5, 0.5))
+				var d := cam.project_ray_normal(Vector2(px, py) + Vector2(0.5, 0.5))
+				var ref := Harness.trace_height_field(o, d, surface)
+				if ref.is_empty() or lit_off < 1e-3:
+					continue # off the quad, or outside the light
+				var hit: Vector3 = ref["hit"]
+				if absf(hit.x) > 1.5 or absf(hit.z) > 1.5:
+					continue
+				var want := Harness.height_field_shadowed(hit, (light.global_position - hit).normalized(), surface, 0.01 * amp)
+				var got := Harness.luminance(on.get_pixel(px, py)) < 0.5 * lit_off
+				total += 1
+				shadowed += 1 if want else 0
+				agree += 1 if want == got else 0
+		var share := float(agree) / maxf(total, 1.0)
+		var kind := light.get_class()
+		print("  %s: %d lit pixels, %.1f %% in traced shadow, classification agrees on %.1f %%" % [kind, total, 100.0 * shadowed / maxf(total, 1.0), share * 100.0])
+		check(total > 1000 and shadowed > total / 10, "%s: the light is low enough to cast relief shadows over the view" % kind)
+		check(share > 0.98, "%s: self-shadow agrees with a traced height-field shadow towards the light on more than 98 %% of pixels" % kind)
+		check(off_differs == 0, "%s: without the flag the light does not self-shadow the relief (%d pixels differ)" % [kind, off_differs])
+		h.scene.remove_child(light)
+	omni.free()
+	spot.free()
 
 
 # --- 9. Opt-in depth write ----------------------------------------------------------------------

@@ -31,10 +31,14 @@ enum DebugView { OFF = 0, HIT_OFFSET = 1, COST = 2, RELIEF = 3, NORMALS = 4, SEL
 	set(value):
 		preset = value
 		_queue_apply()
-## Used when [member preset] is Custom.
+## Used when [member preset] is Custom. Changes to its values apply like the node's own.
 @export var custom_settings: SDSettings:
 	set(value):
+		if custom_settings != null and custom_settings.changed.is_connected(_queue_apply):
+			custom_settings.changed.disconnect(_queue_apply)
 		custom_settings = value
+		if custom_settings != null:
+			custom_settings.changed.connect(_queue_apply)
 		_queue_apply()
 @export_group("Features")
 ## Feature switches on top of the preset: a feature is on when the preset has it AND its switch

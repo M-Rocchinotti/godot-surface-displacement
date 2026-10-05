@@ -7,7 +7,8 @@ extends RefCounted
 ## RenderingServer, so shaders compile without an editor restart.
 ##
 ## [code]sd_pom_steps[/code]  x: minimum linear steps (straight-on view), y: maximum linear steps
-##     (grazing view), z: bisection steps after the linear search, w: unused.
+##     (grazing view), z: bisection steps after the linear search, w: 1 = omni and spot lights
+##     self-shadow the relief too (0 = only directional lights do).
 ## [code]sd_pom_range[/code]  x: distance where the relief starts fading (m), y: distance where it
 ##     is gone (m), z: LOD bias of the march's height samples, w: the height-map mip level at and
 ##     beyond which the march is skipped (the relief is below a pixel there).

@@ -252,9 +252,12 @@ void light() {
 	// ALBEDO); `return` is not allowed in light(), hence the branches.
 	bool shadow_view = int(sd_debug.x + 0.5) == 5;
 	float attenuation = ATTENUATION;
-	if (LIGHT_IS_DIRECTIONAL) {
+	// Omni and spot lights only when the settings ask for it (sd_pom_steps.w): each one costs a
+	// march on every pixel it lights. For them LIGHT points from the relief hit (LIGHT_VERTEX)
+	// towards the light, which is the shadow ray. The debug view shows directional lights only.
+	if (LIGHT_IS_DIRECTIONAL || sd_pom_steps.w > 0.5) {
 		float self_shadow = sd_self_shadow(LIGHT);
-		if (shadow_view) {
+		if (shadow_view && LIGHT_IS_DIRECTIONAL) {
 			DIFFUSE_LIGHT += vec3(self_shadow);
 		}
 		attenuation *= self_shadow;

@@ -18,6 +18,7 @@ func _run() -> void:
 	test_variants()
 	test_presets()
 	test_manager()
+	await test_settings_changes()
 	test_field_geometry()
 	test_field_mesh_seams()
 	test_ground_bake_sampling()
@@ -98,6 +99,8 @@ func test_presets() -> void:
 	check(epic.self_shadow == SDSettings.SelfShadow.SOFT and epic.pom_max_steps >= med.pom_max_steps and epic.pom_fade_end >= med.pom_fade_end
 			and epic.pom_refine_steps >= med.pom_refine_steps and epic.self_shadow_steps >= med.self_shadow_steps,
 			"Epic keeps soft self-shadowing and at least Medium's parallax next to its geometry")
+	check(high.self_shadow_local_lights and epic.self_shadow_local_lights and not med.self_shadow_local_lights and not low.self_shadow_local_lights,
+			"omni and spot lights self-shadow from High up")
 	var budgets := [0.5, 1.2, 2.0, 3.0]
 	var ok := true
 	for p in 4:
@@ -149,6 +152,46 @@ func test_manager() -> void:
 	sd.apply()
 	check(SDMaterials.parse(mat.shader)["quality"] == SDMaterials.Quality.FLAT and is_zero_approx(sd.get_budget_ms()), "enabled = false draws everything flat")
 	scene.queue_free()
+
+
+## Edits to a Custom preset's settings resource apply without touching the node, and the local
+## lights' self-shadow flag reaches the shaders only where self-shadowing is on.
+func test_settings_changes() -> void:
+	print("\n== settings changes")
+	var scene := Node3D.new()
+	var sd := SurfaceDisplacement.new()
+	var custom := SDSettings.create_preset(SDSettings.Preset.MEDIUM)
+	sd.custom_settings = custom
+	sd.preset = SDSettings.Preset.CUSTOM
+	scene.add_child(sd)
+	root.add_child(scene)
+	await process_frame
+	custom.pom_max_steps = 37
+	custom.self_shadow_local_lights = true
+	await process_frame
+	await process_frame
+	var steps: Vector4 = SDGlobals.get_value(SDGlobals.POM_STEPS)
+	check(int(steps.y) == 37 and is_equal_approx(steps.w, 1.0), "a value changed on custom_settings applies at the end of the frame")
+	sd.custom_settings = SDSettings.create_preset(SDSettings.Preset.LOW)
+	await process_frame
+	custom.pom_max_steps = 50
+	await process_frame
+	await process_frame
+	check(int((SDGlobals.get_value(SDGlobals.POM_STEPS) as Vector4).y) == 10, "a replaced settings resource no longer drives the node")
+	sd.preset = SDSettings.Preset.HIGH
+	sd.apply()
+	var high_w := (SDGlobals.get_value(SDGlobals.POM_STEPS) as Vector4).w
+	sd.self_shadow = false
+	sd.apply()
+	var no_shadow_w := (SDGlobals.get_value(SDGlobals.POM_STEPS) as Vector4).w
+	sd.self_shadow = true
+	sd.preset = SDSettings.Preset.MEDIUM
+	sd.apply()
+	var medium_w := (SDGlobals.get_value(SDGlobals.POM_STEPS) as Vector4).w
+	check(is_equal_approx(high_w, 1.0) and is_zero_approx(no_shadow_w) and is_zero_approx(medium_w),
+			"omni and spot lights self-shadow at High, not at Medium and not with self-shadowing switched off")
+	scene.queue_free()
+	await process_frame
 
 
 # --- DisplacementField3D geometry ------------------------------------------------------------

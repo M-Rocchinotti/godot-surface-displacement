@@ -13,7 +13,7 @@
 
 // Quality, set by the SurfaceDisplacement node (Project Settings > Shader Globals; the plugin
 // registers them). x/y/z/w meanings are listed in core/sd_globals.gd.
-global uniform vec4 sd_pom_steps;   // min steps, max steps, bisection steps, unused
+global uniform vec4 sd_pom_steps;   // min steps, max steps, bisection steps, 1 = omni / spot lights self-shadow too
 global uniform vec4 sd_pom_range;   // fade start (m), fade end (m), LOD bias, highest LOD that is marched
 global uniform vec4 sd_shadow;      // steps, max distance (m), softness (0 = hard), strength
 global uniform vec4 sd_debug;       // view (0 = off), scale (m), reference height (m) of the field's world-height view, unused

@@ -16,7 +16,7 @@
 // displaceable, the vertices dive `push_down` below the ground so the original ground mesh hides
 // them. The vertices pass the layer weights on to the fragments.
 //
-// The geometry can only carry relief down to its vertex spacing (2 cm at High): a gravel's
+// The geometry can only carry relief down to its vertex spacing (4 cm at Epic): a gravel's
 // individual stones are finer than that. So the geometry is a proxy (coverage, silhouettes, real
 // depth for SSAO and intersections, the coarse relief) and, with SD_POM, every fragment still
 // marches the full-resolution height field along its true view ray over the whole relief slab,
@@ -326,7 +326,7 @@ void fragment() {
 }
 
 #ifdef SD_SELF_SHADOW
-// Height-field shadow towards directional light l (view space) over the full relief; hard or
+// Height-field shadow towards light direction l (view space) over the full relief; hard or
 // contact-hardening like the surface shaders (sd_core.gdshaderinc).
 float sd_field_self_shadow(vec3 l) {
 	float strength = f_ss_params.z;
@@ -376,9 +376,12 @@ void light() {
 	// ALBEDO); `return` is not allowed in light(), hence the branches.
 	bool shadow_view = int(sd_debug.x + 0.5) == 5;
 	float attenuation = ATTENUATION;
-	if (LIGHT_IS_DIRECTIONAL) {
+	// Omni and spot lights only when the settings ask for it (sd_pom_steps.w): each one costs a
+	// march on every pixel it lights. For them LIGHT points from the relief hit (LIGHT_VERTEX)
+	// towards the light, which is the shadow ray. The debug view shows directional lights only.
+	if (LIGHT_IS_DIRECTIONAL || sd_pom_steps.w > 0.5) {
 		float self_shadow = sd_field_self_shadow(LIGHT);
-		if (shadow_view) {
+		if (shadow_view && LIGHT_IS_DIRECTIONAL) {
 			DIFFUSE_LIGHT += vec3(self_shadow);
 		}
 		attenuation *= self_shadow;

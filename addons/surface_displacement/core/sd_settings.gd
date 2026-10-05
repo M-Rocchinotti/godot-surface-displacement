@@ -10,42 +10,106 @@ enum Preset { OFF, LOW, MEDIUM, HIGH, EPIC, CUSTOM }
 enum SelfShadow { OFF, HARD, SOFT }
 
 @export_group("Parallax occlusion mapping")
-@export var pom_enabled := true
+@export var pom_enabled := true:
+	set(value):
+		pom_enabled = value
+		emit_changed()
 ## Linear steps when looking straight at a surface.
-@export_range(1, 64) var pom_min_steps := 8
+@export_range(1, 64) var pom_min_steps := 8:
+	set(value):
+		pom_min_steps = value
+		emit_changed()
 ## Linear steps at grazing angles.
-@export_range(1, 64) var pom_max_steps := 20
+@export_range(1, 64) var pom_max_steps := 20:
+	set(value):
+		pom_max_steps = value
+		emit_changed()
 ## Bisection steps after the linear search (a final secant step always follows).
-@export_range(0, 8) var pom_refine_steps := 3
+@export_range(0, 8) var pom_refine_steps := 3:
+	set(value):
+		pom_refine_steps = value
+		emit_changed()
 ## The relief starts fading into plain normal mapping here (m from the camera)...
-@export_range(0.0, 500.0, 0.5, "suffix:m") var pom_fade_start := 18.0
+@export_range(0.0, 500.0, 0.5, "suffix:m") var pom_fade_start := 18.0:
+	set(value):
+		pom_fade_start = value
+		emit_changed()
 ## ...and is gone here.
-@export_range(0.0, 500.0, 0.5, "suffix:m") var pom_fade_end := 30.0
+@export_range(0.0, 500.0, 0.5, "suffix:m") var pom_fade_end := 30.0:
+	set(value):
+		pom_fade_end = value
+		emit_changed()
 ## Added to the mip level the march samples (positive = blurrier, cheaper).
-@export_range(-2.0, 4.0, 0.25) var pom_lod_bias := 0.0
+@export_range(-2.0, 4.0, 0.25) var pom_lod_bias := 0.0:
+	set(value):
+		pom_lod_bias = value
+		emit_changed()
 ## Height-map mip level at and beyond which the march is skipped (the relief is below a pixel).
-@export_range(0.0, 12.0, 0.5) var pom_max_lod := 6.0
+@export_range(0.0, 12.0, 0.5) var pom_max_lod := 6.0:
+	set(value):
+		pom_max_lod = value
+		emit_changed()
 @export_group("Self-shadowing")
-## Height-field shadows from directional lights, computed in a light() that reproduces Godot's
-## own direct lighting. OFF uses Godot's built-in lighting.
-@export var self_shadow := SelfShadow.HARD
-@export_range(1, 32) var self_shadow_steps := 6
-@export_range(0.0, 200.0, 0.5, "suffix:m") var self_shadow_distance := 15.0
+## Height-field shadows from directional lights (and omni and spot lights with
+## [member self_shadow_local_lights]), computed in a light() that reproduces Godot's own direct
+## lighting. OFF uses Godot's built-in lighting.
+@export var self_shadow := SelfShadow.HARD:
+	set(value):
+		self_shadow = value
+		emit_changed()
+@export_range(1, 32) var self_shadow_steps := 6:
+	set(value):
+		self_shadow_steps = value
+		emit_changed()
+@export_range(0.0, 200.0, 0.5, "suffix:m") var self_shadow_distance := 15.0:
+	set(value):
+		self_shadow_distance = value
+		emit_changed()
 ## Contact-hardening strength for SOFT (larger = harder).
-@export_range(1.0, 200.0, 1.0) var self_shadow_softness := 24.0
+@export_range(1.0, 200.0, 1.0) var self_shadow_softness := 24.0:
+	set(value):
+		self_shadow_softness = value
+		emit_changed()
+## Omni and spot lights self-shadow the relief too, not only directional lights. Each one costs
+## a self-shadow march on every pixel it lights.
+@export var self_shadow_local_lights := false:
+	set(value):
+		self_shadow_local_lights = value
+		emit_changed()
 @export_group("Near-camera geometry")
-@export var near_field_enabled := false
+@export var near_field_enabled := false:
+	set(value):
+		near_field_enabled = value
+		emit_changed()
 ## Rings, quads per ring side and finest vertex spacing of [DisplacementField3D]. The defaults
 ## (3 x 96 at 4 cm, reaching 7.7 m) are Epic's: denser grids cost more than they show, because
 ## the field's fragments march the full relief anyway (tests/benchmark.gd --explore).
-@export_range(2, 6) var near_field_levels := 3
-@export_range(16, 512, 4) var near_field_resolution := 96
-@export_range(0.005, 0.1, 0.0005, "suffix:m") var near_field_spacing := 0.04
+@export_range(2, 6) var near_field_levels := 3:
+	set(value):
+		near_field_levels = value
+		emit_changed()
+@export_range(16, 512, 4) var near_field_resolution := 96:
+	set(value):
+		near_field_resolution = value
+		emit_changed()
+@export_range(0.005, 0.1, 0.0005, "suffix:m") var near_field_spacing := 0.04:
+	set(value):
+		near_field_spacing = value
+		emit_changed()
 @export_group("Pebble scatter")
-@export var scatter_enabled := false
+@export var scatter_enabled := false:
+	set(value):
+		scatter_enabled = value
+		emit_changed()
 ## Fraction of the scatter's pebbles that are drawn (0-1).
-@export_range(0.0, 1.0, 0.05) var scatter_density := 1.0
-@export_range(2.0, 30.0, 0.5, "suffix:m") var scatter_radius := 8.0
+@export_range(0.0, 1.0, 0.05) var scatter_density := 1.0:
+	set(value):
+		scatter_density = value
+		emit_changed()
+@export_range(2.0, 30.0, 0.5, "suffix:m") var scatter_radius := 8.0:
+	set(value):
+		scatter_radius = value
+		emit_changed()
 
 
 static func create_preset(preset: Preset) -> SDSettings:
@@ -74,6 +138,7 @@ static func create_preset(preset: Preset) -> SDSettings:
 			s.self_shadow = SelfShadow.SOFT
 			s.self_shadow_steps = 12
 			s.self_shadow_distance = 25.0
+			s.self_shadow_local_lights = true
 		Preset.EPIC:
 			# Real geometry near the camera: the field (3 rings of 96 x 96 quads at 4 cm, reaching
 			# 7.7 m) and the pebbles. The field's fragments march the relief too, so Epic pays for
@@ -86,6 +151,7 @@ static func create_preset(preset: Preset) -> SDSettings:
 			s.self_shadow = SelfShadow.SOFT
 			s.self_shadow_steps = 8
 			s.self_shadow_distance = 20.0
+			s.self_shadow_local_lights = true
 			s.near_field_enabled = true
 			s.scatter_enabled = true
 	return s
@@ -112,7 +178,8 @@ func get_quality() -> SDMaterials.Quality:
 
 ## Writes the shader globals every Surface Displacement shader reads.
 func apply_globals() -> void:
-	SDGlobals.set_value(SDGlobals.POM_STEPS, Vector4(pom_min_steps, maxi(pom_max_steps, pom_min_steps), pom_refine_steps, 0))
+	var local_lights := 1.0 if self_shadow_local_lights and self_shadow != SelfShadow.OFF else 0.0
+	SDGlobals.set_value(SDGlobals.POM_STEPS, Vector4(pom_min_steps, maxi(pom_max_steps, pom_min_steps), pom_refine_steps, local_lights))
 	SDGlobals.set_value(SDGlobals.POM_RANGE, Vector4(pom_fade_start, maxf(pom_fade_end, pom_fade_start + 0.01), pom_lod_bias, pom_max_lod))
 	var softness := self_shadow_softness if self_shadow == SelfShadow.SOFT else 0.0
 	var strength := 0.0 if self_shadow == SelfShadow.OFF else 1.0

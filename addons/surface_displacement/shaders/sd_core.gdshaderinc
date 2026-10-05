@@ -9,7 +9,8 @@
 //     SD_MAPPING_TRIPLANAR   world triplanar (anything; only planes with weight > 0.05 are marched)
 // and optionally:
 //     SD_POM                 parallax occlusion mapping (without it: plain normal mapping)
-//     SD_SELF_SHADOW         self-shadowing from directional lights (requires SD_POM; adds light())
+//     SD_SELF_SHADOW         self-shadowing from directional lights, and omni and spot lights when
+//                            sd_pom_steps.w is 1 (requires SD_POM; adds light())
 //     SD_DEPTH_WRITE         writes DEPTH at the relief (requires SD_POM; expensive, see README)
 //
 // Conventions (see docs/ARCHITECTURE.md):
@@ -181,7 +182,7 @@ vec3 sd_triplanar_weights(vec3 n) {
 #endif
 
 #ifdef SD_SELF_SHADOW
-// Height-field shadow towards directional light l (view space) from the hit found in fragment().
+// Height-field shadow towards light direction l (view space) from the hit found in fragment().
 // Hard (softness 0): 0 behind any relief above the light ray. Contact-hardening (softness k > 0,
 // after Tatarchuk 2006): the largest (relief - ray) * k / distance over the samples, so occluders
 // close to the receiver cast sharp shadows and distant ones soft shadows.
