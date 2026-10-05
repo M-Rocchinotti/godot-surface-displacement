@@ -32,7 +32,7 @@ All notable changes to this project are documented here. The format follows
   Project > Tools > **Make Selected Meshes GADSMeshInstance3D** and **Bake Selected
   GADSMeshInstance3D** (undoable); Validate Setup reports stale bakes, unbakeable meshes, a
   missing native library and bakes the budget cut short.
-- `tests/bake_tests.gd` (63 checks) and editor-check steps for the new tools; CI builds the
+- `tests/bake_tests.gd` (64 checks) and editor-check steps for the new tools; CI builds the
   native library from source for Linux and Windows and runs the headless suites on Windows.
 
 ### Changed

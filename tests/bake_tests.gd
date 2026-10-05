@@ -470,7 +470,9 @@ func test_node() -> void:
 	print("  %s" % node.get_bake_summary().replace("\n", " | "))
 	var first := node.mesh
 	node.clear_bake()
-	check(not node.baked and node.mesh == source and node.get_instance_shader_parameter(&"gads_baked") == 0.0, "Clear shows the source mesh again")
+	# The parameter is removed, so it reads back as the shader's default (null on the headless
+	# dummy renderer, which does not know shader defaults).
+	check(not node.baked and node.mesh == source and node.get_instance_shader_parameter(&"gads_baked") in [0.0, null], "Clear shows the source mesh again")
 	var t0 := Time.get_ticks_msec()
 	check(node.bake() == OK and node.bake_stats.get("cached", false) and node.mesh == first, "baking the same inputs again takes the cached file (%d ms)" % (Time.get_ticks_msec() - t0))
 	check(node.bake(true) == OK and not node.bake_stats.get("cached", false), "Rebuild ignores the cache")
