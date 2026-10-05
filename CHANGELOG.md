@@ -54,6 +54,13 @@ All notable changes to this project are documented here. The format follows
   `GADSDeformer3D` (marks from feet and wheels as they move). The field's geometry and its
   march, world-planar materials and the tops of triplanar ones are pressed down; three new
   shader globals carry it.
+- **Runtime view-dependent tessellation**: `GADSMeshInstance3D.view_dependent` tessellates again
+  in the background while the game runs, for the camera: each triangle's tolerance grows with its
+  distance so the error stays under `pixel_error` pixels on screen (no edge split below 2 pixels,
+  the worst on-screen error refined first), re-done once the camera moved `view_refresh` of its
+  distance or zoomed (`view_tessellated`, `refresh_view()`). A quarter of the triangles of a
+  fixed bake in the test, as fine at the eye. The tessellator takes `view_position`,
+  `pixel_error`, `focal_px` and `min_edge_pixels`; its output without them is unchanged.
 - Editor: Bake / Rebuild / Clear / Cancel with progress and statistics in the inspector (undoable);
   Project > Tools > **Make Selected Meshes GADSMeshInstance3D** and **Bake Selected
   GADSMeshInstance3D** (undoable); Validate Setup reports stale bakes, unbakeable meshes, a

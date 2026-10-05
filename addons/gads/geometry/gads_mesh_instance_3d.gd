@@ -23,6 +23,8 @@ signal bake_started
 ## While a background bake runs: progress 0..1 of the main pass and its triangles so far.
 signal bake_progress(progress: float, triangles: int)
 signal bake_finished(ok: bool)
+## A runtime (view-dependent) tessellation replaced the mesh; [param stats] as [member view_stats].
+signal view_tessellated(stats: Dictionary)
 
 enum Quality { DRAFT, LOW, MEDIUM, HIGH, ULTRA, CUSTOM }
 ## How each vertex moves: AUTO along world +Y when every displaced surface is world-planar (the
@@ -112,6 +114,26 @@ const BAKED_PARAMETER := &"gads_baked"
 		collision_mask = value
 		_update_collision()
 
+@export_group("Runtime")
+## While the game runs, tessellate again in the background as the camera moves: dense where the
+## camera looks closely, coarser with distance, so the error stays under [member pixel_error]
+## pixels on screen (the quality's tolerance is the finest it goes). The editor bake, if any, shows
+## until the first runtime mesh is ready; the collision shape stays the editor bake's. For meshes
+## the camera gets close to and far from (terrain patches, large rocks); small props are better
+## off with a fixed bake and LODs.
+@export var view_dependent := false:
+	set(value):
+		view_dependent = value
+		_update_view_processing()
+## The error on screen the runtime tessellation keeps (pixels).
+@export_range(0.1, 16.0, 0.1, "suffix:px") var pixel_error := 1.0
+## Tessellate again once the camera moved this fraction of its distance to the mesh.
+@export_range(0.01, 2.0, 0.01) var view_refresh := 0.25
+## The triangle budget of a runtime tessellation.
+@export_range(1000, 5000000, 1000, "or_greater") var view_max_triangles := 150000
+## The camera to follow; empty = the viewport's current camera.
+@export var view_camera: NodePath
+
 @export_storage var bake_key := ""
 ## The bake's statistics: source_triangles, triangles, vertices, max_level, budget_reached,
 ## max_error_left (m), error_m (the tolerance), seconds, collision_triangles, path.
@@ -123,11 +145,21 @@ var _pending := {}
 var _body: StaticBody3D
 var _fallback: MeshInstance3D
 var _owns_visibility_range := false
+## The last runtime tessellation's statistics (as bake_stats, plus view_position).
+var view_stats := {}
+var _view_baker: GADSMeshBaker
+var _view_mesh: ArrayMesh
+var _static_mesh: Mesh # what mesh was before the first runtime mesh replaced it
+var _view_eye := Vector3.INF
+var _view_focal := 0.0
+var _view_xform := Transform3D()
+var _view_images := {}
 
 
 func _ready() -> void:
-	# _process only polls a background bake (which may have started before the node was ready).
-	set_process(is_baking())
+	# _process polls a background bake (which may have started before the node was ready) and
+	# follows the camera for the runtime tessellation.
+	set_process(is_baking() or _view_running())
 	# A MeshInstance3D converted to this type keeps its mesh as the source.
 	if source_mesh == null and not baked and mesh != null:
 		source_mesh = mesh
@@ -245,7 +277,8 @@ func clear_bake() -> void:
 
 ## The state a bake sets (for undo and redo in the editor).
 func get_bake_state() -> Dictionary:
-	return {"baked": baked, "mesh": mesh if baked else null, "bake_key": bake_key, "bake_stats": bake_stats.duplicate(),
+	var shown := _static_mesh if _view_mesh != null else mesh
+	return {"baked": baked, "mesh": shown if baked else null, "bake_key": bake_key, "bake_stats": bake_stats.duplicate(),
 		"collision_shape": collision_shape}
 
 
@@ -284,20 +317,23 @@ static func _count(n: int) -> String:
 
 
 func _process(_delta: float) -> void:
-	if _baker == null:
+	if _baker != null:
+		if _baker.is_done():
+			_complete(_baker.finish())
+		else:
+			bake_progress.emit(_baker.get_progress(), _baker.get_triangle_count())
+	if _view_running():
+		_update_view()
+	elif _baker == null:
 		set_process(false)
-		return
-	if not _baker.is_done():
-		bake_progress.emit(_baker.get_progress(), _baker.get_triangle_count())
-		return
-	set_process(false)
-	_complete(_baker.finish())
 
 
 func _notification(what: int) -> void:
-	if what == NOTIFICATION_PREDELETE and _baker != null:
-		_baker.cancel()
-		_baker.finish()
+	if what == NOTIFICATION_PREDELETE:
+		for b: GADSMeshBaker in [_baker, _view_baker]:
+			if b != null:
+				b.cancel()
+				b.finish()
 
 
 func _materials() -> Array[Material]:
@@ -414,6 +450,9 @@ func _save(res: Resource, path: String) -> bool:
 
 
 func _apply_state(state: Dictionary) -> void:
+	# A runtime mesh made from the old state is dropped (the next one follows the new state).
+	_cancel_view_baker()
+	_drop_view_mesh()
 	baked = state.get("baked", false)
 	bake_key = state.get("bake_key", "") if baked else ""
 	bake_stats = state.get("bake_stats", {}) if baked else {}
@@ -427,7 +466,7 @@ func _apply_state(state: Dictionary) -> void:
 
 
 func _apply_parameter() -> void:
-	set_instance_shader_parameter(BAKED_PARAMETER, 1.0 if baked else null)
+	set_instance_shader_parameter(BAKED_PARAMETER, 1.0 if baked or _view_mesh != null else null)
 
 
 ## A static body (internal child: not saved, not in the scene tree dock) with the baked shape.
@@ -472,7 +511,7 @@ func get_fallback() -> MeshInstance3D:
 func _update_fallback() -> void:
 	if not is_inside_tree():
 		return
-	var want := baked and geometry_range > 0.0 and source_mesh != null
+	var want := (baked or _view_mesh != null) and geometry_range > 0.0 and source_mesh != null
 	if not want:
 		if _fallback != null:
 			_fallback.queue_free()
@@ -502,3 +541,130 @@ func _update_fallback() -> void:
 	visibility_range_end_margin = geometry_range_margin
 	visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF
 	_owns_visibility_range = true
+
+
+# --- Runtime (view-dependent) tessellation ------------------------------------------------------
+
+## Tessellates for the current camera again on the next frame (with view_dependent, while the
+## game runs), e.g. after a teleport or a change of the materials.
+func refresh_view() -> void:
+	_view_eye = Vector3.INF
+	_update_view_processing()
+
+
+## Whether a runtime tessellation runs in the background.
+func is_view_tessellating() -> bool:
+	return _view_baker != null
+
+
+func _view_running() -> bool:
+	return view_dependent and not Engine.is_editor_hint() and is_inside_tree() and source_mesh != null
+
+
+func _update_view_processing() -> void:
+	if _view_running():
+		set_process(true)
+	elif _view_baker != null or _view_mesh != null:
+		_cancel_view_baker()
+		_drop_view_mesh()
+		_apply_parameter()
+		_update_fallback()
+
+
+func _cancel_view_baker() -> void:
+	if _view_baker != null:
+		_view_baker.cancel()
+		_view_baker.finish()
+		_view_baker = null
+
+
+## Shows the mesh from before the runtime tessellation again.
+func _drop_view_mesh() -> void:
+	if _view_mesh != null:
+		_view_mesh = null
+		mesh = _static_mesh
+		_static_mesh = null
+	_view_eye = Vector3.INF
+
+
+func _view_camera_node() -> Camera3D:
+	if not view_camera.is_empty():
+		return get_node_or_null(view_camera) as Camera3D
+	return get_viewport().get_camera_3d() if get_viewport() != null else null
+
+
+## Pixels per radian at the centre of the camera's view.
+static func _focal_px(cam: Camera3D) -> float:
+	var size := cam.get_viewport().get_visible_rect().size
+	var extent := size.x if cam.keep_aspect == Camera3D.KEEP_WIDTH else size.y
+	if cam.projection == Camera3D.PROJECTION_ORTHOGONAL:
+		return extent / maxf(cam.size, 1e-6) # pixels per metre
+	return extent / (2.0 * tan(deg_to_rad(cam.fov) * 0.5))
+
+
+func _update_view() -> void:
+	if _view_baker != null:
+		if _view_baker.is_done():
+			_finish_view()
+		return
+	var cam := _view_camera_node()
+	if cam == null or not GADSMeshBaker.is_available():
+		return
+	var eye := cam.global_position
+	var focal := _focal_px(cam)
+	if _view_eye != Vector3.INF:
+		var aabb := global_transform * source_mesh.get_aabb()
+		var dist := maxf(_aabb_distance(aabb, _view_eye), maxf(aabb.get_longest_axis_size() * 0.02, 0.05))
+		var moved := eye.distance_to(_view_eye) > view_refresh * dist
+		var zoomed := absf(focal - _view_focal) > 0.25 * _view_focal
+		if not moved and not zoomed and global_transform.is_equal_approx(_view_xform):
+			return
+	_start_view(cam, eye, focal)
+
+
+static func _aabb_distance(aabb: AABB, p: Vector3) -> float:
+	var q := p.clamp(aabb.position, aabb.end)
+	return p.distance_to(q)
+
+
+func _start_view(cam: Camera3D, eye: Vector3, focal: float) -> void:
+	_view_eye = eye
+	_view_focal = focal
+	_view_xform = global_transform
+	if _max_depth() <= 0.0:
+		return
+	var settings := get_bake_settings()
+	settings.erase("collision")
+	settings["lods"] = false
+	settings["max_triangles"] = view_max_triangles
+	if cam.projection == Camera3D.PROJECTION_ORTHOGONAL:
+		settings["max_error"] = maxf(settings["max_error"], pixel_error / focal)
+	else:
+		settings["view_dependent"] = true
+		settings["view_position"] = eye
+		settings["pixel_error"] = pixel_error
+		settings["focal_px"] = focal
+	_view_baker = GADSMeshBaker.new()
+	_view_baker.image_cache = _view_images
+	_view_baker.setup(source_mesh, _materials(), _bake_transform(), settings)
+	if not _view_baker.start():
+		push_warning("GADS: %s: runtime tessellation failed: %s" % [name, _view_baker.error])
+		_view_baker = null
+
+
+func _finish_view() -> void:
+	var baker := _view_baker
+	_view_baker = null
+	if not baker.finish():
+		if baker.error != "cancelled":
+			push_warning("GADS: %s: runtime tessellation failed: %s" % [name, baker.error])
+		return
+	if _view_mesh == null:
+		_static_mesh = mesh
+	_view_mesh = baker.mesh
+	view_stats = baker.stats.duplicate()
+	view_stats["view_position"] = _view_eye
+	mesh = _view_mesh
+	_apply_parameter()
+	_update_fallback()
+	view_tessellated.emit(view_stats)

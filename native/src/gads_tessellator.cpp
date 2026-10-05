@@ -165,6 +165,14 @@ void GADSTessellator::set_settings(const Dictionary &p_settings) {
 	s.hard_angle_deg = p_settings.get("hard_angle_deg", s.hard_angle_deg);
 	s.filter_heights = p_settings.get("filter_heights", s.filter_heights);
 	s.threads = p_settings.get("threads", s.threads);
+	s.view_dependent = p_settings.get("view_dependent", s.view_dependent);
+	if (p_settings.has("view_position")) {
+		Vector3 v = p_settings["view_position"];
+		s.view_position = gads::V3(v.x, v.y, v.z);
+	}
+	s.pixel_error = p_settings.get("pixel_error", s.pixel_error);
+	s.focal_px = p_settings.get("focal_px", s.focal_px);
+	s.min_edge_pixels = p_settings.get("min_edge_pixels", s.min_edge_pixels);
 	core_.set_settings(s);
 }
 
@@ -259,6 +267,7 @@ Dictionary GADSTessellator::get_stats() const {
 	d["max_level"] = s.max_level;
 	d["budget_reached"] = s.budget_reached;
 	d["max_error_left"] = s.max_error_left;
+	d["max_pixels_left"] = s.max_pixels_left;
 	d["milliseconds"] = s.milliseconds;
 	return d;
 }

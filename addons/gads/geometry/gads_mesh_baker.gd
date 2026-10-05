@@ -31,6 +31,10 @@ var stats := {}
 ## Why the last bake failed ("" after a success).
 var error := ""
 
+## Optional: the height maps' images by texture, filled and reused across bakes that share it (the
+## runtime tessellation of a GADSMeshInstance3D re-reads the same maps every time).
+var image_cache: Dictionary
+
 var _source: Mesh
 var _materials: Array[Material] = []
 var _transform := Transform3D.IDENTITY
@@ -353,7 +357,7 @@ func _make_tessellator(settings: Dictionary) -> RefCounted:
 				if tex == null:
 					continue
 				if not maps.has(tex):
-					var img := tex.get_image()
+					var img := _image_of(tex)
 					if img == null or img.is_empty():
 						error = "cannot read the height map %s" % tex.resource_path
 						return null
@@ -366,7 +370,7 @@ func _make_tessellator(settings: Dictionary) -> RefCounted:
 				l.erase("texture")
 				if tex != null:
 					if not maps.has(tex):
-						var img := tex.get_image()
+						var img := _image_of(tex)
 						if img == null or img.is_empty():
 							error = "cannot read the layer height map %s" % tex.resource_path
 							return null
@@ -378,11 +382,21 @@ func _make_tessellator(settings: Dictionary) -> RefCounted:
 	tess.call("set_transform", _transform)
 	var native_settings := {}
 	for k: String in ["max_error", "min_edge_texels", "max_triangles", "max_level", "lock_borders", "weld_distance",
-			"direction_mode", "direction", "geometry_normals", "hard_angle_deg", "filter_heights", "threads"]:
+			"direction_mode", "direction", "geometry_normals", "hard_angle_deg", "filter_heights", "threads",
+			"view_dependent", "view_position", "pixel_error", "focal_px", "min_edge_pixels"]:
 		if settings.has(k):
 			native_settings[k] = settings[k]
 	tess.call("set_settings", native_settings)
 	return tess
+
+
+func _image_of(tex: Texture2D) -> Image:
+	if image_cache != null and image_cache.has(tex):
+		return image_cache[tex]
+	var img := tex.get_image()
+	if image_cache != null and img != null:
+		image_cache[tex] = img
+	return img
 
 
 ## Worker thread: both tessellation passes and the LODs. Touches no node.

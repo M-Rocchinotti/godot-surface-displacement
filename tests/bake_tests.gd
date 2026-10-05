@@ -43,6 +43,7 @@ func _run() -> void:
 	await _test("closed_meshes_stay_closed", test_watertight)
 	await _test("locked_borders_stay", test_locked_borders)
 	await _test("triangle_budget", test_budget)
+	await _test("view_dependent_refinement", test_view_dependent)
 	await _test("deterministic", test_determinism)
 	await _test("scaled_and_rotated_nodes", test_transform)
 	await _test("triangle_shape", test_angles)
@@ -57,6 +58,7 @@ func _run() -> void:
 	if DisplayServer.get_name() != "headless":
 		await _test("renders_like_parallax", test_render)
 		await _test("geometry_to_parallax_by_distance", test_geometry_range)
+		await _test("runtime_tessellation_follows_the_camera", test_runtime_tessellation)
 	print("\nbake tests: %d passed, %d failed" % [_passed, _failed])
 	h.clear_scene()
 	h.viewport.queue_free()
@@ -421,6 +423,43 @@ func test_budget() -> void:
 	print("  %d triangles for a budget of 3000; %.2f mm left" % [n, float(baker.stats["max_error_left"]) * 1000.0])
 	check(n <= 3000 and n > 2000, "the budget caps the triangle count")
 	check(baker.stats["budget_reached"] and baker.stats["max_error_left"] > 0.00005, "the statistics say the budget stopped it, and how far off it is")
+
+
+## View-dependent refinement: dense where the eye is, coarse far away, as fine as a fixed bake
+## right at the eye.
+func test_view_dependent() -> void:
+	var field := Harness.make_stone_field(256, 60, 11)
+	var mat := uv_material(field, 0.05)
+	var m := plane(8.0)
+	var fixed := bake_with(m, mat, {"max_error": 0.0005, "max_triangles": 2000000})
+	var eye := Vector3(-3.5, 0.6, -3.5)
+	var view := bake_with(m, mat, {"max_error": 0.0005, "max_triangles": 2000000, "view_dependent": true, "view_position": eye,
+		"pixel_error": 1.0, "focal_px": 1000.0})
+	var density := func(mesh: Mesh, center: Vector2, radius: float) -> float:
+		var n := 0
+		for t: Array in triangles_of(mesh):
+			var c: Vector3 = (t[0] + t[1] + t[2]) / 3.0
+			if Vector2(c.x, c.z).distance_to(center) < radius:
+				n += 1
+		return n / (PI * radius * radius)
+	var near_fixed: float = density.call(fixed.mesh, Vector2(-3.5, -3.5), 0.4)
+	var near_view: float = density.call(view.mesh, Vector2(-3.5, -3.5), 0.4)
+	var far_view: float = density.call(view.mesh, Vector2(3.0, 3.0), 0.8)
+	print("  fixed %d triangles, view-dependent %d; at the eye %.0f vs %.0f per m2, far corner %.0f" % [
+		fixed.stats["triangles"], view.stats["triangles"], near_fixed, near_view, far_view])
+	check(view.stats["triangles"] * 3 < fixed.stats["triangles"], "a view-dependent bake needs far fewer triangles")
+	check(near_view > 0.7 * near_fixed, "at the eye it is about as fine as the fixed bake")
+	check(near_view > 10.0 * far_view, "far from the eye it is coarse")
+	# Refinement stops at a texel (min_edge_texels) as in the fixed bake, and at 2 pixels on screen
+	# (min_edge_pixels): what is left is no more than the fixed bake leaves, or under 2 px far away.
+	var fixed_left := float(fixed.stats["max_error_left"])
+	print("  largest error left %.2f mm (%.2f px; fixed bake %.2f mm)" % [float(view.stats["max_error_left"]) * 1000.0,
+		view.stats["max_pixels_left"], fixed_left * 1000.0])
+	check(not view.stats["budget_reached"] and float(view.stats["max_error_left"]) <= maxf(fixed_left, 2.0 * 11.5 / 1000.0),
+		"the budget did not stop it, and what is left is what the texels or a couple of pixels leave")
+	var ortho := bake_with(m, mat, {"max_error": 0.0005, "max_triangles": 2000000, "view_dependent": true, "view_position": eye,
+		"pixel_error": 1.0, "focal_px": 1e9})
+	check(ortho.stats["triangles"] == fixed.stats["triangles"], "with an infinitely sharp view it is the fixed bake")
 
 
 func test_determinism() -> void:
@@ -845,4 +884,40 @@ func test_geometry_range() -> void:
 	await process_frame
 	check(node.get_fallback() == null and node.visibility_range_end == 0.0, "geometry_range 0 removes the fallback and the node's range")
 	node.queue_free()
+	await process_frame
+
+
+## A GADSMeshInstance3D with view_dependent re-tessellates in the background as the camera moves.
+func test_runtime_tessellation() -> void:
+	var s := h.new_debug_scene()
+	var field := Harness.make_stone_field(256, 60, 11)
+	var node := _make_node(uv_material(field, 0.05))
+	node.source_mesh = plane(8.0)
+	node.view_dependent = true
+	node.view_max_triangles = 400000
+	s.add_child(node)
+	var cam := h.add_camera(Vector3(-3.5, 0.6, -3.5), Vector3(0, 0, 0))
+	var done := []
+	node.view_tessellated.connect(func(stats: Dictionary) -> void: done.append(stats))
+	var waited := 0
+	while done.is_empty() and waited < 600:
+		await process_frame
+		waited += 1
+	check(done.size() == 1 and node.mesh is ArrayMesh and node.mesh != node.source_mesh, "the first runtime mesh replaces the source")
+	check(node.get_instance_shader_parameter(&"gads_baked") == 1.0, "the materials are told the mesh is baked")
+	var near_triangles: int = done[0]["triangles"] if not done.is_empty() else 0
+	await h.frames(5)
+	check(done.size() == 1 and not node.is_view_tessellating(), "a still camera does not tessellate again")
+	cam.global_position = Vector3(0, 30, 30)
+	waited = 0
+	while done.size() < 2 and waited < 600:
+		await process_frame
+		waited += 1
+	var far_triangles: int = done[1]["triangles"] if done.size() > 1 else 0
+	print("  near %d triangles, far %d" % [near_triangles, far_triangles])
+	check(done.size() == 2 and far_triangles * 4 < near_triangles, "moving away tessellates again, coarser")
+	check(not node.baked and node.bake_key.is_empty(), "the runtime meshes are not a bake (nothing saved)")
+	node.view_dependent = false
+	check(node.mesh == node.source_mesh and node.get_instance_shader_parameter(&"gads_baked") in [0.0, null], "turning it off shows the source mesh again")
+	h.clear_scene()
 	await process_frame

@@ -551,8 +551,26 @@ double Tessellator::texel_size_m(int t) const {
 	return area_t > 1e-12 ? std::sqrt(area_w / area_t) / finer : 1e30;
 }
 
-// How far the triangle's own height field deviates from the plane through its corners (m).
-float Tessellator::tri_error(int t) const {
+// The nearest a triangle's bounding sphere comes to the view (m; 0 inside it).
+double Tessellator::view_distance(int t) const {
+	const Tri &tr = tris_[t];
+	const V3 &a = groups_[corners_[tr.c[0]].group].world, &b = groups_[corners_[tr.c[1]].group].world, &c = groups_[corners_[tr.c[2]].group].world;
+	V3 centre = (a + b + c) * (1.0 / 3.0);
+	double radius = std::sqrt(std::max({ (a - centre).length_squared(), (b - centre).length_squared(), (c - centre).length_squared() }));
+	return std::max(0.0, (centre - settings_.view_position).length() - radius);
+}
+
+// The error triangle t may keep (m): max_error, or what pixel_error pixels cover at its distance.
+double Tessellator::tri_tolerance(int t) const {
+	if (!settings_.view_dependent) {
+		return settings_.max_error;
+	}
+	return std::max(settings_.max_error, settings_.pixel_error * view_distance(t) / std::max(settings_.focal_px, 1e-6));
+}
+
+// How far the triangle's own height field deviates from the plane through its corners (m). Below
+// tol the bound is enough (the triangle needs no refinement either way).
+float Tessellator::tri_error(int t, double tol) const {
 	const Tri &tr = tris_[t];
 	int di = inputs_[tr.surface].displacement;
 	if (di < 0) {
@@ -644,7 +662,7 @@ float Tessellator::tri_error(int t) const {
 	z_lo = std::min(z_lo, d.height_m * (lo - d.center));
 	z_hi = std::max(z_hi, d.height_m * (hi - d.center));
 	double bound = (z_hi - z_lo) + (has_detail(d) ? d.detail_height_m * std::max(0.0, detail_hi - detail_lo) : 0.0);
-	if (bound <= settings_.max_error || longest_texels > SCAN_LIMIT_TEXELS) {
+	if (bound <= tol || longest_texels > SCAN_LIMIT_TEXELS) {
 		return float(bound);
 	}
 	// Scan at about 1.5 samples per texel along the longest edge.
@@ -670,7 +688,9 @@ float Tessellator::tri_error(int t) const {
 
 void Tessellator::evaluate(const std::vector<int> &list) {
 	parallel_for(list.size(), settings_.threads, [&](size_t i) {
-		tris_[list[i]].error = tri_error(list[i]);
+		Tri &tr = tris_[list[i]];
+		tr.tol = float(tri_tolerance(list[i]));
+		tr.error = tri_error(list[i], tr.tol);
 	});
 }
 
@@ -832,15 +852,21 @@ bool Tessellator::run(const std::atomic<bool> &cancel, std::atomic<float> &progr
 	evaluate(all);
 	int alive = int(tris_.size());
 	triangles = alive;
-	const double tol = settings_.max_error;
 	auto eligible = [&](int t) {
 		const Tri &tr = tris_[t];
-		if (!tr.alive || tr.error <= tol || tr.level >= settings_.max_level) {
+		if (!tr.alive || tr.error <= tr.tol || tr.level >= settings_.max_level) {
 			return false;
 		}
 		int e = longest_edge(t);
 		double len = std::sqrt(edge_len2(corners_[tr.c[e]].group, corners_[tr.c[(e + 1) % 3]].group));
+		if (settings_.view_dependent && len * settings_.focal_px <= settings_.min_edge_pixels * std::max(view_distance(t), 1e-6)) {
+			return false;
+		}
 		return len > settings_.min_edge_texels * texel_size_m(t);
+	};
+	// Worst first: by the error over the tolerance (on screen, for view-dependent refinement).
+	auto priority = [&](int t) {
+		return double(tris_[t].error) / std::max(double(tris_[t].tol), 1e-12);
 	};
 	// The rounds a triangle can need is about the bisections from its edge down to a texel.
 	int expected_rounds = 1;
@@ -868,7 +894,8 @@ bool Tessellator::run(const std::atomic<bool> &cancel, std::atomic<float> &progr
 			break;
 		}
 		std::sort(candidates.begin(), candidates.end(), [&](int x, int y) {
-			return tris_[x].error != tris_[y].error ? tris_[x].error > tris_[y].error : x < y;
+			double px = priority(x), py = priority(y);
+			return px != py ? px > py : x < y;
 		});
 		size_t first_new = tris_.size();
 		for (int t : candidates) {
@@ -898,8 +925,12 @@ bool Tessellator::run(const std::atomic<bool> &cancel, std::atomic<float> &progr
 		}
 	}
 	for (const Tri &tr : tris_) {
-		if (tr.alive && tr.error > tol) {
+		if (tr.alive && tr.error > tr.tol) {
 			stats_.max_error_left = std::max(stats_.max_error_left, double(tr.error));
+			if (settings_.view_dependent) {
+				int t = int(&tr - tris_.data());
+				stats_.max_pixels_left = std::max(stats_.max_pixels_left, tr.error * settings_.focal_px / std::max(view_distance(t), 1e-6));
+			}
 		}
 		if (tr.alive) {
 			stats_.max_level = std::max(stats_.max_level, tr.level);
@@ -1006,7 +1037,7 @@ void Tessellator::build_outputs() {
 		for (int k = 0; k < 3; k++) {
 			int g = corners_[tr.c[k]].group;
 			finest[g] = std::max(finest[g], tr.level);
-			if (tr.error > settings_.max_error) {
+			if (tr.error > settings_.max_error) { // also far triangles a view-dependent tolerance let stay coarse
 				coarse[g] = 1;
 			}
 		}

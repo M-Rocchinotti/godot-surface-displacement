@@ -327,6 +327,7 @@ thread and are undoable. **Bake Selected GADSMeshInstance3D** in Project > Tools
 | `cache_directory` | `res://gads_baked` | One `<name>_<key>.mesh` per bake; the scene refers to the file. |
 | `geometry_range`, `geometry_range_margin` | 0, 2 m | Beyond `geometry_range` the source mesh is drawn with the materials' parallax instead of the baked geometry, cross-faded over the margin (0: geometry at every distance). `suggest_geometry_range()` gives the distance where the relief covers about two pixels. |
 | `collision` | None | Trimesh or Convex: a static body with a shape from a coarser pass (`collision_max_triangles` 20 000, tolerance x `collision_error_scale` 4), on `collision_layer` / `collision_mask`. |
+| `view_dependent`, `pixel_error`, `view_refresh`, `view_max_triangles`, `view_camera` | off, 1 px, 0.25, 150 k, - | Runtime tessellation for the camera (below). |
 
 **Level of detail.** Near the camera the baked geometry, with Godot's automatic LODs chosen by
 screen-space error (`lod_bias` on the node, `rendering/mesh_lod/lod_change/threshold_pixels`
@@ -359,6 +360,17 @@ print(rock.get_bake_summary())
 
 A bake made while the game runs is not written into `res://` (read-only in an exported game): it
 stays in memory, unless `cache_directory` is under `user://`.
+
+**Runtime (view-dependent) tessellation.** With `view_dependent` on, the node tessellates again
+in the background while the game runs, for the camera's position: dense where the camera looks
+closely, coarser with distance, so the error stays under `pixel_error` pixels on screen (the
+quality's tolerance is the finest it goes; `view_max_triangles` is the budget). A new mesh is
+made once the camera moved `view_refresh` (a quarter) of its distance to the mesh, or zoomed,
+and replaces the old one when it is ready; the editor bake shows until the first one is. Large
+meshes the camera gets close to and far from (terrain patches, cliffs) need far fewer triangles
+this way than with one fixed bake (a third or less in the test); small props are better off with
+a bake and LODs. Runtime meshes are never saved, and the collision shape stays the editor bake's.
+`view_tessellated(stats)` follows each one; `refresh_view()` forces one (after a teleport).
 
 ### Profiler and optimization
 
@@ -554,9 +566,11 @@ pass because two errors cancel.
 - **No silhouettes from POM.** Walls, props and anything without a GADSDisplacementField3D keep
   their flat outline; the relief ends at the mesh's edge. Bake the few props where that shows
   (GADSMeshInstance3D).
-- **Baked displacement** is an editor-time bake of static meshes: no skinned meshes (refused),
-  blend shapes are dropped, and a mesh moved at runtime keeps its bake (a world-planar or triplanar
-  bake then no longer matches the world-space texture; UV-mapped bakes move freely). The native
+- **Baked displacement** is a bake of static meshes: no skinned meshes (refused), blend shapes
+  are dropped, and a mesh moved at runtime keeps its bake (a world-planar or triplanar bake then
+  no longer matches the world-space texture; UV-mapped bakes move freely) until a runtime
+  tessellation (`view_dependent`) replaces it. A runtime tessellation takes a worker thread for
+  tens to hundreds of milliseconds; the old mesh shows meanwhile. The native
   library ships for Linux and Windows x86_64 only. Earlier bakes stay in the cache directory
   until deleted by hand. Collision is a static body.
 - **The near-camera geometry needs height-field ground**: world-planar ground materials on
@@ -616,8 +630,7 @@ pass because two errors cancel.
 
 - Height-based blending between ground layers (stones sitting in sand).
 - Silhouette POM (curvature-aware) for props.
-- Runtime and streaming bakes (the tessellator already runs on a worker thread), skinned meshes,
-  macOS and ARM builds of the native library, a cache cleaner.
+- Streaming bakes, skinned meshes, macOS and ARM builds of the native library, a cache cleaner.
 - A runtime height bake from arbitrary meshes for non-planar surfaces near the camera.
 
 ## AI-usage disclosure

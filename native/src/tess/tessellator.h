@@ -102,6 +102,16 @@ struct Settings {
 	double hard_angle_deg = 30.0; // source normals further apart than this stay split
 	bool filter_heights = true; // where refinement stopped early: heights at each vertex's footprint
 	int threads = 0; // 0: hardware concurrency
+	// View-dependent refinement (runtime tessellation): a triangle's tolerance grows with its
+	// distance from view_position (world) so its error stays under pixel_error pixels on screen,
+	// focal_px being the pixels per radian (viewport height / (2 tan(fov / 2))); max_error stays
+	// the finest tolerance. No edge is split below min_edge_pixels on screen, and the budget goes
+	// to the triangles with the largest error on screen first.
+	bool view_dependent = false;
+	V3 view_position;
+	double pixel_error = 1.0;
+	double focal_px = 1000.0;
+	double min_edge_pixels = 2.0;
 };
 
 struct Stats {
@@ -112,6 +122,7 @@ struct Stats {
 	int max_level = 0;
 	bool budget_reached = false;
 	double max_error_left = 0.0; // m, of triangles that may still need refinement
+	double max_pixels_left = 0.0; // view-dependent: the same on screen (pixels at the triangle's distance)
 	double milliseconds = 0.0;
 };
 
@@ -151,6 +162,7 @@ private:
 		int surface = 0;
 		int level = 0;
 		float error = 0.0f;
+		float tol = 0.0f; // its tolerance (m): max_error, or more far from the view
 		bool alive = true;
 	};
 	struct EdgeRec {
@@ -188,7 +200,9 @@ private:
 	double finest_texels(const Displacement &d) const;
 	void layer_masks(const Displacement &d, const float color[4], const V3 &dir, double r_masks[2]) const;
 	double corner_h(const Corner &c) const;
-	float tri_error(int t) const;
+	float tri_error(int t, double tol) const;
+	double tri_tolerance(int t) const;
+	double view_distance(int t) const;
 	double texel_size_m(int t) const;
 	double edge_len2(int ga, int gb) const { return (groups_[ga].world - groups_[gb].world).length_squared(); }
 	bool edge_less(int ga, int gb, int ha, int hb) const;
