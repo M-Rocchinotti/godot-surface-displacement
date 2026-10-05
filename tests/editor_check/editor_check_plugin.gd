@@ -157,7 +157,17 @@ func _run() -> void:
 	_check(baked_box.baked and baked_box.mesh.resource_path == baked_path, "redo shows the bake again")
 	EditorInterface.get_selection().clear()
 
-	# 8. What a save writes.
+	# 8. The GADS bottom panel profiles the scene.
+	var panels := EditorInterface.get_base_control().find_children("GADS", "VBoxContainer", true, false).filter(
+			func(n: Node) -> bool: return n.has_method("refresh_report"))
+	_check(panels.size() == 1, "the GADS bottom panel is there")
+	if panels.size() == 1:
+		panels[0].refresh_report()
+		var report: Dictionary = panels[0].get_report()
+		_check(report.get("totals", {}).get("objects", 0) == 1 and report.get("surfaces", 0) >= 2,
+				"it lists the baked box and the parallax surfaces (%s)" % report.get("totals", {}))
+
+	# 9. What a save writes.
 	EditorInterface.save_scene()
 	await _frames_wait(5)
 	var text := FileAccess.get_file_as_string("res://check_scene.tscn")

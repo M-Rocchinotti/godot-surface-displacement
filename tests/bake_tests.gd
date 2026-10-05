@@ -53,6 +53,7 @@ func _run() -> void:
 	await _test("staleness", test_staleness)
 	await _test("collision", test_collision)
 	await _test("save_and_load", test_save_load)
+	await _test("profiler", test_profiler)
 	if DisplayServer.get_name() != "headless":
 		await _test("renders_like_parallax", test_render)
 		await _test("geometry_to_parallax_by_distance", test_geometry_range)
@@ -661,6 +662,65 @@ func test_save_load() -> void:
 	check(copy.source_mesh is PlaneMesh and copy.get_instance_shader_parameter(&"gads_baked") == 1.0, "with its source mesh and the baked flag for the materials")
 	check(not copy.is_bake_stale(), "and the bake is still current")
 	copy.queue_free()
+	await process_frame
+
+
+## GADSProfiler: totals, per-object statistics, recommendations and their fixes, a target.
+func test_profiler() -> void:
+	var field := bump_field(256, 0.05)
+	var scene := Node3D.new()
+	root.add_child(scene)
+	var manager := GADSManager.new()
+	scene.add_child(manager)
+	var dense := _make_node(uv_material(field, 0.06))
+	dense.name = "Dense"
+	dense.quality = GADSMeshInstance3D.Quality.ULTRA
+	scene.add_child(dense)
+	dense.bake()
+	var unbaked := _make_node(uv_material(field, 0.06))
+	unbaked.name = "Unbaked"
+	scene.add_child(unbaked)
+	var pom := MeshInstance3D.new()
+	pom.mesh = plane()
+	pom.material_override = uv_material(field, 0.03)
+	scene.add_child(pom)
+	var cam := Camera3D.new()
+	scene.add_child(cam)
+	cam.look_at_from_position(Vector3(0, 60, 60), Vector3.ZERO)
+	await process_frame
+	# Small thresholds, so a quick bake counts as dense.
+	GADSProfiler.dense_triangles = 1000
+	GADSProfiler.range_triangles = 500
+	var report := GADSProfiler.collect(scene, cam)
+	var t: Dictionary = report["totals"]
+	var dense_stats: Dictionary = report["objects"].filter(func(o: Dictionary) -> bool: return o["name"] == "Dense")[0]
+	print("  totals %s; Dense covers %.2f %% with %d triangles" % [t, dense_stats["coverage"] * 100.0, dense_stats["triangles"]])
+	check(t["objects"] == 2 and dense_stats["triangles"] == dense.bake_stats["triangles"] and dense_stats["base_triangles"] == 2,
+			"per-object triangles: baked and source")
+	check(t["generated_triangles"] == dense_stats["triangles"] - 2 and t["base_triangles"] == 4, "totals add up (generated = baked - source)")
+	check(report["surfaces"] >= 1 and dense_stats["memory_bytes"] > 0 and t["cache_bytes"] > 0, "parallax surfaces, memory and cache size are counted")
+	check(dense_stats["coverage"] > 0.0 and dense_stats["coverage"] < 0.05, "screen coverage of a distant mesh is small")
+	var messages := "\n".join(report["recommendations"].map(func(r: Dictionary) -> String: return r["message"]))
+	check(messages.contains("Unbaked is not baked") and messages.contains("Dense uses"), "it recommends baking the unbaked mesh and a range for the dense one")
+	var range_fix: Dictionary = report["recommendations"].filter(func(r: Dictionary) -> bool: return r["object"] == dense)[0]["fix"]
+	GADSProfiler.apply_fixes([range_fix])
+	check(dense.geometry_range > 10.0 and dense.get_fallback() != null, "the fix sets geometry_range (%.1f m)" % dense.geometry_range)
+	var maps: Array = report["height_maps"]
+	check(maps.size() == 3 and maps[0]["useful_size"] <= maps[0]["size"], "each height map is analysed once (three textures here)")
+	var fixes := GADSProfiler.optimize_for(GADSProfiler.Target.HANDHELD, scene)
+	GADSProfiler.apply_fixes(fixes)
+	check(manager.preset == GADSSettings.Preset.LOW and is_equal_approx(dense.geometry_range, snappedf(dense.suggest_geometry_range(3.0), 0.1)),
+			"Optimize for Handheld sets the Low preset and a range for three pixels of relief")
+	check(not dense.is_bake_stale(), "optimizing changes settings only (the bake stays current)")
+	GADSProfiler.dense_triangles = 200000
+	GADSProfiler.range_triangles = 50000
+	var overlay := GADSStatsOverlay.new()
+	overlay.target = overlay.get_path_to(scene) if overlay.is_inside_tree() else NodePath()
+	scene.add_child(overlay)
+	overlay.target = overlay.get_path_to(scene)
+	overlay._refresh()
+	check(overlay.get_report().get("totals", {}).get("objects", 0) == 2, "the stats overlay profiles its target")
+	scene.queue_free()
 	await process_frame
 
 

@@ -308,6 +308,12 @@ func _bake_transform() -> Transform3D:
 	return global_transform if is_inside_tree() else transform
 
 
+## The deepest relief (m) the materials give the source mesh: the main depth or a deeper layer's
+## (0: nothing to displace).
+func get_relief_depth() -> float:
+	return _max_depth()
+
+
 ## The largest relief depth among the surfaces the bake displaces (0: none).
 func _max_depth() -> float:
 	var depth := 0.0

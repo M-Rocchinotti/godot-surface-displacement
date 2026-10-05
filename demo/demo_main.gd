@@ -1,7 +1,8 @@
 extends Node
 ## GADS demo: four scenes, presets, per-feature switches, a flat / POM /
 ## POM + geometry comparison, debug views and a frame-time overlay.
-## Keys: 1-4 scene, V next camera view, P next preset, B next comparison mode, H hide the panel;
+## Keys: 1-4 scene, V next camera view, P next preset, B next comparison mode, H hide the panel,
+## G the GADS profiler overlay;
 ## hold the right mouse button and use WASD/QE to fly (Shift fast, Alt slow).
 
 const Builder := preload("res://demo/scenes/demo_builder.gd")
@@ -26,12 +27,16 @@ var _debug_option: OptionButton
 var _stats: Label
 var _gpu_ms := 0.0
 var _frame_ms := 0.0
+var _overlay: GADSStatsOverlay
 
 
 func _ready() -> void:
 	RenderingServer.viewport_set_measure_render_time(get_viewport().get_viewport_rid(), true)
 	_build_ui()
 	load_scene(0)
+	_overlay = GADSStatsOverlay.new()
+	_overlay.shown = false
+	add_child(_overlay)
 
 
 ## Builds scene [param index] (see demo_builder.gd) and keeps the current quality settings.
@@ -129,6 +134,9 @@ func _unhandled_key_input(event: InputEvent) -> void:
 			set_compare((_compare_mode() + 1) % COMPARE.size())
 		KEY_H:
 			_panel.visible = not _panel.visible
+		KEY_G:
+			_overlay.target = _overlay.get_path_to(scene)
+			_overlay.shown = not _overlay.shown
 
 
 # --- UI ------------------------------------------------------------------------------------

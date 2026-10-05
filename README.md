@@ -330,6 +330,22 @@ print(rock.get_bake_summary())
 A bake made while the game runs is not written into `res://` (read-only in an exported game): it
 stays in memory, unless `cache_directory` is under `user://`.
 
+### Profiler and optimization
+
+The **GADS** bottom panel in the editor measures the edited scene (`GADSProfiler.collect()`):
+baked meshes with their triangles, source triangles, screen coverage (from the editor camera),
+memory and state; the totals (generated and active triangles, collision triangles, memory, the
+cache directory's size, parallax surfaces, field triangles, the preset); and recommendations,
+each with a **Fix** button where one applies: bake an unbaked or stale mesh, give a dense mesh
+that covers little of the screen a `geometry_range`, raise the quality of a bake the triangle
+budget cut short, use a smaller height map where the map holds no finer relief
+(`GADSHeightTools.analyse_detail()`: relief per mip band). **Optimize for Target** (Cinematic,
+High-end PC, Mainstream PC, Handheld, Mobile) sets the GADSManager preset and every baked mesh's
+`geometry_range`: settings only, nothing is re-baked, and it is undoable.
+
+At runtime, add a `GADSStatsOverlay` (a CanvasLayer) for the same numbers plus the frame's fps,
+GPU time, draw calls and video memory; the demo shows it on **G**.
+
 ### Debug views
 
 `debug_view` on the node (or the demo's panel): **Hit offset** (how far the march moved each
@@ -448,7 +464,7 @@ tools/                            engine runner, native build, texture fetch / p
 
 Run the project (main scene `demo/demo_main.tscn`). Keys: **1-4** scene, **V** next camera
 view (eye level, grazing, overview), **P** next preset, **B** next comparison (flat / POM /
-POM + geometry), **H** hide the panel; hold the right mouse button and use **WASD/QE** to fly
+POM + geometry), **H** hide the panel, **G** the GADS profiler overlay; hold the right mouse button and use **WASD/QE** to fly
 (Shift fast, Alt slow). In the rocky-ground scene the boulder on the right is the left one's
 mesh as a GADSMeshInstance3D, baked in the background when the scene loads (debug view
 Tessellation shows its triangles).

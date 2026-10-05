@@ -16,6 +16,7 @@ func _initialize() -> void:
 func _run() -> void:
 	await process_frame
 	test_variants()
+	test_height_analysis()
 	test_presets()
 	test_manager()
 	await test_settings_changes()
@@ -41,6 +42,33 @@ func check(condition: bool, what: String) -> void:
 
 
 # --- Shader variants -------------------------------------------------------------------------
+
+## GADSHeightTools.analyse_detail(): how much relief each scale of a height map carries.
+func test_height_analysis() -> void:
+	print("\n== height map analysis")
+	var flat := Image.create(256, 256, false, Image.FORMAT_RF)
+	flat.fill(Color(0.5, 0, 0))
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 4
+	var noise := Image.create(256, 256, false, Image.FORMAT_RF)
+	for y in 256:
+		for x in 256:
+			noise.set_pixel(x, y, Color(rng.randf(), 0, 0))
+	# Smooth relief at 64 px, enlarged to 256: the extra texels hold no relief.
+	var smooth := Image.create(64, 64, false, Image.FORMAT_RF)
+	for y in 64:
+		for x in 64:
+			smooth.set_pixel(x, y, Color(0.5 + 0.4 * sin(x * TAU / 16.0) * cos(y * TAU / 16.0), 0, 0))
+	smooth.resize(256, 256, Image.INTERPOLATE_BILINEAR)
+	var a_flat := GADSHeightTools.analyse_detail(flat)
+	var a_noise := GADSHeightTools.analyse_detail(noise)
+	var a_smooth := GADSHeightTools.analyse_detail(smooth)
+	print("  useful size: flat %d, noise %d, 64 px relief enlarged to 256 %d; finest-band share: noise %.2f, smooth %.3f" % [
+		a_flat["useful_size"], a_noise["useful_size"], a_smooth["useful_size"], a_noise["fine_fraction"], a_smooth["fine_fraction"]])
+	check(a_noise["useful_size"] == 256 and a_noise["fine_fraction"] > 0.3, "noise holds relief down to its finest texels")
+	check(a_smooth["useful_size"] <= 128 and a_smooth["fine_fraction"] < 0.05, "an enlarged map is reported as larger than its relief needs")
+	check(a_flat["fine_fraction"] == 0.0, "a flat map has no relief at any scale")
+
 
 func test_variants() -> void:
 	print("\n== shader variants")

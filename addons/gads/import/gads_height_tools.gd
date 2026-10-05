@@ -35,6 +35,50 @@ static func analyse(image: Image) -> Dictionary:
 	}
 
 
+## How much relief a height map carries at each scale: a Laplacian pyramid of its red channel (a
+## sample of up to 1024 x 1024). Returns {"bands": PackedFloat32Array (RMS height difference
+## between mip level k and level k + 1, finest first, in height units), "fine_fraction" (share of
+## the finest band in the total), "useful_size" (the smallest size whose finer bands hold under 2 %
+## of the relief: a larger map adds texels but no relief)}.
+static func analyse_detail(image: Image) -> Dictionary:
+	var img := image.duplicate() as Image
+	if img.is_compressed():
+		img.decompress()
+	img.clear_mipmaps()
+	if img.get_width() > 1024 or img.get_height() > 1024:
+		img.resize(mini(img.get_width(), 1024), mini(img.get_height(), 1024), Image.INTERPOLATE_BILINEAR)
+	img.convert(Image.FORMAT_RF)
+	var bands := PackedFloat32Array()
+	var size := img.get_width()
+	while img.get_width() >= 8 and img.get_height() >= 8:
+		var coarse := img.duplicate() as Image
+		coarse.resize(img.get_width() / 2, img.get_height() / 2, Image.INTERPOLATE_BILINEAR)
+		var up := coarse.duplicate() as Image
+		up.resize(img.get_width(), img.get_height(), Image.INTERPOLATE_BILINEAR)
+		var a := img.get_data().to_float32_array()
+		var b := up.get_data().to_float32_array()
+		var sum := 0.0
+		for i in a.size():
+			var d := a[i] - b[i]
+			sum += d * d
+		bands.append(sqrt(sum / maxf(a.size(), 1.0)))
+		img = coarse
+	var total := 0.0
+	for e in bands:
+		total += e
+	var useful := size
+	var finer := 0.0
+	for k in bands.size():
+		finer += bands[k]
+		if total > 0.0 and finer / total < 0.02:
+			useful = size >> (k + 1)
+	return {
+		"bands": bands,
+		"fine_fraction": bands[0] / total if total > 0.0 and not bands.is_empty() else 0.0,
+		"useful_size": useful,
+	}
+
+
 ## Writes [param dst_path] (.exr): the red channel of the image at [param src_path], remapped by
 ## its percentiles when [param remap], as one 16-bit float channel, and an .import file that keeps
 ## it lossless with mipmaps. Returns the analysis of the source.
