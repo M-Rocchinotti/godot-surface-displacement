@@ -146,6 +146,9 @@ what the engine allows:
 | `texture_size_m`, `planar_offset_m` | 2 m, 0 | World and triplanar mapping: the size of one texture repeat and the texture's origin, in metres. |
 | `planar_rotation_deg` | 0 | World mapping: the texture's turn about the vertical axis. |
 | `triplanar_sharpness` | 4 | Blend sharpness; planes under 5 % weight are dropped. |
+| `detail_height_texture`, `detail_height_m` | black, 0 | Optional detail relief on top of the main one (grain on stones, chips in bricks): `detail_height_m * (d - 0.5)`, marched, self-shadowed and baked together with the main relief. Off at 0. |
+| `detail_normal_texture`, `detail_normal_strength` | flat, 0 | Optional detail normal map, blended onto the main one (Reoriented Normal Mapping). Off at 0. |
+| `detail_scale` | 8 | Detail repeats per main texture repeat. |
 
 Your own shaders can use the library the same way the variants do: `render_mode
 diffuse_burley, specular_schlick_ggx;` (the `light()` reproduces these modes), `#define

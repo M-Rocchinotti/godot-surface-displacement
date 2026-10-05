@@ -15,7 +15,9 @@
 //
 // Conventions (see docs/ARCHITECTURE.md):
 //   - Height texture: red channel, 1 = top. It is remapped with height_remap (x -> 0, y -> 1).
-//   - Relief in metres: z = height_m * (h - height_center), measured along the relief axis
+//   - Relief in metres: z = height_m * (h - height_center), plus the optional detail layer
+//     detail_height_m * (d - 0.5) with d from detail_height_texture repeated detail_scale times
+//     per main repeat; measured along the relief axis
 //     (the surface normal for UV mapping, world +Y for world-planar, the projection axis for
 //     triplanar). height_center = 1: relief below the surface (classic POM, good on walls);
 //     height_center = 0: relief above it (required for ground under a GADSDisplacementField3D).
@@ -49,6 +51,15 @@ uniform float height_center : hint_range(0.0, 1.0) = 1.0;
 uniform vec2 height_remap = vec2(0.0, 1.0);
 uniform float pom_steps_scale : hint_range(0.25, 4.0) = 1.0;
 uniform float self_shadow_strength : hint_range(0.0, 1.0) = 1.0;
+group_uniforms detail;
+// A second, finer layer on top of the main relief (meso detail: grain on stones, chips in bricks),
+// repeated detail_scale times per main repeat. The height layer is off while detail_height_m is 0,
+// the normal layer while detail_normal_strength is 0.
+uniform sampler2D detail_height_texture : hint_default_black, filter_linear_mipmap, repeat_enable;
+uniform float detail_height_m : hint_range(0.0, 0.1, 0.0001) = 0.0;
+uniform float detail_scale : hint_range(1.0, 64.0) = 8.0;
+uniform sampler2D detail_normal_texture : hint_normal, filter_linear_mipmap_anisotropic, repeat_enable;
+uniform float detail_normal_strength : hint_range(0.0, 4.0) = 0.0;
 group_uniforms mapping;
 uniform vec2 uv_scale = vec2(1.0);
 uniform vec2 uv_offset = vec2(0.0);
@@ -95,19 +106,59 @@ float gads_remap(float h) {
 	return gads_remap_height(h, height_remap);
 }
 
-// Relief height (m) at uv for amplitude amp, on an explicit mip level.
-float gads_relief(vec2 uv, float lod, float amp) {
-	return amp * (gads_remap(textureLod(height_texture, uv, lod).r) - height_center);
+// The detail layer's depth relative to the main one (0 = off), so the distance fade, which
+// scales the main amplitude, fades both.
+float gads_detail_ratio() {
+	return detail_height_m > 0.0 ? detail_height_m / max(height_m, 1e-6) : 0.0;
 }
 
-// The mip level the march samples: the level the hardware would pick for the rasterized uv
-// (isotropic, from derivatives taken before any divergent control flow), plus a bias.
+// Relief height (m) at uv for amplitude amp, on mip level lod of the main map (may be negative,
+// see gads_march_lod; the detail map is sampled at the matching level of its own texels).
+float gads_relief(vec2 uv, float lod, float amp) {
+	float relief = amp * (gads_remap(textureLod(height_texture, uv, max(lod, 0.0)).r) - height_center);
+	if (detail_height_m > 0.0) {
+		float texels = detail_scale * float(textureSize(detail_height_texture, 0).x) / float(textureSize(height_texture, 0).x);
+		float detail = textureLod(detail_height_texture, uv * detail_scale, max(lod + log2(texels), 0.0)).r;
+		relief += amp * gads_detail_ratio() * (detail - 0.5);
+	}
+	return relief;
+}
+
+// The relief slab: the highest and lowest relief height for amplitude amp.
+float gads_slab_top(float amp) {
+	return amp * (1.0 - height_center + 0.5 * gads_detail_ratio());
+}
+
+float gads_slab_bottom(float amp) {
+	return -amp * (height_center + 0.5 * gads_detail_ratio());
+}
+
+// Adds the detail normal layer to a main normal-map sample (both packed like samples), by
+// Reoriented Normal Mapping (Barre-Brisebois and Hill 2012).
+vec3 gads_add_detail_normal(vec3 main_rgb, vec2 uv, vec2 ddx, vec2 ddy) {
+	if (detail_normal_strength <= 0.0) {
+		return main_rgb;
+	}
+	vec3 b = main_rgb * 2.0 - 1.0;
+	b.z = sqrt(max(0.0, 1.0 - dot(b.xy, b.xy)));
+	vec2 dxy = (textureGrad(detail_normal_texture, uv * detail_scale, ddx * detail_scale, ddy * detail_scale).rg * 2.0 - 1.0)
+			* detail_normal_strength;
+	vec3 d = normalize(vec3(dxy, sqrt(max(0.0, 1.0 - min(dot(dxy, dxy), 0.9999)))));
+	vec3 t = vec3(b.xy, b.z + 1.0);
+	vec3 u = vec3(-d.xy, d.z);
+	return normalize(t * dot(t, u) / t.z - u) * 0.5 + 0.5;
+}
+
+// The mip level of the main height map the march samples: the level the hardware would pick for
+// the rasterized uv (isotropic, from derivatives taken before any divergent control flow), plus
+// a bias. Negative where the map is magnified: each sample clamps it to its own map, so the
+// detail layer (finer texels) keeps its own level.
 float gads_march_lod(GADSPlane p) {
 	vec2 size = vec2(textureSize(height_texture, 0));
 	vec2 dx = p.ddx * size;
 	vec2 dy = p.ddy * size;
 	float rho2 = max(dot(dx, dx), dot(dy, dy));
-	return max(0.5 * log2(max(rho2, 1e-12)) + gads_pom_range.z, 0.0);
+	return 0.5 * log2(max(rho2, 1e-12)) + gads_pom_range.z;
 }
 
 // uv change per metre of relief height along the view ray (see the header comment).
@@ -228,8 +279,7 @@ float gads_self_shadow(vec3 l) {
 	}
 	float na = dot(gads_ss_n, gads_ss_axis);
 	vec2 duv_dz = vec2(dot(gads_ss_gu, l), dot(gads_ss_gv, l)) * (na / max(n_dot_l, GADS_MIN_NDOTV));
-	float center = gads_ss_params.z;
-	float z_top = (1.0 - center) * amp;
+	float z_top = gads_slab_top(amp);
 	if (gads_ss_z >= z_top) {
 		return 1.0;
 	}

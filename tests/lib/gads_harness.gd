@@ -226,8 +226,9 @@ static func trace_height_field(origin: Vector3, dir: Vector3, surface: Dictionar
 	# z_ray(t) = n.(origin + t dir - p0) / (n.a)
 	var z0 := n.dot(origin - p0) / na
 	var dz_dt := nd / na
-	var z_top := (1.0 - center) * amp
-	var z_bot := -center * amp
+	var detail_amp: float = (surface["detail"] as Dictionary)["amp"] if surface.has("detail") else 0.0
+	var z_top := (1.0 - center) * amp + 0.5 * detail_amp
+	var z_bot := -center * amp - 0.5 * detail_amp
 	var t_top := (z_top - z0) / dz_dt
 	var t_bot := (z_bot - z0) / dz_dt
 	var t_raster := -z0 / dz_dt
@@ -263,14 +264,23 @@ static func _ray_minus_relief(origin: Vector3, dir: Vector3, t: float, surface: 
 	var z := n.dot(r - (surface["point"] as Vector3)) / n.dot(a)
 	var foot := r - a * z
 	var uv: Vector2 = (surface["uv"] as Callable).call(foot)
-	var amp: float = surface["amp"]
-	return z - amp * (sample_field(surface["field"], uv) - float(surface["center"]))
+	return z - relief_value(surface, uv)
 
 
 ## Relief height (m) of [param surface] (see trace_height_field) at foot point [param p].
 static func relief_at(surface: Dictionary, p: Vector3) -> float:
-	var uv: Vector2 = (surface["uv"] as Callable).call(p)
-	return float(surface["amp"]) * (sample_field(surface["field"], uv) - float(surface["center"]))
+	return relief_value(surface, (surface["uv"] as Callable).call(p))
+
+
+## Relief height (m) of [param surface] at [param uv]: the main field, plus the optional detail
+## layer surface["detail"] = {"field", "amp" (m), "scale" (repeats per main repeat)}, centred on
+## 0.5 like the shaders' detail layer.
+static func relief_value(surface: Dictionary, uv: Vector2) -> float:
+	var relief := float(surface["amp"]) * (sample_field(surface["field"], uv) - float(surface["center"]))
+	if surface.has("detail"):
+		var detail: Dictionary = surface["detail"]
+		relief += float(detail["amp"]) * (sample_field(detail["field"], uv * float(detail["scale"])) - 0.5)
+	return relief
 
 
 ## Whether the height field of [param surface] blocks the ray from surface point [param from]
@@ -285,6 +295,8 @@ static func height_field_shadowed(from: Vector3, to_light: Vector3, surface: Dic
 		return false
 	var z0 := n.dot(from - (surface["point"] as Vector3)) / na
 	var z_top := (1.0 - float(surface["center"])) * float(surface["amp"])
+	if surface.has("detail"):
+		z_top += 0.5 * float((surface["detail"] as Dictionary)["amp"])
 	var steps := ceili((z_top - z0) / 0.0002)
 	for i in range(1, steps + 1):
 		var z := z0 + (z_top - z0) * i / steps

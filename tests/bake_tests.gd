@@ -37,6 +37,7 @@ func _run() -> void:
 	await process_frame # _initialize runs before the root enters the tree.
 	await _test("library_matches_sources", test_library_matches_sources)
 	await _test("follows_the_height_field", test_accuracy)
+	await _test("detail_layer_baked", test_detail_layer)
 	await _test("refines_only_where_the_relief_is", test_adaptivity)
 	await _test("closed_meshes_stay_closed", test_watertight)
 	await _test("locked_borders_stay", test_locked_borders)
@@ -229,6 +230,42 @@ func test_accuracy() -> void:
 	for p in v:
 		peak = maxf(peak, p.y)
 	check(absf(peak - amp) < 0.002, "the bump's top is %.1f mm high (%.1f mm)" % [peak * 1000.0, amp * 1000.0])
+
+
+## A detail layer (a wave field repeated 4 times, 4 mm deep) on the bump: the bake follows the
+## combined relief, as the shaders draw it.
+func test_detail_layer() -> void:
+	var field := bump_field(256, 0.08)
+	var wave := Harness.make_wave_field(128)
+	var amp := 0.06
+	var detail_amp := 0.004
+	var tolerance := 0.0005
+	var mat := uv_material(field, amp, {"detail_height_m": detail_amp, "detail_scale": 4.0})
+	mat.set_shader_parameter("detail_height_texture", ImageTexture.create_from_image(wave["image"]))
+	var baker := bake_with(plane(), mat, {"max_error": tolerance})
+	var plain := bake_with(plane(), uv_material(field, amp), {"max_error": tolerance})
+	check(baker.mesh != null, "a plane with a detail layer bakes (%s)" % baker.error)
+	if baker.mesh == null:
+		return
+	var surface := {"amp": amp, "center": 0.0, "field": field, "detail": {"field": wave, "amp": detail_amp, "scale": 4.0}}
+	var arrays := baker.mesh.surface_get_arrays(0)
+	var v: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+	var uv: PackedVector2Array = arrays[Mesh.ARRAY_TEX_UV]
+	var idx: PackedInt32Array = arrays[Mesh.ARRAY_INDEX]
+	var worst := 0.0
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 5
+	for i in range(0, idx.size(), 3):
+		var a := rng.randf()
+		var b := rng.randf() * (1.0 - a)
+		var c := 1.0 - a - b
+		var p := v[idx[i]] * a + v[idx[i + 1]] * b + v[idx[i + 2]] * c
+		var t := uv[idx[i]] * a + uv[idx[i + 1]] * b + uv[idx[i + 2]] * c
+		worst = maxf(worst, absf(p.y - Harness.relief_value(surface, t)))
+	var n := triangle_count(baker.mesh)
+	print("  %d triangles with the detail layer, %d without; largest distance to the combined field %.3f mm" % [n, triangle_count(plain.mesh), worst * 1000.0])
+	check(worst < 2.0 * tolerance, "the geometry follows the combined relief within twice the tolerance")
+	check(n > 2 * triangle_count(plain.mesh), "the detail layer is refined too")
 
 
 func test_adaptivity() -> void:

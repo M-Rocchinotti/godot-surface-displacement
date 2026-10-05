@@ -50,6 +50,10 @@ struct Displacement {
 	double rotation_rad = 0.0;
 	V2 planar_offset_m;
 	double triplanar_sharpness = 4.0;
+	// Optional detail layer: detail_height_m * (d - 0.5), d sampled at uv * detail_scale.
+	int detail_map = -1; // index into add_height_map(); -1 = none
+	double detail_height_m = 0.0;
+	double detail_scale = 8.0;
 };
 
 struct SurfaceInput {
@@ -162,6 +166,9 @@ private:
 
 	bool build_topology();
 	double sample_displacement(int surface, const V3 &world, const V3 &dir, const V2 &uv, double lod) const;
+	double relief_at(const Displacement &d, const V2 &uv, double lod) const;
+	bool has_detail(const Displacement &d) const { return d.detail_map >= 0 && d.detail_height_m > 0.0; }
+	double detail_texels(const Displacement &d) const;
 	double corner_h(const Corner &c) const;
 	float tri_error(int t) const;
 	double texel_size_m(int t) const;

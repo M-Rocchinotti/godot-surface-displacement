@@ -35,6 +35,9 @@ const PARAMETER_DEFAULTS := {
 	"planar_rotation_deg": 0.0,
 	"planar_offset_m": Vector2(0.0, 0.0),
 	"triplanar_sharpness": 4.0,
+	"detail_height_m": 0.0,
+	"detail_scale": 8.0,
+	"detail_normal_strength": 0.0,
 }
 
 
@@ -154,8 +157,11 @@ static func set_depth_write(material: ShaderMaterial, enabled: bool) -> void:
 	material.shader = get_shader(info["mapping"], info["quality"], enabled)
 
 
-## A new GADS material. [param textures]: any of "albedo", "normal", "orm", "height" -> Texture2D.
-## [param params]: shader parameters by name (height_m, height_center, texture_size_m, ...).
+## A new GADS material. [param textures]: any of "albedo", "normal", "orm", "height",
+## "detail_height", "detail_normal" -> Texture2D. [param params]: shader parameters by name
+## (height_m, height_center, texture_size_m, detail_scale, ...). A detail height map without a
+## detail_height_m gets a fifth of the main depth; a detail normal map without a
+## detail_normal_strength gets 1.
 static func create(mapping: Mapping, textures: Dictionary, params := {}, quality := Quality.POM_SELF_SHADOW,
 		depth_write := false) -> ShaderMaterial:
 	var material := ShaderMaterial.new()
@@ -164,6 +170,10 @@ static func create(mapping: Mapping, textures: Dictionary, params := {}, quality
 		material.set_meta(&"gads_depth_write", true)
 	for key: String in textures:
 		material.set_shader_parameter(key + "_texture", textures[key])
+	if textures.has("detail_height") and not params.has("detail_height_m"):
+		material.set_shader_parameter("detail_height_m", 0.2 * float(params.get("height_m", PARAMETER_DEFAULTS["height_m"])))
+	if textures.has("detail_normal") and not params.has("detail_normal_strength"):
+		material.set_shader_parameter("detail_normal_strength", 1.0)
 	for key: String in params:
 		material.set_shader_parameter(key, params[key])
 	return material

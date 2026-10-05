@@ -27,6 +27,7 @@ func _run() -> void:
 	await _test("emission_passthrough", test_emission_passthrough)
 	await _test("globals_and_parameter_defaults", test_globals_and_defaults)
 	await _test("pom_matches_ray_traced_height_field", test_pom_vs_reference)
+	await _test("detail_layer_matches_height_field", test_detail_layer)
 	await _test("inverted_height_remap", test_height_remap)
 	await _test("world_planar_on_walls_stays_finite", test_world_planar_walls)
 	await _test("pom_relief_does_not_swim", test_pom_no_swimming)
@@ -158,11 +159,16 @@ func _surfaces(tile: float) -> Array:
 ## the surface centre to the camera) and returns the per-pixel error of the hit position against
 ## the CPU reference (metres), with the number of pixels compared.
 func measure_pom_error(surface: Array, field: Dictionary, tex: Texture2D, amp: float, tile: float,
-		cam_dir: Vector3, distance := 1.3, stride := 24) -> Dictionary:
+		cam_dir: Vector3, distance := 1.3, stride := 24, detail := {}) -> Dictionary:
 	h.new_debug_scene()
 	var params: Dictionary = {"height_m": amp, "texture_size_m": Vector2(tile, tile)}
 	params.merge(surface[6], true)
-	var mat := GADSMaterials.create(surface[1], {"height": tex}, params, GADSMaterials.Quality.POM)
+	var textures := {"height": tex}
+	if not detail.is_empty():
+		textures["detail_height"] = detail["texture"]
+		params["detail_height_m"] = detail["amp"]
+		params["detail_scale"] = detail["scale"]
+	var mat := GADSMaterials.create(surface[1], textures, params, GADSMaterials.Quality.POM)
 	var pts: Array = surface[2]
 	h.add_quad(pts[0], pts[1], pts[2], pts[3], surface[3], mat)
 	var axis: Vector3 = surface[4]
@@ -173,6 +179,8 @@ func measure_pom_error(surface: Array, field: Dictionary, tex: Texture2D, amp: f
 	var img := await h.capture()
 	var ref_surface := {"point": Vector3.ZERO, "normal": axis, "axis": axis, "uv": surface[5], "amp": amp,
 			"center": float(params["height_center"]), "field": field}
+	if not detail.is_empty():
+		ref_surface["detail"] = detail
 	var errors := []
 	for py in range(stride / 2, SIZE.y, stride):
 		for px in range(stride / 2, SIZE.x, stride):
@@ -190,6 +198,48 @@ func measure_pom_error(surface: Array, field: Dictionary, tex: Texture2D, amp: f
 			errors.append((got - want).length())
 	debug_view(Harness.DEBUG_OFF)
 	return {"errors": errors, "image": img}
+
+
+## The detail layer: a fine wave field repeated 6 times per stone tile, 12 mm deep on a 50 mm
+## relief. The march must hit the combined field as exactly as the main one alone; with
+## detail_height_m 0 the layer must cost nothing and change nothing.
+func test_detail_layer() -> void:
+	var tile := 1.0
+	var amp := 0.05
+	var field := Harness.make_stone_field(512, 70, 7)
+	var tex := ImageTexture.create_from_image(field["image"])
+	var wave := Harness.make_wave_field(128)
+	var detail := {"field": wave, "texture": ImageTexture.create_from_image(wave["image"]), "amp": 0.012, "scale": 6.0}
+	var surfaces := _surfaces(tile)
+	for index in [0, 2, 4]: # world floor, uv floor, triplanar floor
+		var surface: Array = surfaces[index]
+		for view in [Vector3(0.25, 1.0, 0.35), Vector3(0.3, 0.75, 0.75)]:
+			var r := await measure_pom_error(surface, field, tex, amp, tile, view.normalized(), 1.3, 24, detail)
+			var e: Array = r["errors"]
+			var p50 := percentile(e, 0.5) * 1000.0
+			var p90 := percentile(e, 0.9) * 1000.0
+			print("  %-26s %4d px  median %.3f mm  p90 %.3f mm" % [surface[0], e.size(), p50, p90])
+			check(e.size() >= 150 and p50 < 0.2 and p90 < 0.4, "%s with a detail layer: hit within 0.2 mm (median) / 0.4 mm (90 %%) of the combined height field" % surface[0])
+	# On a flat plateau at the top of the main relief half the detail layer stands above the main
+	# slab: the march must start above it.
+	var top := PackedFloat32Array()
+	top.resize(64 * 64)
+	top.fill(1.0)
+	var plateau := Harness.field_from_data(top, 64)
+	var on_plateau := await measure_pom_error(surfaces[2], plateau, ImageTexture.create_from_image(plateau["image"]), amp, tile,
+			Vector3(0.3, 0.75, 0.75).normalized(), 1.3, 24, detail)
+	var pe: Array = on_plateau["errors"]
+	print("  detail on a plateau          %4d px  median %.3f mm  p90 %.3f mm" % [pe.size(), percentile(pe, 0.5) * 1000.0, percentile(pe, 0.9) * 1000.0])
+	check(pe.size() >= 150 and percentile(pe, 0.9) < 0.0004, "detail above the main relief's top is hit too (the slab includes the detail layer)")
+	# Off: a detail texture with detail_height_m 0 renders exactly what no detail texture renders.
+	var floor_surface: Array = surfaces[2]
+	var plain := await measure_pom_error(floor_surface, field, tex, amp, tile, Vector3(0.3, 0.75, 0.75).normalized())
+	var off := detail.duplicate()
+	off["amp"] = 0.0
+	var with_off := await measure_pom_error(floor_surface, field, tex, amp, tile, Vector3(0.3, 0.75, 0.75).normalized(), 1.3, 24, off)
+	var a: Image = plain["image"]
+	var b: Image = with_off["image"]
+	check(a.get_data() == b.get_data(), "detail_height_m 0 leaves the image bit for bit unchanged")
 
 
 func test_pom_vs_reference() -> void:

@@ -175,6 +175,20 @@ bool Tessellator::build_topology() {
 		error_ = "the transform has no volume (zero scale)";
 		return false;
 	}
+	for (const Displacement &d : displacements_) {
+		bool main_ok = d.height_map >= 0 && size_t(d.height_map) < maps_.size();
+		bool detail_ok = d.detail_map < 0 || size_t(d.detail_map) < maps_.size();
+		if (!main_ok || !detail_ok) {
+			error_ = "a displacement refers to a height map that was not added";
+			return false;
+		}
+	}
+	for (const SurfaceInput &s : inputs_) {
+		if (s.displacement >= int(displacements_.size())) {
+			error_ = "a surface refers to a displacement that was not added";
+			return false;
+		}
+	}
 	// Mesh size, for the default weld distance.
 	V3 lo(1e300, 1e300, 1e300), hi(-1e300, -1e300, -1e300);
 	size_t vertex_count = 0;
@@ -399,28 +413,47 @@ static V2 uv_transform(const Displacement &d, const V2 &uv) {
 	return V2(uv.x * d.uv_scale.x + d.uv_offset.x, uv.y * d.uv_scale.y + d.uv_offset.y);
 }
 
+// Detail texels per main-map texel (1 without a detail layer).
+double Tessellator::detail_texels(const Displacement &d) const {
+	return has_detail(d) ? d.detail_scale * maps_[d.detail_map]->width() / double(maps_[d.height_map]->width()) : 1.0;
+}
+
+// The relief (m) of one projection at uv (in main-map repeats), the detail layer included, as the
+// shaders' gads_relief(). `lod` is a mip level in the finest texels the displacement has (those
+// texel_size_m() measures); each map is sampled at the matching level of its own texels.
+double Tessellator::relief_at(const Displacement &d, const V2 &uv, double lod) const {
+	const HeightMap &map = *maps_[d.height_map];
+	double texels = detail_texels(d);
+	double main_lod = lod - std::log2(std::max(texels, 1.0));
+	double relief = d.height_m * (remap_height(map.sample_lod(uv, std::max(main_lod, 0.0)), d.remap) - d.center);
+	if (has_detail(d)) {
+		const HeightMap &detail = *maps_[d.detail_map];
+		relief += d.detail_height_m * (detail.sample_lod(uv * d.detail_scale, std::max(main_lod + std::log2(texels), 0.0)) - 0.5);
+	}
+	return relief;
+}
+
 double Tessellator::sample_displacement(int surface, const V3 &world, const V3 &dir, const V2 &uv, double lod) const {
 	int di = inputs_[surface].displacement;
 	if (di < 0) {
 		return 0.0;
 	}
 	const Displacement &d = displacements_[di];
-	const HeightMap &map = *maps_[d.height_map];
-	double h = 0.0;
 	if (d.mapping == MAPPING_UV) {
-		h = remap_height(map.sample_lod(uv_transform(d, uv), lod), d.remap);
-	} else if (d.mapping == MAPPING_WORLD) {
-		h = remap_height(map.sample_lod(planar_uv(d, -1, world, dir), lod), d.remap);
-	} else {
-		double w[3];
-		triplanar_weights(dir, d.triplanar_sharpness, w);
-		for (int a = 0; a < 3; a++) {
-			if (w[a] > 0.0) {
-				h += w[a] * remap_height(map.sample_lod(planar_uv(d, a, world, dir), lod), d.remap);
-			}
+		return relief_at(d, uv_transform(d, uv), lod);
+	}
+	if (d.mapping == MAPPING_WORLD) {
+		return relief_at(d, planar_uv(d, -1, world, dir), lod);
+	}
+	double w[3];
+	triplanar_weights(dir, d.triplanar_sharpness, w);
+	double relief = 0.0;
+	for (int a = 0; a < 3; a++) {
+		if (w[a] > 0.0) {
+			relief += w[a] * relief_at(d, planar_uv(d, a, world, dir), lod);
 		}
 	}
-	return d.height_m * (h - d.center);
+	return relief;
 }
 
 double Tessellator::corner_h(const Corner &c) const {
@@ -439,14 +472,16 @@ double Tessellator::texel_size_m(int t) const {
 	}
 	const Displacement &d = displacements_[di];
 	const HeightMap &map = *maps_[d.height_map];
+	// The detail layer's texels are finer when it repeats more often than its size shrinks.
+	double finer = std::max(1.0, detail_texels(d));
 	if (d.mapping != MAPPING_UV) {
-		return d.texture_size_m.x / map.width();
+		return d.texture_size_m.x / map.width() / finer;
 	}
 	const V3 &a = groups_[corners_[tr.c[0]].group].world, &b = groups_[corners_[tr.c[1]].group].world, &c = groups_[corners_[tr.c[2]].group].world;
 	V2 ta = uv_transform(d, corners_[tr.c[0]].uv), tb = uv_transform(d, corners_[tr.c[1]].uv), tc = uv_transform(d, corners_[tr.c[2]].uv);
 	double area_w = (b - a).cross(c - a).length();
 	double area_t = std::fabs((tb.x - ta.x) * (tc.y - ta.y) - (tb.y - ta.y) * (tc.x - ta.x)) * map.width() * map.height();
-	return area_t > 1e-12 ? std::sqrt(area_w / area_t) : 1e30;
+	return area_t > 1e-12 ? std::sqrt(area_w / area_t) / finer : 1e30;
 }
 
 // How far the triangle's own height field deviates from the plane through its corners (m).
@@ -483,24 +518,37 @@ float Tessellator::tri_error(int t) const {
 		}
 	}
 	double lo = 1e30, hi = -1e30, longest_texels = 0.0;
+	double detail_lo = 1e30, detail_hi = -1e30;
 	for (int p = 0; p < plane_count; p++) {
 		V2 uv[3];
 		for (int k = 0; k < 3; k++) {
 			uv[k] = planes[p] == -2 ? uv_transform(d, c[k]->uv) : planar_uv(d, planes[p], g[k]->world, g[k]->dir);
 		}
+		V2 uv_min(std::min({ uv[0].x, uv[1].x, uv[2].x }), std::min({ uv[0].y, uv[1].y, uv[2].y }));
+		V2 uv_max(std::max({ uv[0].x, uv[1].x, uv[2].x }), std::max({ uv[0].y, uv[1].y, uv[2].y }));
 		double r_lo, r_hi;
-		map.range(V2(std::min({ uv[0].x, uv[1].x, uv[2].x }), std::min({ uv[0].y, uv[1].y, uv[2].y })),
-				V2(std::max({ uv[0].x, uv[1].x, uv[2].x }), std::max({ uv[0].y, uv[1].y, uv[2].y })), r_lo, r_hi);
+		map.range(uv_min, uv_max, r_lo, r_hi);
 		double a = remap_height(r_lo, d.remap), b = remap_height(r_hi, d.remap);
 		lo = std::min(lo, std::min(a, b));
 		hi = std::max(hi, std::max(a, b));
+		if (has_detail(d)) {
+			const HeightMap &detail = *maps_[d.detail_map];
+			detail.range(uv_min * d.detail_scale, uv_max * d.detail_scale, r_lo, r_hi);
+			detail_lo = std::min(detail_lo, r_lo);
+			detail_hi = std::max(detail_hi, r_hi);
+		}
 		for (int k = 0; k < 3; k++) {
 			V2 e = uv[(k + 1) % 3] - uv[k];
 			longest_texels = std::max(longest_texels, std::hypot(e.x * map.width(), e.y * map.height()));
+			if (has_detail(d)) {
+				const HeightMap &detail = *maps_[d.detail_map];
+				longest_texels = std::max(longest_texels, d.detail_scale * std::hypot(e.x * detail.width(), e.y * detail.height()));
+			}
 		}
 	}
-	// Corner values and the field both stay inside [lo, hi]: the deviation cannot exceed it.
-	double bound = std::fabs(d.height_m) * (hi - lo);
+	// Corner values and the field both stay inside [lo, hi] (plus the detail layer's range): the
+	// deviation cannot exceed it.
+	double bound = std::fabs(d.height_m) * (hi - lo) + (has_detail(d) ? d.detail_height_m * std::max(0.0, detail_hi - detail_lo) : 0.0);
 	if (bound <= settings_.max_error || longest_texels > SCAN_LIMIT_TEXELS) {
 		return float(bound);
 	}
@@ -961,7 +1009,10 @@ void Tessellator::build_outputs() {
 				// the mip level of its footprint, the direction it moved in and the refinement level of
 				// its finest triangle (debug view).
 				V3 rest_n = to_object_normal.xform(g.dir).normalized();
-				o.custom0.insert(o.custom0.end(), { float(g.rest.x), float(g.rest.y), float(g.rest.z), corner_lod[ci] });
+				// The shaders take the footprint in main-map texels; corner_lod is in the finest ones.
+				int di = inputs_[c.surface].displacement;
+				float main_lod = di < 0 ? corner_lod[ci] : float(std::max(0.0, corner_lod[ci] - std::log2(std::max(detail_texels(displacements_[di]), 1.0))));
+				o.custom0.insert(o.custom0.end(), { float(g.rest.x), float(g.rest.y), float(g.rest.z), main_lod });
 				o.custom1.insert(o.custom1.end(), { float(rest_n.x), float(rest_n.y), float(rest_n.z), float(finest[c.group]) / 32.0f });
 			}
 			o.indices.push_back(out_index[ci]);

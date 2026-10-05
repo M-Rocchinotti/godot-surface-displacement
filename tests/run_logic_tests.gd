@@ -279,6 +279,13 @@ func test_validator() -> void:
 	stale.layer_names = PackedStringArray(["res://some_other_layer.tres"])
 	many.ground_bake = stale
 	bad.add_child(many)
+	var detail_without_map := MeshInstance3D.new()
+	detail_without_map.mesh = PlaneMesh.new()
+	detail_without_map.material_override = GADSMaterials.create(GADSMaterials.Mapping.UV, {"height": height}, {"detail_height_m": 0.01})
+	bad.add_child(detail_without_map)
+	var empty_bake := GADSMeshInstance3D.new()
+	empty_bake.name = "EmptyBake"
+	bad.add_child(empty_bake)
 	root.add_child(bad)
 	var messages := "\n".join(GADSValidator.validate(bad).map(func(i: Dictionary) -> String: return i["message"]))
 	var expected := {
@@ -290,6 +297,8 @@ func test_validator() -> void:
 		"more than four layers": "only the first 4 are used",
 		"a bake made for other layers": "its ground bake was made for other layers",
 		"ground the field leaves flat": "ground material other_ground is not one of its layers",
+		"a detail depth without a detail map": "detail_height_m is set but there is no detail_height_texture",
+		"a GADSMeshInstance3D without a source mesh": "GADSMeshInstance3D EmptyBake cannot be baked: no source mesh",
 	}
 	var missing: Array[String] = []
 	for what: String in expected:

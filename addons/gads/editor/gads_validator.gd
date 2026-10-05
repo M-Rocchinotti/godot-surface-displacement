@@ -86,7 +86,9 @@ static func _check_material(m: ShaderMaterial, node: Node) -> Array:
 			issues.append(_issue("info", "%s: 8-bit height texture; fine for small relief, a 16-bit float (EXR) map avoids terracing under self-shadowing." % label))
 		if img != null and img.is_compressed():
 			issues.append(_issue("warning", "%s: the height texture is VRAM compressed; block artefacts show as relief. Import it lossless." % label))
-	for key in ["albedo_texture", "normal_texture", "orm_texture"]:
+	if float(GADSMaterials.get_param(m, "detail_height_m")) > 0.0 and m.get_shader_parameter("detail_height_texture") == null:
+		issues.append(_issue("warning", "%s: detail_height_m is set but there is no detail_height_texture; the relief is only lowered by half of it." % label))
+	for key in ["albedo_texture", "normal_texture", "orm_texture", "detail_height_texture", "detail_normal_texture"]:
 		var tex := m.get_shader_parameter(key) as Texture2D
 		if tex != null and tex.get_image() != null and not tex.get_image().has_mipmaps():
 			issues.append(_issue("warning", "%s: %s has no mipmaps." % [label, key]))

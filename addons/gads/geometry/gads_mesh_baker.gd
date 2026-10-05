@@ -88,6 +88,9 @@ static func displacement_of(material: Material) -> Dictionary:
 		"rotation_deg": GADSMaterials.get_param(sm, "planar_rotation_deg"),
 		"planar_offset_m": GADSMaterials.get_param(sm, "planar_offset_m"),
 		"triplanar_sharpness": GADSMaterials.get_param(sm, "triplanar_sharpness"),
+		"detail_texture": sm.get_shader_parameter("detail_height_texture") as Texture2D,
+		"detail_height_m": GADSMaterials.get_param(sm, "detail_height_m"),
+		"detail_scale": GADSMaterials.get_param(sm, "detail_scale"),
 	}
 
 
@@ -127,6 +130,7 @@ static func cache_key(mesh: Mesh, materials: Array[Material], xform: Transform3D
 		if not d.is_empty():
 			planar = planar or d["mapping"] != GADSMaterials.Mapping.UV
 			d["texture"] = _resource_id(d["texture"])
+			d["detail_texture"] = _resource_id(d["detail_texture"])
 		parts.append(d)
 	var b := xform.basis
 	var basis_values := [b.x, b.y, b.z]
@@ -314,15 +318,18 @@ func _make_tessellator(settings: Dictionary) -> RefCounted:
 	for s in _source.get_surface_count():
 		var d := displacement_of(_materials[s] if s < _materials.size() else null)
 		if not d.is_empty():
-			var tex: Texture2D = d["texture"]
-			if not maps.has(tex):
-				var img := tex.get_image()
-				if img == null or img.is_empty():
-					error = "cannot read the height map %s" % tex.resource_path
-					return null
-				maps[tex] = tess.call("add_height_map", img)
-			d.erase("texture")
-			d["height_map"] = maps[tex]
+			for key: String in ["texture", "detail_texture"]:
+				var tex: Texture2D = d[key]
+				d.erase(key)
+				if tex == null:
+					continue
+				if not maps.has(tex):
+					var img := tex.get_image()
+					if img == null or img.is_empty():
+						error = "cannot read the height map %s" % tex.resource_path
+						return null
+					maps[tex] = tess.call("add_height_map", img)
+				d["height_map" if key == "texture" else "detail_height_map"] = maps[tex]
 		tess.call("add_surface", _source.surface_get_arrays(s), d)
 	tess.call("set_transform", _transform)
 	var native_settings := {}

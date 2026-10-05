@@ -15,7 +15,7 @@ namespace godot {
 
 // Bumped whenever the tessellator's output for the same input changes: it is part of the bake
 // cache key, so stale bakes are rebuilt.
-static constexpr int ALGORITHM_VERSION = 1;
+static constexpr int ALGORITHM_VERSION = 2; // 2: detail layer, heights filtered only where refinement stopped early
 
 // Mesh.ArrayType
 enum {
@@ -117,6 +117,9 @@ void GADSTessellator::add_surface(const Array &p_arrays, const Dictionary &p_dis
 		d.rotation_rad = double(p_displacement.get("rotation_deg", 0.0)) * 3.14159265358979323846 / 180.0;
 		d.planar_offset_m = v2(p_displacement.get("planar_offset_m", Variant()), gads::V2());
 		d.triplanar_sharpness = p_displacement.get("triplanar_sharpness", 4.0);
+		d.detail_map = p_displacement.get("detail_height_map", -1);
+		d.detail_height_m = p_displacement.get("detail_height_m", 0.0);
+		d.detail_scale = p_displacement.get("detail_scale", 8.0);
 		s.displacement = core_.add_displacement(d);
 	}
 	core_.add_surface(std::move(s));

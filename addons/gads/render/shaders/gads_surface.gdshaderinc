@@ -36,8 +36,8 @@ vec3 gads_resolve_plane(GADSPlane p, vec3 n, vec3 v, float amp, float fade, floa
 #ifdef GADS_POM
 	if (amp > 1e-5 && lod < gads_pom_range.w && !IN_SHADOW_PASS) {
 		vec2 duv_dz = gads_duv_dz(p, n, v);
-		float z_top = (1.0 - height_center) * amp;
-		float z_bot = -height_center * amp;
+		float z_top = gads_slab_top(amp);
+		float z_bot = gads_slab_bottom(amp);
 		int steps = gads_step_count(dot(n, v), fade);
 		z_hit = gads_march(p.uv, duv_dz, z_top, z_bot, amp, lod, steps, int(gads_pom_steps.z), uv_hit, steps_used);
 	}
@@ -97,6 +97,7 @@ void fragment() {
 	if (gads_baked > 0.5) {
 		nm = gads_detail_normal(nm, p, uv_hit);
 	}
+	nm = gads_add_detail_normal(nm, uv_hit, p.ddx, p.ddy);
 	NORMAL_MAP = nm;
 	NORMAL_MAP_DEPTH = normal_strength;
 	normal_world = view_to_world * n;
@@ -129,6 +130,7 @@ void fragment() {
 	if (gads_baked > 0.5) {
 		nm = gads_detail_normal(nm, p, uv_hit);
 	}
+	nm = gads_add_detail_normal(nm, uv_hit, p.ddx, p.ddy);
 	normal_world = gads_apply_normal_map(nm, normalize(p.gu), -normalize(p.gv), normalize(gads_geom_normal), normal_strength);
 	NORMAL = normalize(world_to_view * normal_world);
 	main_plane = p;
@@ -169,6 +171,7 @@ void fragment() {
 		if (gads_baked > 0.5) {
 			nm = gads_detail_normal(nm, p, uv_hit);
 		}
+		nm = gads_add_detail_normal(nm, uv_hit, p.ddx, p.ddy);
 		nsum += wa * gads_apply_normal_map(nm, normalize(p.gu), -normalize(p.gv), normalize(gads_geom_normal), normal_strength);
 		if (wa > main_w) {
 			main_w = wa;
@@ -246,7 +249,7 @@ void fragment() {
 		if (debug_view == 1) {
 			debug_color = 0.5 + off_world / (2.0 * max(gads_debug.y, 1e-6));
 		} else if (debug_view == 2) {
-			debug_color = vec3(steps_used / 64.0, planes_marched / 3.0, main_lod / 8.0);
+			debug_color = vec3(steps_used / 64.0, planes_marched / 3.0, max(main_lod, 0.0) / 8.0);
 		} else if (debug_view == 3) {
 			debug_color = vec3(amp > 0.0 ? main_z / amp + height_center : 0.0);
 		} else if (debug_view == 9) {

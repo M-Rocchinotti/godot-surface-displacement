@@ -28,6 +28,11 @@ All notable changes to this project are documented here. The format follows
   each vertex's rest position, and only the normal-map detail finer than the triangles (the
   normal map seen from its footprint-averaged frame), so the relief is not lit twice. Debug view
   **Tessellation** (`GADSManager.DebugView.TESSELLATION`).
+- **Detail displacement layer** on every GADS material (`detail_height_texture`,
+  `detail_height_m`, `detail_scale`, `detail_normal_texture`, `detail_normal_strength`): a
+  second, finer relief repeated `detail_scale` times per main repeat, marched, self-shadowed and
+  baked together with the main one, and a detail normal map blended by Reoriented Normal
+  Mapping. Off (and bit for bit unchanged) while its depth and strength are 0.
 - Editor: Bake / Rebuild / Clear / Cancel with progress and statistics in the inspector (undoable);
   Project > Tools > **Make Selected Meshes GADSMeshInstance3D** and **Bake Selected
   GADSMeshInstance3D** (undoable); Validate Setup reports stale bakes, unbakeable meshes, a
