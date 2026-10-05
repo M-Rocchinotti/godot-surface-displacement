@@ -845,9 +845,11 @@ static func _ray_box(o: Vector3, d: Vector3, lo: Vector3, hi: Vector3) -> float:
 ## as flicker several times higher.
 func test_mip_shimmer() -> void:
 	var results := {}
+	var mat: ShaderMaterial
+	var cam: Camera3D
 	for quality in [SDMaterials.Quality.FLAT, SDMaterials.Quality.POM]:
 		h.new_lit_scene(Color(0.2, 0.2, 0.22))
-		var mat := SDMaterials.from_texture_set("res://demo/textures/clean_pebbles", SDMaterials.Mapping.WORLD, {"height_center": 0.0, "height_m": 0.04}, quality)
+		mat = SDMaterials.from_texture_set("res://demo/textures/clean_pebbles", SDMaterials.Mapping.WORLD, {"height_center": 0.0, "height_m": 0.04}, quality)
 		var plane := PlaneMesh.new()
 		plane.size = Vector2(200, 200)
 		var mi := MeshInstance3D.new()
@@ -856,7 +858,7 @@ func test_mip_shimmer() -> void:
 		h.scene.add_child(mi)
 		var sun := h.add_sun(30.0, 40.0, false)
 		sun.light_energy = 1.5
-		var cam := h.add_camera(Vector3(0, 1.7, 0), Vector3(0, 0.3, -30))
+		cam = h.add_camera(Vector3(0, 1.7, 0), Vector3(0, 0.3, -30))
 		SDGlobals.set_value(SDGlobals.POM_RANGE, Vector4(1000, 2000, 0, 99))
 		var frames: Array[Image] = []
 		for f in 16:
@@ -868,6 +870,39 @@ func test_mip_shimmer() -> void:
 	print("  mean per-pixel flicker 10-60 m away: flat %.5f, POM %.5f (x%.2f)" % [results[SDMaterials.Quality.FLAT], results[SDMaterials.Quality.POM], ratio])
 	# Measured: x1.02 with mip-correct sampling, x1.8 when the march reads mip 0 (mutation check).
 	check(ratio < 1.3, "POM adds less than 30 % flicker over plain normal mapping at a distance")
+	# The march's mip level itself (blue of the Cost view = level / 8), against the level the
+	# hardware picks for the rasterized uv, from the ground footprints of neighbouring pixels.
+	# Unlike the flicker ratio it does not depend on how a driver filters: on Mesa's lavapipe a
+	# march at mip 0 flickered x0.79 against x0.27, under the limit above.
+	debug_view(Harness.DEBUG_COST)
+	await h.frames(2)
+	var cost := await h.capture()
+	var size_m: Vector2 = SDMaterials.get_param(mat, "texture_size_m")
+	var texels := float((mat.get_shader_parameter("height_texture") as Texture2D).get_width())
+	var errors := []
+	# Even pixels: their screen-space derivatives are the differences to the next pixel.
+	for py in range(SIZE.y / 2, SIZE.y - 2, 8):
+		for px in range(8, SIZE.x - 8, 16):
+			var p := _ground_hit(cam, Vector2(px, py))
+			var distance := p.distance_to(cam.global_position) if p.is_finite() else 0.0
+			if distance < 10.0 or distance > 60.0:
+				continue
+			var dx := (_ground_hit(cam, Vector2(px + 1, py)) - p)
+			var dy := (_ground_hit(cam, Vector2(px, py + 1)) - p)
+			var rho2 := maxf((Vector2(dx.x, dx.z) / size_m * texels).length_squared(), (Vector2(dy.x, dy.z) / size_m * texels).length_squared())
+			var want := maxf(0.5 * log(rho2) / log(2.0), 0.0)
+			errors.append(absf(cost.get_pixel(px, py).b * 8.0 - want))
+	print("  march mip level 10-60 m away: %d pixels, 90th percentile error %.3f levels" % [errors.size(), percentile(errors, 0.9)])
+	check(errors.size() > 200 and percentile(errors, 0.9) < 0.25, "the march samples the mip level the hardware would pick (within a quarter level)")
+	debug_view(Harness.DEBUG_OFF)
+
+
+## Where the view ray through the centre of pixel [param px] meets the ground plane y = 0 (INF if
+## it does not).
+static func _ground_hit(cam: Camera3D, px: Vector2) -> Vector3:
+	var o := cam.project_ray_origin(px + Vector2(0.5, 0.5))
+	var d := cam.project_ray_normal(px + Vector2(0.5, 0.5))
+	return o - d * (o.y / d.y) if d.y < -1e-6 else Vector3.INF
 
 
 # --- 11. Distance fade ---------------------------------------------------------------------------
