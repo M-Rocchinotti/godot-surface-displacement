@@ -20,6 +20,7 @@ func _run() -> void:
 	test_manager()
 	await test_settings_changes()
 	test_material_discovery()
+	test_validator()
 	test_field_geometry()
 	test_field_mesh_seams()
 	test_ground_bake_sampling()
@@ -214,6 +215,89 @@ func test_material_discovery() -> void:
 	check(missed.is_empty(), "the preset reaches SD materials on mesh surfaces, overlays, next passes, CSG shapes, MultiMeshes, GridMaps and particles%s"
 			% ("" if missed.is_empty() else " (missed: %s)" % ", ".join(missed)))
 	scene.queue_free()
+
+
+## Validate Setup reports each setup mistake it knows, and nothing on a correct setup.
+func test_validator() -> void:
+	print("\n== Validate Setup")
+	var height := ImageTexture.create_from_image(Image.create(8, 8, true, Image.FORMAT_RH))
+	var good := Node3D.new()
+	var sd := SurfaceDisplacement.new()
+	good.add_child(sd)
+	var ground_mat := SDMaterials.create(SDMaterials.Mapping.WORLD, {"height": height}, {"height_center": 0.0})
+	var ground := MeshInstance3D.new()
+	ground.mesh = PlaneMesh.new()
+	ground.material_override = ground_mat
+	ground.add_to_group(&"sd_ground_validator")
+	good.add_child(ground)
+	var field := DisplacementField3D.new()
+	field.bake_on_ready = false
+	field.ground_group = &"sd_ground_validator"
+	field.layers = [ground_mat]
+	field.add_child(PebbleScatter3D.new())
+	good.add_child(field)
+	root.add_child(good)
+	var clean := SDValidator.validate(good).filter(func(i: Dictionary) -> bool: return i["level"] != "info")
+	for i: Dictionary in clean:
+		print("  unexpected: %s" % i["message"])
+	check(clean.is_empty(), "a correct setup gets no errors or warnings")
+	good.queue_free()
+
+	var bad := Node3D.new()
+	var custom := SurfaceDisplacement.new()
+	custom.preset = SDSettings.Preset.CUSTOM
+	bad.add_child(custom)
+	bad.add_child(PebbleScatter3D.new())
+	# A UV-mapped material on a mesh without UVs, and the same on one with UVs.
+	var uv_mat := SDMaterials.create(SDMaterials.Mapping.UV, {"height": height}, {"height_m": 0.0, "height_remap": Vector2(0.4, 0.4)})
+	for with_uv in [false, true]:
+		var st := SurfaceTool.new()
+		st.begin(Mesh.PRIMITIVE_TRIANGLES)
+		for v in [Vector3(0, 0, 0), Vector3(1, 0, 0), Vector3(0, 0, 1)]:
+			st.set_normal(Vector3.UP)
+			if with_uv:
+				st.set_uv(Vector2(v.x, v.z))
+			st.add_vertex(v)
+		var mi := MeshInstance3D.new()
+		mi.name = "WithUV" if with_uv else "NoUV"
+		mi.mesh = st.commit()
+		mi.material_override = uv_mat
+		bad.add_child(mi)
+	var layer := SDMaterials.create(SDMaterials.Mapping.WORLD, {"height": height}, {"height_center": 0.0})
+	var other_ground := SDMaterials.create(SDMaterials.Mapping.WORLD, {"height": height}, {"height_center": 0.0})
+	other_ground.resource_name = "other_ground"
+	var ground2 := MeshInstance3D.new()
+	ground2.mesh = PlaneMesh.new()
+	ground2.material_override = other_ground
+	ground2.add_to_group(&"sd_ground_validator")
+	bad.add_child(ground2)
+	var many := DisplacementField3D.new()
+	many.bake_on_ready = false
+	many.ground_group = &"sd_ground_validator"
+	many.layers = [layer, layer, layer, layer, layer]
+	var stale := SDGroundBake.new()
+	stale.layer_names = PackedStringArray(["res://some_other_layer.tres"])
+	many.ground_bake = stale
+	bad.add_child(many)
+	root.add_child(bad)
+	var messages := "\n".join(SDValidator.validate(bad).map(func(i: Dictionary) -> String: return i["message"]))
+	var expected := {
+		"Custom preset without settings": "preset Custom without custom_settings",
+		"pebble scatter outside a field": "must be a child of a DisplacementField3D",
+		"UV mapping on a mesh without UVs": "NoUV, surface 0: UV-mapped SD material on a mesh without UVs",
+		"height_m 0": "height_m 0: it draws flat",
+		"a degenerate height_remap": "maps every height to the same value",
+		"more than four layers": "only the first 4 are used",
+		"a bake made for other layers": "its ground bake was made for other layers",
+		"ground the field leaves flat": "ground material other_ground is not one of its layers",
+	}
+	var missing: Array[String] = []
+	for what: String in expected:
+		if not messages.contains(expected[what]):
+			missing.append(what)
+	check(missing.is_empty(), "it reports %s%s" % [", ".join(expected.keys()), "" if missing.is_empty() else " (missing: %s)" % ", ".join(missing)])
+	check(not messages.contains("WithUV"), "a UV-mapped material on a mesh with UVs is not reported")
+	bad.queue_free()
 
 
 ## Edits to a Custom preset's settings resource apply without touching the node, and the local

@@ -172,6 +172,12 @@ static func surface_material(mi: MeshInstance3D, surface: int) -> Material:
 ## is a step (a kerb), not ground to displace; see [member step_limit].
 ## It renders a few frames per 2048 x 2048 tile; nothing is processed per texel on the CPU.
 static func bake(meshes: Array[MeshInstance3D], layers: Array, texel: float, bounds := Rect2(), step_slope := STEP_SLOPE) -> SDGroundBake:
+	# Mesh instances without a mesh would stretch the bounds to their origin for nothing.
+	var drawn: Array[MeshInstance3D] = []
+	for mi in meshes:
+		if mi.mesh != null:
+			drawn.append(mi)
+	meshes = drawn
 	if meshes.is_empty():
 		push_warning("SDGroundBake: nothing to bake (no ground meshes).")
 		return null

@@ -19,15 +19,27 @@ static func validate(root: Node) -> Array:
 		issues.append(_issue("info", "No SurfaceDisplacement node: materials use the quality in Project Settings > Shader Globals and the variant they were saved with."))
 	elif managers.size() > 1:
 		issues.append(_issue("warning", "%d SurfaceDisplacement nodes: they share the same shader globals; keep one." % managers.size()))
+	for node in managers:
+		var sd := node as SurfaceDisplacement
+		if sd.preset == SDSettings.Preset.CUSTOM and sd.custom_settings == null:
+			issues.append(_issue("warning", "SurfaceDisplacement %s: preset Custom without custom_settings runs the Medium preset." % sd.name))
 	var seen := {}
-	for node in root.find_children("*", "GeometryInstance3D", true, false):
-		for m in _materials_of(node as GeometryInstance3D):
+	var drawing := root.find_children("*", "GeometryInstance3D", true, false) + root.find_children("*", "GridMap", true, false)
+	if root is GeometryInstance3D:
+		drawing.append(root)
+	for node in drawing:
+		for m in SDMaterials.materials_of(node):
 			if seen.has(m) or not SDMaterials.is_sd_material(m):
 				continue
 			seen[m] = true
 			issues.append_array(_check_material(m as ShaderMaterial, node))
+		if node is MeshInstance3D:
+			issues.append_array(_check_mesh_attributes(node as MeshInstance3D))
 	for node in root.find_children("*", "DisplacementField3D", true, false):
 		issues.append_array(_check_field(node as DisplacementField3D))
+	for node in root.find_children("*", "PebbleScatter3D", true, false):
+		if not node.get_parent() is DisplacementField3D:
+			issues.append(_issue("error", "PebbleScatter3D %s draws nothing: it must be a child of a DisplacementField3D." % node.name))
 	return issues
 
 
@@ -49,18 +61,6 @@ static func _issue(level: String, message: String) -> Dictionary:
 	return {"level": level, "message": message}
 
 
-static func _materials_of(gi: GeometryInstance3D) -> Array:
-	var out := [gi.material_override]
-	if gi is MeshInstance3D:
-		var mi := gi as MeshInstance3D
-		for s in mi.get_surface_override_material_count():
-			out.append(mi.get_surface_override_material(s))
-		if mi.mesh != null:
-			for s in mi.mesh.get_surface_count():
-				out.append(mi.mesh.surface_get_material(s))
-	return out.filter(func(m: Material) -> bool: return m != null)
-
-
 static func _check_material(m: ShaderMaterial, node: Node) -> Array:
 	var issues := []
 	var label := "%s on %s" % [m.resource_name if not m.resource_name.is_empty() else "SD material", node.name]
@@ -68,7 +68,12 @@ static func _check_material(m: ShaderMaterial, node: Node) -> Array:
 	var height := m.get_shader_parameter("height_texture") as Texture2D
 	if height == null:
 		issues.append(_issue("warning", "%s has no height texture: it draws flat." % label))
-	else:
+	elif float(SDMaterials.get_param(m, "height_m")) <= 0.0:
+		issues.append(_issue("warning", "%s has height_m 0: it draws flat. Set the relief depth in metres." % label))
+	var remap: Vector2 = SDMaterials.get_param(m, "height_remap")
+	if absf(remap.y - remap.x) < 1e-4:
+		issues.append(_issue("error", "%s: height_remap %s maps every height to the same value (x and y must differ)." % [label, remap]))
+	if height != null:
 		var img := height.get_image()
 		if img != null and not img.has_mipmaps():
 			issues.append(_issue("error", "%s: the height texture has no mipmaps (the march samples the full-size map at every distance: shimmer and cost). Import it with mipmaps." % label))
@@ -85,11 +90,43 @@ static func _check_material(m: ShaderMaterial, node: Node) -> Array:
 	return issues
 
 
+## A UV-mapped SD material needs UVs on the surfaces it shades. (Missing tangents cannot be
+## told from the mesh: Godot reports and fills in arbitrary ones.)
+static func _check_mesh_attributes(mi: MeshInstance3D) -> Array:
+	var issues := []
+	# Primitive meshes always have UVs and tangents; an ArrayMesh says what it has.
+	var mesh := mi.mesh as ArrayMesh
+	if mesh == null:
+		return issues
+	for s in mesh.get_surface_count():
+		var m := SDGroundBake.surface_material(mi, s) as ShaderMaterial
+		var info := SDMaterials.parse(m.shader) if m != null else {}
+		if info.is_empty() or info["mapping"] != SDMaterials.Mapping.UV:
+			continue
+		var format: int = mesh.surface_get_format(s)
+		if format & Mesh.ARRAY_FORMAT_TEX_UV == 0:
+			issues.append(_issue("error", "%s, surface %d: UV-mapped SD material on a mesh without UVs. Use world-planar or triplanar mapping, or give the mesh UVs." % [mi.name, s]))
+	return issues
+
+
 static func _check_field(field: DisplacementField3D) -> Array:
 	var issues := []
 	var label := "DisplacementField3D %s" % field.name
 	if field.layers.is_empty():
 		issues.append(_issue("error", "%s has no layers." % label))
+	elif field.layers.size() > DisplacementField3D.MAX_LAYERS:
+		issues.append(_issue("warning", "%s has %d layers; only the first %d are used." % [label, field.layers.size(), DisplacementField3D.MAX_LAYERS]))
+	var bake := field.ground_bake
+	# A captured bake names the layers it was made for (SDGroundBake.from_arrays() names none).
+	# Only names that are resource paths are stable; layers made in code cannot be compared.
+	if bake != null and not bake.layer_names.is_empty():
+		var stale := bake.layer_names.size() != field.layers.size()
+		for i in mini(bake.layer_names.size(), field.layers.size()):
+			var layer := field.layers[i]
+			if layer != null and bake.layer_names[i].begins_with("res://") and bake.layer_names[i] != layer.resource_path:
+				stale = true
+		if stale:
+			issues.append(_issue("warning", "%s: its ground bake was made for other layers; bake the ground again." % label))
 	for layer in field.layers:
 		if layer == null:
 			continue
@@ -98,8 +135,19 @@ static func _check_field(field: DisplacementField3D) -> Array:
 			issues.append(_issue("error", "%s: layer %s is not a world-planar SD material." % [label, layer.resource_name]))
 		elif not is_zero_approx(float(SDMaterials.get_param(layer, "height_center"))):
 			issues.append(_issue("warning", "%s: layer %s has height_center %.2f; the field's relief sits above the ground (0), so the parallax around it should too." % [label, layer.resource_name, SDMaterials.get_param(layer, "height_center")]))
-	if field.ground_bake == null and field.is_inside_tree() and SDGroundBake.collect_ground(field.get_tree(), field.ground_group).is_empty():
-		issues.append(_issue("info", "%s: no meshes in group '%s'; the ground is the flat plane at the field's height." % [label, field.ground_group]))
+	if field.is_inside_tree():
+		var ground := SDGroundBake.collect_ground(field.get_tree(), field.ground_group)
+		if field.ground_bake == null and ground.is_empty():
+			issues.append(_issue("info", "%s: no meshes in group '%s'; the ground is the flat plane at the field's height." % [label, field.ground_group]))
+		var others := {}
+		for mi in ground:
+			for s in (mi.mesh.get_surface_count() if mi.mesh != null else 0):
+				var m := SDGroundBake.surface_material(mi, s)
+				var info := SDMaterials.parse((m as ShaderMaterial).shader) if m is ShaderMaterial else {}
+				if not info.is_empty() and info["mapping"] == SDMaterials.Mapping.WORLD and SDGroundBake.layer_index(m, field.layers) < 0:
+					others[m] = true
+		for m: Material in others:
+			issues.append(_issue("info", "%s: ground material %s is not one of its layers, so the field leaves it flat (parallax only). Add it to layers to displace it." % [label, m.resource_name]))
 	for k in field.levels - 1:
 		var r := field.get_morph_range(k)
 		var spacing := field.base_spacing * pow(2.0, k)
