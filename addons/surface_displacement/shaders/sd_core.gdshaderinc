@@ -41,6 +41,12 @@ uniform float ao_strength : hint_range(0.0, 1.0) = 1.0;
 uniform float roughness_scale : hint_range(0.0, 2.0) = 1.0;
 uniform float metallic_scale : hint_range(0.0, 1.0) = 0.0;
 uniform float specular : hint_range(0.0, 1.0) = 0.5;
+group_uniforms emission;
+// Emitted light (linear, HDR): emission_texture * emission_color * emission_energy, sampled at the
+// relief hit like the albedo. The texture defaults to black, so a material without one emits nothing.
+uniform sampler2D emission_texture : source_color, hint_default_black, filter_linear_mipmap_anisotropic, repeat_enable;
+uniform vec4 emission_color : source_color = vec4(1.0);
+uniform float emission_energy = 1.0;
 group_uniforms height;
 uniform sampler2D height_texture : hint_default_white, filter_linear_mipmap, repeat_enable;
 uniform float height_m : hint_range(0.0, 0.5, 0.0005) = 0.03;

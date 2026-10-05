@@ -334,11 +334,13 @@ func _apply_layers() -> void:
 	var albedos: Array[Texture2D] = []
 	var normals: Array[Texture2D] = []
 	var orms: Array[Texture2D] = []
+	var emissions: Array[Texture2D] = []
 	var a: Array[Vector4] = []
 	var b: Array[Vector4] = []
 	var c: Array[Vector4] = []
 	var d: Array[Vector4] = []
 	var e: Array[Vector4] = []
+	var f: Array[Vector4] = []
 	for i in MAX_LAYERS:
 		var m: ShaderMaterial = layers[i] if i < count else null
 		if m == null:
@@ -346,17 +348,21 @@ func _apply_layers() -> void:
 			albedos.append(null)
 			normals.append(null)
 			orms.append(null)
+			emissions.append(null)
 			a.append(Vector4(0, 0, 1, 1))
 			b.append(Vector4(0.5, 0.5, 0, 0))
 			c.append(Vector4(1, 0, 1, 1))
 			d.append(Vector4(1, 1, 1, 0))
 			e.append(Vector4(0.5, 1, 1, 0))
+			f.append(Vector4.ZERO)
 			continue
 		var height_tex: Texture2D = _param(m, "height_texture")
 		heights.append(height_tex)
 		albedos.append(_param(m, "albedo_texture"))
 		normals.append(_param(m, "normal_texture"))
 		orms.append(_param(m, "orm_texture"))
+		var emission_tex: Texture2D = _param(m, "emission_texture")
+		emissions.append(emission_tex)
 		var remap: Vector2 = _param(m, "height_remap")
 		a.append(Vector4(_param(m, "height_m"), remap.x, remap.y, _param(m, "normal_strength")))
 		var size: Vector2 = _param(m, "texture_size_m")
@@ -368,16 +374,25 @@ func _apply_layers() -> void:
 		d.append(Vector4(tint.r, tint.g, tint.b, _param(m, "metallic_scale")))
 		var texel := size.x / float(height_tex.get_width()) if height_tex != null else size.x / 1024.0
 		e.append(Vector4(_param(m, "specular"), _param(m, "pom_steps_scale"), _param(m, "self_shadow_strength"), -log(texel) / log(2.0)))
+		# The material's emission_color is a source_color uniform (the engine converts it to linear);
+		# layer_f is a plain vec4, so it gets the linear colour, times the energy. Sampler arrays take
+		# no default hint (a missing texture reads white, where the material's reads black), so a
+		# layer without an emission texture gets none.
+		var emission_color: Color = _param(m, "emission_color")
+		var glow := emission_color.srgb_to_linear() * float(_param(m, "emission_energy")) if emission_tex != null else Color(0, 0, 0, 0)
+		f.append(Vector4(glow.r, glow.g, glow.b, 0.0))
 	_material.set_shader_parameter("layer_count", count)
 	_material.set_shader_parameter("layer_height", heights)
 	_material.set_shader_parameter("layer_albedo", albedos)
 	_material.set_shader_parameter("layer_normal", normals)
 	_material.set_shader_parameter("layer_orm", orms)
+	_material.set_shader_parameter("layer_emission", emissions)
 	_material.set_shader_parameter("layer_a", a)
 	_material.set_shader_parameter("layer_b", b)
 	_material.set_shader_parameter("layer_c", c)
 	_material.set_shader_parameter("layer_d", d)
 	_material.set_shader_parameter("layer_e", e)
+	_material.set_shader_parameter("layer_f", f)
 
 
 ## The clipmap mesh: [param levels] rings of [param n] x [param n] quads (vertex positions in

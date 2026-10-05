@@ -6,13 +6,14 @@ extends RefCounted
 ## editor plugin wraps the same assignments in undo/redo).
 ##
 ## What carries over: albedo colour and texture, normal map and scale, ORM texture
-## (ORMMaterial3D) or constant roughness / metallic, AO on/off, specular, UV scale and offset,
-## world triplanar mapping and its sharpness, the height map (flipped if the material flips it).
+## (ORMMaterial3D) or constant roughness / metallic, AO on/off, specular, emission (colour, energy
+## multiplier and texture), UV scale and offset, world triplanar mapping and its sharpness, the
+## height map (flipped if the material flips it).
 ## The relief depth is BaseMaterial3D's heightmap_scale (hundredths of a texture repeat) turned
 ## into metres with [param metres_per_repeat] (default 1 m per texture repeat) - check it per
-## material. Materials with transparency, emission, unshaded shading, object-space triplanar
-## mapping or separate AO / roughness / metallic textures are not converted (reported in
-## "skipped" with the reason).
+## material. Materials with transparency, unshaded shading, object-space triplanar mapping,
+## separate AO / roughness / metallic textures, emission on UV2 or an emission colour added to an
+## emission texture are not converted (reported in "skipped" with the reason).
 
 
 ## {"assignments": [{"node", "surface" (-1 = material_override), "from" (the material that was
@@ -73,8 +74,10 @@ static func skip_reason(m: BaseMaterial3D) -> String:
 		return "transparent"
 	if m.shading_mode != BaseMaterial3D.SHADING_MODE_PER_PIXEL:
 		return "not per-pixel shaded"
-	if m.emission_enabled:
-		return "emission is not supported"
+	if m.emission_enabled and m.emission_on_uv2:
+		return "emission on UV2 (Surface Displacement samples every texture on UV1)"
+	if m.emission_enabled and m.emission_operator == BaseMaterial3D.EMISSION_OP_ADD and m.emission_texture != null and not _is_black(m.emission):
+		return "emission colour added to an emission texture (Surface Displacement multiplies them: set the emission operator to Multiply or the colour to black first)"
 	if m.uv1_triplanar and not m.uv1_world_triplanar:
 		return "object-space triplanar (Surface Displacement's triplanar mapping is in world space)"
 	if not m is ORMMaterial3D and (m.roughness_texture != null or m.metallic_texture != null or (m.ao_enabled and m.ao_texture != null)):
@@ -98,6 +101,8 @@ static func convert_material(m: BaseMaterial3D, metres_per_repeat := 1.0) -> Sha
 		"height_center": 1.0,
 		"height_remap": Vector2(1.0, 0.0) if m.heightmap_flip_texture else Vector2(0.0, 1.0),
 	}
+	if m.emission_enabled:
+		_convert_emission(m, textures, params)
 	if m is ORMMaterial3D:
 		textures["orm"] = m.orm_texture
 		# ORMMaterial3D reads roughness and metallic from the texture unscaled.
@@ -116,3 +121,36 @@ static func convert_material(m: BaseMaterial3D, metres_per_repeat := 1.0) -> Sha
 	var out := SDMaterials.create(mapping, textures, params)
 	out.resource_name = (m.resource_name if not m.resource_name.is_empty() else "material") + " (SD)"
 	return out
+
+
+## BaseMaterial3D emits (colour + texture) * energy with the Add operator and colour * texture *
+## energy with Multiply; an SD material emits texture * colour * energy. Add without a texture
+## becomes a white texture times the colour, Add with a texture (and a black colour, see
+## skip_reason()) the texture times white.
+static func _convert_emission(m: BaseMaterial3D, textures: Dictionary, params: Dictionary) -> void:
+	var energy := m.emission_energy_multiplier
+	# With physical light units BaseMaterial3D multiplies in the intensity (nits) as well.
+	if ProjectSettings.get_setting("rendering/lights_and_shadows/use_physical_light_units", false):
+		energy *= m.emission_intensity
+	params["emission_energy"] = energy
+	if m.emission_operator == BaseMaterial3D.EMISSION_OP_MULTIPLY:
+		textures["emission"] = m.emission_texture
+		params["emission_color"] = m.emission
+	elif m.emission_texture != null:
+		textures["emission"] = m.emission_texture
+		params["emission_color"] = Color.WHITE
+	elif not _is_black(m.emission):
+		textures["emission"] = _white_texture()
+		params["emission_color"] = m.emission
+
+
+static func _is_black(c: Color) -> bool:
+	return c.r <= 0.0 and c.g <= 0.0 and c.b <= 0.0
+
+
+## A small white texture, with mipmaps so Validate Setup does not report it (a 1 x 1 one has a
+## single level and reads back without).
+static func _white_texture() -> ImageTexture:
+	var img := Image.create(4, 4, true, Image.FORMAT_RGB8)
+	img.fill(Color.WHITE)
+	return ImageTexture.create_from_image(img)

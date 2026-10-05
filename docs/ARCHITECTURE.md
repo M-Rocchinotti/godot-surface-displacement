@@ -75,9 +75,10 @@ global shader uniforms, so they change without recompiling anything.
 4. **Distance fade**: `amp *= 1 - smoothstep(fade_start, fade_end, distance)`, and the step count
    with it. Beyond the fade end the shader does no march at all: plain normal mapping.
 
-Final texture samples use `textureGrad` with the rasterized uv's derivatives (the hit uv jumps at
-stone edges). The flat UV and world variants use `texture()`; the flat UV variant then matches ORMMaterial3D
-exactly (render test).
+Final texture samples (albedo, ORM, normal map, emission) are all taken at the hit uv, with
+`textureGrad` and the rasterized uv's derivatives (the hit uv jumps at stone edges); triplanar
+mapping weights each marched plane's samples. The flat UV and world variants use `texture()`; the
+flat UV variant then matches ORMMaterial3D exactly (render test).
 
 ### 3.2 Lighting
 
@@ -99,6 +100,14 @@ exactly (render test).
 - The self-shadow itself marches from the hit towards directional lights over the relief:
   hard (any relief above the ray) or contact-hardening (Tatarchuk 2006: the largest
   `(relief - ray) * k / distance`), with a 1 % bias, fading out towards `sd_shadow.y` metres.
+
+- **Emission** is `emission_texture x emission_color x emission_energy`, the product
+  BaseMaterial3D's Multiply operator gives, so a black-by-default texture means no emission and a
+  field layer packs colour x energy into one vec4. Read at the hit like the albedo, it is where the
+  relief is: lava in the gaps between stones, not smeared over their tops (render test against the
+  CPU ray tracer). The debug views write `EMISSION` too and replace it (view 5 zeroes it).
+  The converter maps BaseMaterial3D's Add operator with a texture and a black colour, and Add with a
+  colour alone (a white texture), onto the product; Add with both is reported, not converted.
 
 ### 3.3 Opt-in depth write
 
@@ -153,7 +162,10 @@ snapping moves ring boundaries, the geometry does not pop either (render test: u
   bilinear between texel centres; beyond the bake nothing is displaceable. `SDGroundBake.sample()`
   is the same function on the CPU, and a render test checks the field's vertices against it.
 - The vertices pass the normalised layer weights to the fragments (varyings), so the fragments
-  do not decode the bake again.
+  do not decode the bake again. The fragments blend the layers' albedo, ORM, normal map and
+  emission at the hit. Emission is a sampler array plus colour x energy per layer (`layer_f`);
+  Godot takes no default hints on sampler arrays (a missing texture reads white), so a layer
+  without an emission texture gets `layer_f = 0` and its texture is not sampled.
 - The field is drawn *on top of* the original ground: relief "up only", the geometry raised by
   `lift` (2 mm).
   Where no layer is displaceable, vertices dive `push_down` under the ground and the ground mesh

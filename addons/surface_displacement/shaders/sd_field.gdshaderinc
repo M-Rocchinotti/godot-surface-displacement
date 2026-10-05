@@ -46,11 +46,13 @@ uniform sampler2D layer_height[SD_FIELD_LAYERS] : filter_linear_mipmap, repeat_e
 uniform sampler2D layer_albedo[SD_FIELD_LAYERS] : source_color, filter_linear_mipmap_anisotropic, repeat_enable;
 uniform sampler2D layer_normal[SD_FIELD_LAYERS] : filter_linear_mipmap_anisotropic, repeat_enable;
 uniform sampler2D layer_orm[SD_FIELD_LAYERS] : filter_linear_mipmap_anisotropic, repeat_enable;
+uniform sampler2D layer_emission[SD_FIELD_LAYERS] : source_color, filter_linear_mipmap_anisotropic, repeat_enable;
 uniform vec4 layer_a[SD_FIELD_LAYERS]; // height_m, remap low, remap high, normal strength
 uniform vec4 layer_b[SD_FIELD_LAYERS]; // 1 / size x, 1 / size z, offset x, offset z
 uniform vec4 layer_c[SD_FIELD_LAYERS]; // cos(rotation), sin(rotation), ao strength, roughness scale
 uniform vec4 layer_d[SD_FIELD_LAYERS]; // albedo tint rgb, metallic scale
 uniform vec4 layer_e[SD_FIELD_LAYERS]; // specular, steps scale, self-shadow strength, -log2(texel size in m)
+uniform vec4 layer_f[SD_FIELD_LAYERS]; // emission colour (linear) * emission energy (0 without an emission texture), unused
 
 varying vec3 f_base_normal;
 varying float f_ground;
@@ -239,6 +241,7 @@ void fragment() {
 #endif
 	vec3 albedo = vec3(0.0);
 	vec3 orm = vec3(0.0);
+	vec3 emission = vec3(0.0);
 	vec3 nsum = vec3(0.0);
 	float spec = 0.0;
 	for (int i = 0; i < SD_FIELD_LAYERS; i++) {
@@ -251,6 +254,9 @@ void fragment() {
 		albedo += w[i] * textureGrad(layer_albedo[i], uv, ddx, ddy).rgb * layer_d[i].rgb;
 		vec3 o = textureGrad(layer_orm[i], uv, ddx, ddy).rgb;
 		orm += w[i] * vec3(mix(1.0, o.r, layer_c[i].z), o.g * layer_c[i].w, o.b * layer_d[i].a);
+		if (layer_f[i].rgb != vec3(0.0)) {
+			emission += w[i] * textureGrad(layer_emission[i], uv, ddx, ddy).rgb * layer_f[i].rgb;
+		}
 		vec3 right = vec3(layer_c[i].x, 0.0, -layer_c[i].y);
 		vec3 image_up = -vec3(layer_c[i].y, 0.0, layer_c[i].x);
 		nsum += w[i] * sd_apply_normal_map(textureGrad(layer_normal[i], uv, ddx, ddy).rgb, right, image_up, n, layer_a[i].w);
@@ -261,6 +267,7 @@ void fragment() {
 	ROUGHNESS = clamp(orm.g, 0.0, 1.0);
 	METALLIC = clamp(orm.b, 0.0, 1.0);
 	SPECULAR = spec;
+	EMISSION = emission;
 	vec3 normal_world = normalize(nsum + n * 1e-6);
 	NORMAL = normalize(world_to_view * normal_world);
 	vec3 offset_world = hit - wpos;
@@ -287,6 +294,7 @@ void fragment() {
 	}
 #endif
 
+	// Debug views replace the layers' emission (see sd_surface.gdshaderinc).
 	int debug_view = int(sd_debug.x + 0.5);
 	if (debug_view == 5) {
 		ALBEDO = vec3(1.0);
@@ -294,6 +302,7 @@ void fragment() {
 		METALLIC = 0.0;
 		ROUGHNESS = 1.0;
 		AO = 1.0;
+		EMISSION = vec3(0.0);
 	} else if (debug_view > 0) {
 		vec3 debug_color = vec3(0.0);
 		if (debug_view == 1) {

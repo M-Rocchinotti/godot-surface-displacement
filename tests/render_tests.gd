@@ -27,6 +27,8 @@ func _run() -> void:
 	await _test("emission_passthrough", test_emission_passthrough)
 	await _test("globals_and_parameter_defaults", test_globals_and_defaults)
 	await _test("pom_matches_ray_traced_height_field", test_pom_vs_reference)
+	await _test("emission_at_the_relief_hit", test_emission_at_hit)
+	await _test("converted_emission_matches_base_material", test_converted_emission)
 	await _test("inverted_height_remap", test_height_remap)
 	await _test("world_planar_on_walls_stays_finite", test_world_planar_walls)
 	await _test("pom_relief_does_not_swim", test_pom_no_swimming)
@@ -124,13 +126,7 @@ func _surfaces(tile: float) -> Array:
 		var q := p - Vector3(off.x, 0, off.y)
 		return Vector2(cos(rot) * q.x - sin(rot) * q.z, sin(rot) * q.x + cos(rot) * q.z) / tile
 	var tri := func(axis: int, sg: float) -> Callable:
-		return func(p: Vector3) -> Vector2:
-			var q := p - Vector3(off.x, 0, off.y)
-			if axis == 0:
-				return Vector2(-sg * q.z, -q.y) / tile
-			if axis == 1:
-				return Vector2(q.x, sg * q.z) / tile
-			return Vector2(sg * q.x, -q.y) / tile
+		return _triplanar_uv(axis, sg, off, tile)
 	var s := 2.0
 	var floor_pts := [Vector3(-s, 0, s), Vector3(s, 0, s), Vector3(s, 0, -s), Vector3(-s, 0, -s)]
 	var uv_floor := func(p: Vector3) -> Vector2:
@@ -153,23 +149,43 @@ func _surfaces(tile: float) -> Array:
 	]
 
 
+## uv of triplanar plane [param axis] (0 = X, 1 = Y, 2 = Z) facing along [param sg], with planar
+## offset [param off] and one texture repeat per [param tile] metres (sd_core.gdshaderinc's
+## conventions).
+static func _triplanar_uv(axis: int, sg: float, off: Vector2, tile: float) -> Callable:
+	return func(p: Vector3) -> Vector2:
+		var q := p - Vector3(off.x, 0, off.y)
+		if axis == 0:
+			return Vector2(-sg * q.z, -q.y) / tile
+		if axis == 1:
+			return Vector2(q.x, sg * q.z) / tile
+		return Vector2(sg * q.x, -q.y) / tile
+
+
+## A new debug scene with [param surface]'s quad drawn with [param material] and a camera looking
+## at its centre from [param cam_dir] (unit vector) at [param distance]; returns the camera.
+func _view_surface(surface: Array, material: Material, cam_dir: Vector3, distance := 1.3) -> Camera3D:
+	h.new_debug_scene()
+	var pts: Array = surface[2]
+	h.add_quad(pts[0], pts[1], pts[2], pts[3], surface[3], material)
+	var axis: Vector3 = surface[4]
+	var up := Vector3.UP if absf(axis.dot(Vector3.UP)) < 0.9 else Vector3.FORWARD
+	return h.add_camera(cam_dir * distance, Vector3.ZERO, 60.0, up)
+
+
 ## Renders [param surface] with the hit-offset debug view from [param cam_dir] (unit vector from
 ## the surface centre to the camera) and returns the per-pixel error of the hit position against
 ## the CPU reference (metres), with the number of pixels compared.
 func measure_pom_error(surface: Array, field: Dictionary, tex: Texture2D, amp: float, tile: float,
 		cam_dir: Vector3, distance := 1.3, stride := 24) -> Dictionary:
-	h.new_debug_scene()
 	var params: Dictionary = {"height_m": amp, "texture_size_m": Vector2(tile, tile)}
 	params.merge(surface[6], true)
 	var mat := SDMaterials.create(surface[1], {"height": tex}, params, SDMaterials.Quality.POM)
-	var pts: Array = surface[2]
-	h.add_quad(pts[0], pts[1], pts[2], pts[3], surface[3], mat)
-	var axis: Vector3 = surface[4]
-	var up := Vector3.UP if absf(axis.dot(Vector3.UP)) < 0.9 else Vector3.FORWARD
-	var cam := h.add_camera(cam_dir * distance, Vector3.ZERO, 60.0, up)
+	var cam := _view_surface(surface, mat, cam_dir, distance)
 	debug_view(Harness.DEBUG_HIT_OFFSET)
 	await h.frames(3)
 	var img := await h.capture()
+	var axis: Vector3 = surface[4]
 	var ref_surface := {"point": Vector3.ZERO, "normal": axis, "axis": axis, "uv": surface[5], "amp": amp,
 			"center": float(params["height_center"]), "field": field}
 	var errors := []
@@ -216,6 +232,182 @@ func test_pom_vs_reference() -> void:
 			# views reach 0.8-1.0 mm (mutation "no binary refinement").
 			check(p50 < 0.2 and p90 < 0.4, "%s, %s: hit within 0.2 mm (median) / 0.4 mm (90 %%) of the traced height field" % [surface[0], view_name])
 	print("  worst 90th percentile: %.3f mm (relief %.0f mm)" % [worst_p90, amp * 1000.0])
+
+
+# --- 2b. Emission ------------------------------------------------------------------------------
+
+## The unlit debug scene shows an emissive SD material's emission alone. The emission texture
+## (smooth stripes, Harness.make_emission_pattern) must be read where the CPU ray tracer hits the
+## relief, not where the ray crosses the flat surface; only the pixels where the two readings differ
+## count. The POM test's surfaces from its 45-degree view, plus a triplanar roof at 45 degrees whose
+## two planes are each marched and read at their own hit, weighted 50 / 50. Then the debug views
+## must replace the emission, not add to it.
+func test_emission_at_hit() -> void:
+	var tile := 1.0
+	var amp := 0.05
+	var field := Harness.make_stone_field(512, 70, 7)
+	var tex := ImageTexture.create_from_image(field["image"])
+	var pattern := Harness.make_emission_pattern(256)
+	var glow := ImageTexture.create_from_image(pattern["image"])
+	# emission_color is a source_color: the shader multiplies by its linear value.
+	var color := Color(1.0, 0.55, 0.8)
+	var energy := 1.5
+	var tint := color.srgb_to_linear() * energy
+	# [surface, planes: [relief axis, uv Callable, weight]]
+	var cases := []
+	for surface: Array in _surfaces(tile):
+		cases.append([surface, [[surface[4], surface[5], 1.0]]])
+	# The roof x + y = 0 faces (1, 1, 0): the triplanar weights |n|^4, normalised, are 0.5 for X and Y.
+	var off := Vector2(0.13, -0.2)
+	var t1 := Vector3(1, -1, 0).normalized()
+	var t2 := Vector3(0, 0, 1)
+	var roof := ["triplanar roof at 45 degrees", SDMaterials.Mapping.TRIPLANAR, [(t2 - t1) * 2.0, (t1 + t2) * 2.0, (t1 - t2) * 2.0, (-t1 - t2) * 2.0],
+			[Vector2(0, 1), Vector2(1, 1), Vector2(1, 0), Vector2(0, 0)], Vector3(1, 1, 0).normalized(), null,
+			{"height_center": 1.0, "planar_offset_m": off}]
+	cases.append([roof, [[Vector3.RIGHT, _triplanar_uv(0, 1.0, off, tile), 0.5], [Vector3.UP, _triplanar_uv(1, 1.0, off, tile), 0.5]]])
+	var view := Vector3(0.3, 0.75, 0.75).normalized()
+	for c: Array in cases:
+		var surface: Array = c[0]
+		var planes: Array = c[1]
+		var params: Dictionary = {"height_m": amp, "texture_size_m": Vector2(tile, tile), "emission_color": color, "emission_energy": energy}
+		params.merge(surface[6], true)
+		var mat := SDMaterials.create(surface[1], {"height": tex, "emission": glow}, params, SDMaterials.Quality.POM)
+		var normal: Vector3 = surface[4]
+		var basis := Basis(Quaternion(Vector3.UP, normal)) if normal != Vector3.UP else Basis.IDENTITY
+		var cam := _view_surface(surface, mat, (basis * view).normalized())
+		await h.frames(3)
+		var img := await h.capture()
+		var errors := []
+		var differ := 0
+		var agree := 0
+		for py in range(12, SIZE.y, 24):
+			for px in range(12, SIZE.x, 24):
+				var o := cam.project_ray_origin(Vector2(px, py) + Vector2(0.5, 0.5))
+				var d := cam.project_ray_normal(Vector2(px, py) + Vector2(0.5, 0.5))
+				# The emission read at each plane's traced hit, and at the flat surface.
+				var at_hit := Color(0, 0, 0)
+				var at_raster := Color(0, 0, 0)
+				var raster := Vector3.INF
+				for plane: Array in planes:
+					var ref_surface := {"point": Vector3.ZERO, "normal": normal, "axis": plane[0], "uv": plane[1], "amp": amp,
+							"center": float(params["height_center"]), "field": field}
+					var ref := Harness.trace_height_field(o, d, ref_surface)
+					if ref.is_empty():
+						raster = Vector3.INF
+						break
+					raster = ref["raster"]
+					var uv_of: Callable = plane[1]
+					at_hit += Harness.sample_pattern(pattern, uv_of.call(Harness.foot_point(ref_surface, ref["hit"]))) * float(plane[2])
+					at_raster += Harness.sample_pattern(pattern, uv_of.call(raster)) * float(plane[2])
+				if raster.length() > 1.6:
+					continue
+				var want := at_hit * tint
+				var err := Harness.max_channel_difference(img.get_pixel(px, py), want)
+				errors.append(err)
+				if Harness.max_channel_difference(at_raster * tint, want) > 0.05:
+					differ += 1
+					agree += 1 if err < 0.02 else 0
+		var share := float(agree) / maxf(differ, 1.0)
+		print("  %-28s %4d px  error median %.4f  p90 %.4f; %d px where hit and flat surface differ, %.1f %% show the hit" % [
+				surface[0], errors.size(), percentile(errors, 0.5), percentile(errors, 0.9), differ, share * 100.0])
+		# Measured: 99.4-100 % of those pixels and a 90th percentile error of at most 0.003 (half-float
+		# output, hits within a fraction of a millimetre of the traced ones). Read at the flat surface
+		# instead, none of them is (mutation "emission at the rasterized uv").
+		check(differ >= 150 and share > 0.95 and percentile(errors, 0.9) < 0.01,
+				"%s: the emission is read at the relief hit (95 %% of the pixels where that differs from the flat surface)" % surface[0])
+
+	# Debug views 1-5 of an emissive material must equal those of the same material without emission.
+	var floor_surface: Array = _surfaces(tile)[0]
+	var floor_params: Dictionary = {"height_m": amp, "texture_size_m": Vector2(tile, tile), "emission_color": color, "emission_energy": energy}
+	floor_params.merge(floor_surface[6], true)
+	var floor_mat := SDMaterials.create(floor_surface[1], {"height": tex, "emission": glow}, floor_params, SDMaterials.Quality.POM_SELF_SHADOW)
+	_view_surface(floor_surface, floor_mat, view)
+	h.add_sun(30.0, 40.0, false)
+	SDGlobals.set_value(SDGlobals.SHADOW, Vector4(8, 20, 0, 1))
+	await h.frames(3)
+	var lit := await h.capture()
+	var glowing := 0
+	for py in range(0, SIZE.y, 4):
+		for px in range(0, SIZE.x, 4):
+			glowing += 1 if lit.get_pixel(px, py).r > 0.05 else 0
+	var different := 0
+	for v in range(1, 6):
+		debug_view(v)
+		floor_mat.set_shader_parameter("emission_energy", energy)
+		await h.frames(2)
+		var with_emission := await h.capture()
+		floor_mat.set_shader_parameter("emission_energy", 0.0)
+		await h.frames(2)
+		var without := await h.capture()
+		for py in range(0, SIZE.y, 4):
+			for px in range(0, SIZE.x, 4):
+				different += 1 if with_emission.get_pixel(px, py) != without.get_pixel(px, py) else 0
+	debug_view(Harness.DEBUG_OFF)
+	print("  self-shadowing variant: %d glowing pixels with the debug views off; %d pixels differ between emissive and dark in views 1-5" % [glowing, different])
+	check(glowing > (SIZE.x / 4) * (SIZE.y / 4) / 2 and different == 0, "the debug views replace the emission (an emissive and a dark material draw the same)")
+
+
+## The converter's emission against BaseMaterial3D's own: a StandardMaterial3D with a height map
+## and its converted SD material (flat variant) must emit the same in the unlit scene, with an
+## 8-bit sRGB emission texture and colours, for the Add operator with a texture (black colour),
+## Add with a colour only and Multiply.
+func test_converted_emission() -> void:
+	var img := Image.create(64, 64, false, Image.FORMAT_RGBA8)
+	for y in 64:
+		for x in 64:
+			img.set_pixel(x, y, Color(x / 63.0, y / 63.0, 0.5 + 0.5 * sin(x * 0.3 + y * 0.2)))
+	img.generate_mipmaps()
+	var glow := ImageTexture.create_from_image(img)
+	var height := ImageTexture.create_from_image(Harness.make_wave_field(64)["image"])
+	var cases := [["Add, texture", BaseMaterial3D.EMISSION_OP_ADD, Color.BLACK, glow, 2.0],
+			["Add, colour only", BaseMaterial3D.EMISSION_OP_ADD, Color(1.0, 0.45, 0.1), null, 3.0],
+			["Multiply", BaseMaterial3D.EMISSION_OP_MULTIPLY, Color(0.6, 0.8, 1.0), glow, 1.7]]
+	for c: Array in cases:
+		var std := StandardMaterial3D.new()
+		std.heightmap_enabled = true
+		std.heightmap_texture = height
+		# No parallax in either material: this compares the emission alone.
+		std.heightmap_scale = 0.0
+		std.emission_enabled = true
+		std.emission_operator = c[1]
+		std.emission = c[2]
+		std.emission_texture = c[3]
+		std.emission_energy_multiplier = c[4]
+		# The addon's samplers are anisotropic (BaseMaterial3D defaults to trilinear).
+		std.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS_ANISOTROPIC
+		var sd := SDMaterialConverter.convert_material(std)
+		SDMaterials.set_quality(sd, SDMaterials.Quality.FLAT)
+		var images := []
+		for m: Material in [std, sd]:
+			h.new_debug_scene()
+			h.add_quad(Vector3(-1, -1, 0), Vector3(1, -1, 0), Vector3(1, 1, 0), Vector3(-1, 1, 0),
+					[Vector2(0, 2), Vector2(2, 2), Vector2(2, 0), Vector2(0, 0)], m)
+			h.add_camera(Vector3(0.5, 0.3, 1.4), Vector3.ZERO)
+			await h.frames(3)
+			images.append(await h.capture())
+		var diff := _relative_difference(images[0], images[1])
+		# Validate Setup on the scene with the converted material (its textures read back from the GPU).
+		var complaints := SDValidator.validate(h.scene).filter(func(i: Dictionary) -> bool: return String(i["message"]).contains("emission"))
+		print("  %-16s converted vs StandardMaterial3D: p99 %.3f %%, max %.3f %% (%d px); Validate Setup: %s" % [
+				c[0], diff["p99"] * 100.0, diff["max"] * 100.0, diff["count"], complaints])
+		check(diff["count"] > 50000 and diff["max"] < 0.002 and complaints.is_empty(),
+				"%s: the converted material emits like the StandardMaterial3D (and Validate Setup has nothing to say about it)" % c[0])
+	# With physical light units BaseMaterial3D hands its shader the energy multiplier times the
+	# intensity (nits); the converted material must get the same energy.
+	var physical := "rendering/lights_and_shadows/use_physical_light_units"
+	ProjectSettings.set_setting(physical, true)
+	var lamp := StandardMaterial3D.new()
+	lamp.heightmap_enabled = true
+	lamp.heightmap_texture = height
+	lamp.emission_enabled = true
+	lamp.emission_texture = glow
+	lamp.emission_intensity = 500.0
+	lamp.emission_energy_multiplier = 2.0
+	var engine_energy: float = RenderingServer.material_get_param(lamp.get_rid(), "emission_energy")
+	var converted_energy: float = SDMaterialConverter.convert_material(lamp).get_shader_parameter("emission_energy")
+	ProjectSettings.set_setting(physical, false)
+	print("  physical light units: StandardMaterial3D's shader gets energy %.1f, the converted material %.1f" % [engine_energy, converted_energy])
+	check(is_equal_approx(engine_energy, 1000.0) and is_equal_approx(converted_energy, engine_energy), "with physical light units the converted energy includes the intensity, as BaseMaterial3D's does")
 
 
 # --- 3. Globals and parameter defaults --------------------------------------------------------

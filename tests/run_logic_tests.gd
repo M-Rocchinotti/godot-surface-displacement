@@ -22,6 +22,7 @@ func _run() -> void:
 	test_field_mesh_seams()
 	test_ground_bake_sampling()
 	test_demo_textures()
+	test_converter()
 	await test_node_lifetime()
 	print("\nlogic tests: %d passed, %d failed" % [_passed, _failed])
 	quit(1 if _failed > 0 else 0)
@@ -336,6 +337,81 @@ func test_demo_textures() -> void:
 		var height := (load("res://demo/textures/%s/%s_height.exr" % [dir, dir]) as Texture2D).get_image()
 		ok = ok and height.get_format() == Image.FORMAT_RH
 	check(ok, "all %d demo textures are imported with mipmaps; heights are 16-bit float, one channel" % count)
+
+
+# --- Material converter --------------------------------------------------------------------------
+
+## A StandardMaterial3D with a height map and emission, ready for the converter.
+static func _emissive(height: Texture2D, operator: BaseMaterial3D.EmissionOperator, color: Color, texture: Texture2D,
+		energy: float) -> StandardMaterial3D:
+	var m := StandardMaterial3D.new()
+	m.heightmap_enabled = true
+	m.heightmap_texture = height
+	m.emission_enabled = true
+	m.emission_operator = operator
+	m.emission = color
+	m.emission_texture = texture
+	m.emission_energy_multiplier = energy
+	return m
+
+
+func test_converter() -> void:
+	print("\n== material converter")
+	var height := ImageTexture.create_from_image(Image.create(4, 4, true, Image.FORMAT_RH))
+	var glow := ImageTexture.create_from_image(Image.create(4, 4, true, Image.FORMAT_RGBA8))
+	var ember_color := Color(1.0, 0.3, 0.05)
+	var tint := Color(1.0, 0.4, 0.1)
+	# Lava: BaseMaterial3D's defaults when an emission texture is assigned (Add, black colour).
+	var materials := {
+		"lava": _emissive(height, BaseMaterial3D.EMISSION_OP_ADD, Color.BLACK, glow, 3.5),
+		"tinted": _emissive(height, BaseMaterial3D.EMISSION_OP_MULTIPLY, tint, glow, 2.0),
+		"ember": _emissive(height, BaseMaterial3D.EMISSION_OP_ADD, ember_color, null, 1.5),
+		"added": _emissive(height, BaseMaterial3D.EMISSION_OP_ADD, Color(0.2, 0.1, 0.0), glow, 1.0),
+		"uv2": _emissive(height, BaseMaterial3D.EMISSION_OP_ADD, Color.BLACK, glow, 1.0),
+		"glass": _emissive(height, BaseMaterial3D.EMISSION_OP_ADD, Color.BLACK, glow, 1.0),
+		"unshaded": _emissive(height, BaseMaterial3D.EMISSION_OP_ADD, Color.BLACK, glow, 1.0),
+		"plain": StandardMaterial3D.new(),
+	}
+	(materials["uv2"] as StandardMaterial3D).emission_on_uv2 = true
+	(materials["glass"] as StandardMaterial3D).transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	(materials["unshaded"] as StandardMaterial3D).shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	(materials["plain"] as StandardMaterial3D).heightmap_enabled = true
+	(materials["plain"] as StandardMaterial3D).heightmap_texture = height
+	var root := Node3D.new()
+	for material_name: String in materials:
+		var mi := MeshInstance3D.new()
+		mi.name = material_name
+		mi.mesh = BoxMesh.new()
+		mi.material_override = materials[material_name]
+		root.add_child(mi)
+	var roots: Array[Node] = [root]
+	var planned := SDMaterialConverter.plan(roots)
+	var to := {}
+	for a: Dictionary in planned["assignments"]:
+		to[String((a["node"] as Node).name)] = a["to"]
+	var skipped := {}
+	for s: Dictionary in planned["skipped"]:
+		skipped[String((s["node"] as Node).name)] = s["reason"]
+	print("  converted %s; skipped %s" % [to.keys(), skipped])
+	var param := func(material_name: String, key: String) -> Variant:
+		return (to[material_name] as ShaderMaterial).get_shader_parameter(key) if to.has(material_name) else null
+	check(to.has("lava") and param.call("lava", "emission_texture") == glow and param.call("lava", "emission_color") == Color.WHITE
+			and is_equal_approx(float(param.call("lava", "emission_energy")), 3.5),
+			"an emission texture with BaseMaterial3D's Add operator and black colour converts to the texture times white, with its energy")
+	check(to.has("tinted") and param.call("tinted", "emission_texture") == glow and param.call("tinted", "emission_color") == tint
+			and is_equal_approx(float(param.call("tinted", "emission_energy")), 2.0),
+			"Multiply converts to the same texture, colour and energy")
+	var white := param.call("ember", "emission_texture") as Texture2D
+	check(to.has("ember") and white != null and white.get_image().get_pixel(0, 0) == Color.WHITE and white.get_image().has_mipmaps()
+			and param.call("ember", "emission_color") == ember_color and is_equal_approx(float(param.call("ember", "emission_energy")), 1.5),
+			"an emission colour without a texture converts to a white texture (mipmapped) times the colour")
+	check(to.has("plain") and param.call("plain", "emission_texture") == null and param.call("plain", "emission_color") == null,
+			"a material without emission converts without any (the SD default emits nothing)")
+	check(String(skipped.get("added", "")).contains("added to an emission texture") and String(skipped.get("uv2", "")).contains("UV2"),
+			"the emission setups an SD material cannot reproduce are skipped: a colour added to a texture, emission on UV2")
+	check(skipped.get("glass", "") == "transparent" and skipped.get("unshaded", "") == "not per-pixel shaded",
+			"transparent and unshaded materials are still skipped, emissive or not")
+	root.free()
 
 
 # --- Node lifetime -------------------------------------------------------------------------------

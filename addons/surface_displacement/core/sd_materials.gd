@@ -24,6 +24,8 @@ const PARAMETER_DEFAULTS := {
 	"roughness_scale": 1.0,
 	"metallic_scale": 0.0,
 	"specular": 0.5,
+	"emission_color": Color(1, 1, 1, 1),
+	"emission_energy": 1.0,
 	"height_m": 0.03,
 	"height_center": 1.0,
 	"height_remap": Vector2(0.0, 1.0),
@@ -105,8 +107,9 @@ static func set_depth_write(material: ShaderMaterial, enabled: bool) -> void:
 	material.shader = get_shader(info["mapping"], info["quality"], enabled)
 
 
-## A new SD material. [param textures]: any of "albedo", "normal", "orm", "height" -> Texture2D.
-## [param params]: shader parameters by name (height_m, height_center, texture_size_m, ...).
+## A new SD material. [param textures]: any of "albedo", "normal", "orm", "emission", "height"
+## -> Texture2D. [param params]: shader parameters by name (height_m, height_center,
+## texture_size_m, ...).
 static func create(mapping: Mapping, textures: Dictionary, params := {}, quality := Quality.POM_SELF_SHADOW,
 		depth_write := false) -> ShaderMaterial:
 	var material := ShaderMaterial.new()

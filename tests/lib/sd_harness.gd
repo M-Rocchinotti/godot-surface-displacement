@@ -187,6 +187,38 @@ static func field_from_data(data: PackedFloat32Array, size: int) -> Dictionary:
 	return {"image": img, "data": stored, "size": size}
 
 
+## A tileable emission texture of smooth stripes: red, green and blue are sines of u, v and u + v
+## with 4, 4 and 3 periods per tile. Smooth enough that mip and anisotropic filtering leave it as it
+## is, steep enough that a sample a few millimetres off shows. Half float, so it is linear (no sRGB
+## view) and the CPU reads the values the GPU sees. Returns {"image": Image (RGBH, mipmapped),
+## "channels": [red, green, blue] as fields for sample_field}.
+static func make_emission_pattern(size: int) -> Dictionary:
+	var img := Image.create(size, size, false, Image.FORMAT_RGBF)
+	for y in size:
+		for x in size:
+			var u := (x + 0.5) / size
+			var v := (y + 0.5) / size
+			img.set_pixel(x, y, Color(0.5 + 0.45 * sin(TAU * 4.0 * u + 1.3), 0.5 + 0.45 * sin(TAU * 4.0 * v + 0.4),
+					0.5 + 0.45 * sin(TAU * 3.0 * (u + v))))
+	img.convert(Image.FORMAT_RGBH)
+	var channels := []
+	for c in 3:
+		var stored := PackedFloat32Array()
+		stored.resize(size * size)
+		for y in size:
+			for x in size:
+				stored[y * size + x] = img.get_pixel(x, y)[c]
+		channels.append({"data": stored, "size": size})
+	img.generate_mipmaps()
+	return {"image": img, "channels": channels}
+
+
+## Bilinear sample of an emission pattern (make_emission_pattern) with wrap-around.
+static func sample_pattern(pattern: Dictionary, uv: Vector2) -> Color:
+	var channels: Array = pattern["channels"]
+	return Color(sample_field(channels[0], uv), sample_field(channels[1], uv), sample_field(channels[2], uv))
+
+
 ## Bilinear sample of field mip 0 with wrap-around, like a repeat_enable linear sampler.
 static func sample_field(field: Dictionary, uv: Vector2) -> float:
 	var size: int = field["size"]
@@ -267,6 +299,14 @@ static func _ray_minus_relief(origin: Vector3, dir: Vector3, t: float, surface: 
 	return z - amp * (sample_field(surface["field"], uv) - float(surface["center"]))
 
 
+## The point on the base plane of [param surface] (see trace_height_field) under [param p] along
+## the relief axis: the foot point whose uv a relief point (a hit) takes.
+static func foot_point(surface: Dictionary, p: Vector3) -> Vector3:
+	var n: Vector3 = surface["normal"]
+	var a: Vector3 = surface["axis"]
+	return p - a * (n.dot(p - (surface["point"] as Vector3)) / n.dot(a))
+
+
 ## Relief height (m) of [param surface] (see trace_height_field) at foot point [param p].
 static func relief_at(surface: Dictionary, p: Vector3) -> float:
 	var uv: Vector2 = (surface["uv"] as Callable).call(p)
@@ -317,3 +357,8 @@ static func decode_offset(img: Image, p: Vector2i, scale: float) -> Vector3:
 
 static func luminance(c: Color) -> float:
 	return 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b
+
+
+## Largest difference of the red, green and blue channels.
+static func max_channel_difference(a: Color, b: Color) -> float:
+	return maxf(maxf(absf(a.r - b.r), absf(a.g - b.g)), absf(a.b - b.b))

@@ -28,6 +28,7 @@ func _run() -> void:
 	await _test("vertex_heights_match_the_height_map", test_vertex_heights)
 	await _test("baked_ground_matches_the_cpu_reference", test_baked_ground)
 	await _test("field_pom_matches_ray_traced_height_field", test_field_pom)
+	await _test("field_emission_at_the_relief_hit", test_field_emission)
 	await _test("no_cracks_between_rings", test_no_cracks)
 	await _test("geometry_does_not_swim", test_no_swimming)
 	await _test("edge_blends_into_pom", test_edge_seam)
@@ -349,6 +350,121 @@ func test_field_pom() -> void:
 	check(shadowed > total / 10 and share > 0.98, "the field's hard self-shadow agrees with a traced height-field shadow on more than 98 % of pixels")
 	SDGlobals.set_value(SDGlobals.SHADOW, Vector4(8, 20, 0, 1))
 	SDGlobals.set_value(SDGlobals.DEBUG, Vector4(0, 0.1, 0, 0))
+
+
+# --- 1c. The field carries its layers' emission ---------------------------------------------------
+
+## Two layers with the same relief over a baked ground, layer 0 where x < 0 and layer 1 beyond.
+## Layer 0 has an emission colour and energy but no emission texture: it must stay dark. Layer 1
+## glows (Harness.make_emission_pattern): in the unlit debug scene each of its pixels must show the
+## emission read where the CPU ray tracer hits the relief; only the pixels where that differs from
+## the reading where the ray crosses the ground count. Then the field's debug views must replace
+## the emission, not add to it.
+func test_field_emission() -> void:
+	var tile := 1.0
+	var amp := 0.05
+	var field := Harness.make_stone_field(512, 70, 7)
+	var tex := ImageTexture.create_from_image(field["image"])
+	var pattern := Harness.make_emission_pattern(256)
+	var glow := ImageTexture.create_from_image(pattern["image"])
+	var color := Color(1.0, 0.5, 0.2)
+	var energy := 2.0
+	# emission_color is a source_color: the layer's shader and the field multiply by its linear value.
+	var tint := color.srgb_to_linear() * energy
+	SDGlobals.set_value(SDGlobals.POM_RANGE, Vector4(1000, 2000, -10, 99))
+	h.new_debug_scene()
+	var cam := h.add_camera(Vector3(0.3, 0.75, 0.75).normalized() * 1.3, Vector3.ZERO, 60.0)
+	var layers: Array[ShaderMaterial] = []
+	for textures: Dictionary in [{"height": tex}, {"height": tex, "emission": glow}]:
+		layers.append(SDMaterials.create(SDMaterials.Mapping.WORLD, textures, {"height_m": amp, "height_center": 0.0,
+				"texture_size_m": Vector2(tile, tile), "emission_color": color, "emission_energy": energy}, SDMaterials.Quality.POM))
+	var f := DisplacementField3D.new()
+	f.levels = LEVELS
+	f.resolution = N
+	f.base_spacing = S0
+	f.layers = layers
+	f.camera = cam
+	f.bake_on_ready = false
+	var texel := 0.05
+	var cells := Vector2i(120, 120)
+	var bake_origin := Vector2(-3.0, -3.0)
+	var heights := PackedFloat32Array()
+	heights.resize(cells.x * cells.y)
+	var layer_ids := PackedInt32Array()
+	for y in cells.y:
+		for x in cells.x:
+			layer_ids.append(0 if bake_origin.x + (x + 0.5) * texel < 0.0 else 1)
+	f.ground_bake = SDGroundBake.from_arrays(cells, heights, layer_ids, bake_origin, texel)
+	h.scene.add_child(f)
+	f.set_quality(SDMaterials.Quality.POM)
+	await h.frames(4)
+	var img := await h.capture()
+	var uv_of := func(p: Vector3) -> Vector2: return Vector2(p.x, p.z) / tile
+	var surface := {"point": Vector3.ZERO, "normal": Vector3.UP, "axis": Vector3.UP, "amp": amp, "center": 0.0, "field": field, "uv": uv_of}
+	var darkest := 0.0
+	var dark_count := 0
+	var errors := []
+	var differ := 0
+	var agree := 0
+	for py in range(8, SIZE.y, 16):
+		for px in range(8, SIZE.x, 16):
+			var o := cam.project_ray_origin(Vector2(px, py) + Vector2(0.5, 0.5))
+			var d := cam.project_ray_normal(Vector2(px, py) + Vector2(0.5, 0.5))
+			var ref := Harness.trace_height_field(o, d, surface)
+			if ref.is_empty():
+				continue
+			var raster: Vector3 = ref["raster"]
+			var hit: Vector3 = ref["hit"]
+			# The layers blend over a texel at x = 0, and the ray must stay on one side of it.
+			if absf(raster.x) > 1.6 or absf(raster.z) > 1.6 or absf(raster.x) < 0.15 or absf(hit.x) < 0.15 or signf(raster.x) != signf(hit.x):
+				continue
+			var got := img.get_pixel(px, py)
+			if hit.x < 0.0:
+				darkest = maxf(darkest, maxf(maxf(got.r, got.g), got.b))
+				dark_count += 1
+				continue
+			var want: Color = Harness.sample_pattern(pattern, uv_of.call(Harness.foot_point(surface, hit))) * tint
+			var err := Harness.max_channel_difference(got, want)
+			errors.append(err)
+			if Harness.max_channel_difference(Harness.sample_pattern(pattern, uv_of.call(raster)) * tint, want) > 0.05:
+				differ += 1
+				agree += 1 if err < 0.02 else 0
+	var share := float(agree) / maxf(differ, 1.0)
+	print("  layer 0 (no emission texture): %d px, brightest %.5f" % [dark_count, darkest])
+	print("  layer 1: %d px, error median %.4f, p90 %.4f; %d px where hit and ground differ, %.1f %% show the hit" % [
+			errors.size(), percentile(errors, 0.5), percentile(errors, 0.9), differ, share * 100.0])
+	check(dark_count > 300 and darkest == 0.0, "a layer without an emission texture stays dark")
+	check(differ >= 300 and share > 0.95 and percentile(errors, 0.9) < 0.01,
+			"the field shows its layer's emission read at the relief hit (95 % of the pixels where that differs from the ground)")
+
+	# Debug views 1-8 with layer 1 emissive and dark must be the same (self-shadowing variant, lit).
+	f.set_quality(SDMaterials.Quality.POM_SELF_SHADOW)
+	h.add_sun(30.0, 40.0, false)
+	SDGlobals.set_value(SDGlobals.SHADOW, Vector4(8, 20, 0, 1))
+	var different := 0
+	for v in range(1, 9):
+		SDGlobals.set_value(SDGlobals.DEBUG, Vector4(v, 0.1, 0.0, 0.0))
+		var images := []
+		for e: float in [energy, 0.0]:
+			layers[1].set_shader_parameter("emission_energy", e)
+			f.sync_layers()
+			await h.frames(2)
+			images.append(await h.capture())
+		for py in range(0, SIZE.y, 4):
+			for px in range(0, SIZE.x, 4):
+				different += 1 if (images[0] as Image).get_pixel(px, py) != (images[1] as Image).get_pixel(px, py) else 0
+	SDGlobals.set_value(SDGlobals.DEBUG, Vector4(0, 0.1, 0, 0))
+	layers[1].set_shader_parameter("emission_energy", energy)
+	f.sync_layers()
+	await h.frames(2)
+	var lit := await h.capture()
+	var glowing := 0
+	for py in range(0, SIZE.y, 4):
+		for px in range(SIZE.x / 2, SIZE.x, 4):
+			glowing += 1 if lit.get_pixel(px, py).r > 0.05 else 0
+	print("  self-shadowing variant: %d glowing pixels with the debug views off; %d pixels differ between emissive and dark in views 1-8" % [glowing, different])
+	check(glowing > 5000 and different == 0, "the field's debug views replace the emission")
+	SDGlobals.set_value(SDGlobals.SHADOW, Vector4(8, 20, 0, 1))
 
 
 # --- 2. No cracks -------------------------------------------------------------------------------

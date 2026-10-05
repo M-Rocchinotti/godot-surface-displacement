@@ -54,6 +54,7 @@ void fragment() {
 	vec3 offset_view = vec3(0.0);
 	vec3 albedo_sum = vec3(0.0);
 	vec3 orm_sum = vec3(0.0);
+	vec3 emission_sum = vec3(0.0);
 	vec3 normal_world = vec3(0.0, 1.0, 0.0);
 	// The dominant plane (for self-shadowing and debug output).
 	SDPlane main_plane;
@@ -89,6 +90,7 @@ void fragment() {
 	planes_marched = steps_used > 0.0 ? 1.0 : 0.0;
 	albedo_sum = SD_SAMPLE(albedo_texture, uv_hit, p.ddx, p.ddy).rgb;
 	orm_sum = SD_SAMPLE(orm_texture, uv_hit, p.ddx, p.ddy).rgb;
+	emission_sum = SD_SAMPLE(emission_texture, uv_hit, p.ddx, p.ddy).rgb;
 	NORMAL_MAP = SD_SAMPLE(normal_texture, uv_hit, p.ddx, p.ddy).rgb;
 	NORMAL_MAP_DEPTH = normal_strength;
 	normal_world = view_to_world * n;
@@ -117,6 +119,7 @@ void fragment() {
 	offset_view = world_to_view * offset_world;
 	albedo_sum = SD_SAMPLE(albedo_texture, uv_hit, p.ddx, p.ddy).rgb;
 	orm_sum = SD_SAMPLE(orm_texture, uv_hit, p.ddx, p.ddy).rgb;
+	emission_sum = SD_SAMPLE(emission_texture, uv_hit, p.ddx, p.ddy).rgb;
 	vec3 nm = SD_SAMPLE(normal_texture, uv_hit, p.ddx, p.ddy).rgb;
 	normal_world = sd_apply_normal_map(nm, normalize(p.gu), -normalize(p.gv), n, normal_strength);
 	NORMAL = normalize(world_to_view * normal_world);
@@ -154,6 +157,7 @@ void fragment() {
 		planes_marched += steps_used > before ? 1.0 : 0.0;
 		albedo_sum += wa * SD_SAMPLE(albedo_texture, uv_hit, p.ddx, p.ddy).rgb;
 		orm_sum += wa * SD_SAMPLE(orm_texture, uv_hit, p.ddx, p.ddy).rgb;
+		emission_sum += wa * SD_SAMPLE(emission_texture, uv_hit, p.ddx, p.ddy).rgb;
 		vec3 nm = SD_SAMPLE(normal_texture, uv_hit, p.ddx, p.ddy).rgb;
 		nsum += wa * sd_apply_normal_map(nm, normalize(p.gu), -normalize(p.gv), n, normal_strength);
 		if (wa > main_w) {
@@ -175,6 +179,7 @@ void fragment() {
 	ROUGHNESS = clamp(orm_sum.g * roughness_scale, 0.0, 1.0);
 	METALLIC = clamp(orm_sum.b * metallic_scale, 0.0, 1.0);
 	SPECULAR = specular;
+	EMISSION = emission_sum * emission_color.rgb * emission_energy;
 #ifdef SD_POM
 	LIGHT_VERTEX = VERTEX + offset_view;
 #endif
@@ -217,7 +222,7 @@ void fragment() {
 	// 2 = cost (steps / 64, planes marched / 3, LOD / 8), 3 = relief height in the slab,
 	// 4 = world normal, 5 = self-shadow factor of directional lights (written by light()).
 	// Output through EMISSION with black, non-reflective ALBEDO/SPECULAR; view 5 through a white,
-	// non-reflective ALBEDO that light() fills.
+	// non-reflective ALBEDO that light() fills. Every view replaces the material's own emission.
 	int debug_view = int(sd_debug.x + 0.5);
 	if (debug_view == 5) {
 		ALBEDO = vec3(1.0);
@@ -225,6 +230,7 @@ void fragment() {
 		METALLIC = 0.0;
 		ROUGHNESS = 1.0;
 		AO = 1.0;
+		EMISSION = vec3(0.0);
 	} else if (debug_view > 0) {
 		vec3 off_world = view_to_world * offset_view;
 		vec3 debug_color = vec3(0.0);
