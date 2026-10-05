@@ -118,7 +118,8 @@ func stroke(from: Vector3, to: Vector3, width: float, depth: float, combine := C
 		var ab := b - a
 		var t := clampf((q - a).dot(ab) / maxf(ab.length_squared(), 1e-12), 0.0, 1.0)
 		var r := q.distance_to(a + ab * t) / maxf(half, 1e-6)
-		return depth * (1.0 - smoothstep(0.55, 1.0, r)) if r < 1.0 else INF)
+		# Softer walls than a round mark: ruts are pushed aside along their whole length.
+		return depth * (1.0 - smoothstep(0.35, 1.0, r)) if r < 1.0 else INF)
 
 
 ## Presses the shape of [param image] (red channel: 1 = full [param depth], 0 = untouched) at
@@ -233,7 +234,9 @@ func _effective(i: int) -> float:
 ## Moves the window to centre on the followed node, clearing the cells that left it.
 func _update_window() -> void:
 	var target := get_node_or_null(follow) as Node3D if not follow.is_empty() else null
-	var center := (target if target != null else self).global_position if is_inside_tree() else position
+	if target == null or not target.is_inside_tree():
+		target = self # also while the followed node has yet to enter the tree (a later sibling)
+	var center := target.global_position if target.is_inside_tree() else target.position
 	var t := get_texel_size()
 	var cell := Vector2i(floori(center.x / t) - resolution / 2, floori(center.z / t) - resolution / 2)
 	if cell == _cell:

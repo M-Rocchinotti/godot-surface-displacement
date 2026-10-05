@@ -68,8 +68,14 @@ what the engine allows:
 - Editor tools: add nodes, convert StandardMaterial3D / ORMMaterial3D with a height map (undoable),
   make meshes GADSMeshInstance3D and bake them (undoable, with progress and cancel), bake the
   ground under a field, turn 8-bit height maps into 16-bit EXR, validate the setup.
-- A demo with four scenes (gravel path, cobblestone street, rocky ground, brick wall and
-  props), a flat / POM / POM + geometry comparison and a frame-time overlay.
+- Runtime: view-dependent re-tessellation of baked meshes around the camera, and deformation
+  (footprints, tracks, craters) of the near-camera geometry and the ground's parallax.
+- `GADSTerrain3D`: a heightmap terrain with chunk LODs chosen by screen-space error, up to three
+  height-blended GADS layers painted by a splat map or slope and height rules, HeightMapShape3D
+  collision and the near-camera displacement field on its own ground data.
+- A demo with five scenes (gravel path, cobblestone street, rocky ground, brick wall and props,
+  hills with a rover leaving tracks), a flat / POM / POM + geometry comparison and a frame-time
+  overlay.
 
 ## Requirements
 
@@ -277,6 +283,44 @@ A child of a GADSDisplacementField3D. `density`, `radius` (8 m), `per_cell` (24)
 `size_range` (1.2-3.5 cm), `valley_bias` (preference for low points of the height map) and
 `layer_density` (per field layer, default only layer 0).
 
+### GADSTerrain3D
+
+A heightmap terrain built from GADS pieces. Add the node, give it a `heightmap` (red channel,
+0..1 over `height_scale` metres; a 16-bit PNG or an EXR), a `size` and up to three `layers`
+(GADS materials with the world-planar mapping and `height_center` 0, e.g. ground, rock, snow):
+
+- **Geometry**: chunks of `chunk_quads` quads at `vertex_spacing`, each with index LODs at every
+  power of two (`lod_levels`), keyed by their largest height error in metres, so Godot's mesh LOD
+  picks the coarsest one that stays under a pixel (`rendering/mesh_lod/lod_change/threshold_pixels`).
+  Skirts as deep as twice the largest error hang from every chunk's border and hide the seams
+  between chunks at different LODs. The chunks are internal children built when the node enters
+  the tree (64 m at 0.5 m spacing: about 0.3 s in GDScript), never saved with the scene.
+- **Layers**: combined into one layered GADS material (`GADSMaterials.combine_layers()`, or your
+  own `material`): the first everywhere, the second and third on top where `splatmap` (R, G) puts
+  them, else by rules: `slope_layer` on slopes steeper than `slope_range` (degrees; rock on
+  cliffs), `height_layer` above `height_band` (m; snow on peaks). Within a layer's mask the higher
+  relief wins (height-aware blending).
+- **Collision**: a HeightMapShape3D of the same grid and triangulation (`collision`,
+  `collision_layer`, `collision_mask`).
+- **Detail**: with `detail_field` a GADSDisplacementField3D on the terrain's own ground data
+  (heights of the finest LOD and the dominant layer, at half the vertex spacing) displaces the
+  layers' height maps into real geometry around the camera. A `GADSDeformationField` in the
+  scene presses both the field and the layers' parallax; `get_height()` is the
+  `ground_height` a `GADSDeformer3D` needs.
+
+```gdscript
+var terrain := GADSTerrain3D.new()
+terrain.heightmap = load("res://terrain/height.exr")
+terrain.size = Vector2(512, 512)
+terrain.height_scale = 80.0
+terrain.layers = [grass, rock, snow]
+add_child(terrain)
+var y := terrain.get_height(player.global_position)   # the drawn surface's height
+```
+
+The detail field and deformation work in world space: keep the terrain unrotated and unscaled
+(moving it is fine; `rebuild()` refreshes the ground data).
+
 ### GADSDeformationField (runtime deformation)
 
 Footprints, tyre tracks, ruts and craters in snow, sand and mud. A `GADSDeformationField` holds
@@ -481,15 +525,17 @@ Details in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). In short:
 
 ```
 addons/gads/                      the addon (all that is shipped)
-  core/                           GADSManager (node), GADSSettings (presets), GADSGlobals
+  core/                           GADSManager (node), GADSSettings (presets), GADSGlobals,
+                                  GADSProfiler, GADSStatsOverlay
   materials/                      GADSMaterials (variants, parameters)
   render/shaders/                 the .gdshaderinc library, field / pebble / capture shaders
   render/shaders/variants/        the 30 surface and 3 field shaders (generated)
   render/textures/gads_dfg_lut.exr  Godot's DFG table, recomputed (for the energy compensation)
-  terrain/                        GADSDisplacementField3D, GADSPebbleScatter3D, GADSGroundBake
+  terrain/                        GADSTerrain3D, GADSDisplacementField3D, GADSPebbleScatter3D,
+                                  GADSGroundBake, GADSDeformationField, GADSDeformer3D
   geometry/                       GADSMeshInstance3D, GADSMeshBaker (baked displacement)
   native/                         gads.gdextension and the tessellator libraries (bin/)
-  editor/                         material converter, setup validator, bake inspector
+  editor/                         material converter, setup validator, bake inspector, profiler panel
   import/                         GADSHeightTools
   plugin.gd, plugin.cfg, README.md, LICENSE.md
 native/                           the tessellator's C++ sources, SConstruct (not shipped)
@@ -504,12 +550,15 @@ tools/                            engine runner, native build, texture fetch / p
 
 ## Demo
 
-Run the project (main scene `demo/demo_main.tscn`). Keys: **1-4** scene, **V** next camera
+Run the project (main scene `demo/demo_main.tscn`). Keys: **1-5** scene, **V** next camera
 view (eye level, grazing, overview), **P** next preset, **B** next comparison (flat / POM /
 POM + geometry), **H** hide the panel, **G** the GADS profiler overlay; hold the right mouse button and use **WASD/QE** to fly
 (Shift fast, Alt slow). In the rocky-ground scene the boulder on the right is the left one's
 mesh as a GADSMeshInstance3D, baked in the background when the scene loads (debug view
-Tessellation shows its triangles).
+Tessellation shows its triangles). The hills scene is a GADSTerrain3D (ground, rock on slopes,
+gravel on the tops) with a rover driving a loop: its two GADSDeformer3D press tracks into a
+GADSDeformationField, into the field's geometry near the camera and the terrain's parallax
+beyond, and they fill in slowly (`recovery_rate`).
 
 ![Demo with its panel](docs/images/demo_ui.jpg)
 
@@ -548,6 +597,7 @@ VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json xvfb-run -a -s "-screen 0 
 | render tests (headed, 77 checks) | **POM against a CPU ray / height-field intersection** (world floor with relief above and below, UV floor, UV wall, triplanar floor and two walls; steep, 45-degree and grazing views): median hit error under 0.2 mm and 90th percentile under 0.4 mm on a 50 mm relief (measured worst 90th percentile 0.13 mm; without the bisection 1.0 mm). **Inverted `height_remap`** (1, 0) on an inverted map draws the same relief (99th percentile 0.10 mm). **World-planar walls**: finite, lit pixels (a smoke test, see the file). **No swimming**: 190 relief markers over 24 camera positions stay within 0.19 mm of their traced position. **Triplanar** marches 1 plane on a floor and 2 on a 45-degree roof. **light() vs Godot's built-in lighting** (dielectric, metal, metal at a grazing view): 99th percentile at most 0.07 %, maximum 0.17 % (limits 0.12 % / 0.3 %); the flat variant equals ORMMaterial3D exactly. **LIGHT_VERTEX**: on the 2 041 pixels whose received shadow depends on where it is computed, 100 % are lit or shadowed as on the relief. **Self-shadow** against a CPU height-field shadow: 99.8 % of 4 929 pixels agree (limit 98 %); from an omni and a spot light, against the shadow towards the light's position: 99.5 % (limit 98 %), and nothing changes with the setting off. **Depth write**: with it, props are cut where the relief (not the plane) predicts on 100 % of the 1 397 pixels where the two disagree, and 4 of 318 484 wall pixels are empty; without it, as the plane predicts and none empty. **Mip shimmer** 10-60 m away: POM flickers 1.02 x as much as flat normal mapping (limit 1.3), and the march samples the mip level the hardware would pick (90th percentile 0.006 levels off). **Distance fade**: 136 mm parallax offset before the fade, 0 beyond it. Globals (the registered defaults and this project's are the Medium preset), parameter defaults equal to the shaders' own, emission pass-through. |
 | field tests (headed, 36 checks) | **Vertex heights** against the height map: 1 539 vertices in all 4 rings, largest error 0.03 mm. **Over a baked ground** (slope, kerb, hole, other ground, the bake's edge): 12 966 vertices against `GADSGroundBake.sample()`, largest error 0.20 mm. **The field's own parallax** against the CPU ray tracer: 90th percentile 0.05 / 0.07 / 0.10 mm (steep / 45 degrees / grazing); its self-shadow agrees with the CPU height-field shadow on 99.8 % of pixels. **No cracks**: 0 background pixels inside the grid from 6 camera positions. **No swimming**: 0 mm height change in the inner ring while the camera walks; in the morph bands at most 0.96 mm per 1 cm camera step (limit 2 mm). **Field vs parallax ground**: 0.15 % mean luminance difference inside the grid (limit 1 %), 0.08 % in the last metre before the relief fades (limit 0.5 %), 0 beyond the grid. **Ground bake**: 1 698 points within 1.9 mm of the mesh surface. **Pebbles stay put**: 0 of 1 536 pebble pixels change when the camera moves 1.24 m across cell boundaries. Lifetime: presets, resizes, a second viewport, freeing the scene, a scene change during a bake. All four demo scenes render at every preset, their ground faces up, and their runtime bakes take about 0.3 s (printed by the test). The demo's fly camera flies. |
 | bake tests (headed, 64 checks; headless without the render comparison) | **Accuracy**: points inside the baked triangles of a 60 mm bump against the height field at the same uv: largest distance 0.47 mm at a 0.5 mm tolerance (736 triangles). **Adaptivity**: 107 times the triangle density on the bump as on the flat plane. **Closed meshes stay closed** (every edge in exactly two triangles after welding): a box with triplanar and with UV mapping (seams, hard edges), a UV sphere (seam, poles), a world-mapped cylinder (caps). Locked borders do not move (free ones by 22 mm); the budget caps the count exactly (3 000) and the statistics report the error left; identical results for repeated bakes and any thread count; scale 2 halves the object-space displacement (the tolerance is in world metres, the triangle count stays the same); a rotated plane moves along its own normal; a plane's 45-45-90 triangles stay 45-45-90 over 40 001 triangles; normals follow the slope, tangents along +u and perpendicular, `CUSTOM0` / `CUSTOM1` rest data, 7 LODs sharing the vertices; cancel stops a 5 M-triangle bake within milliseconds. **Node**: background bake with progress, the cache file the scene refers to, reuse of the cached file, Rebuild, Clear, the source untouched; staleness after a new relief depth, quality, source edit, scale, or (world mapping) position, not after moving a UV-mapped mesh; trimesh collision of its own resolution that a ray hits 0.4 mm from the relief's top, removed with collision None; a saved and reloaded scene refers to the bake and is not stale. **Render**: on the pixels where the relief shows, a baked mesh differs from the parallax render of the same material by 0.0065 (mean), the normal map applied on top of the geometry by 0.091; a baked mesh marches no parallax steps; the Tessellation view. |
+| terrain tests (headed, 32 checks) | **Heights**: every vertex is the heightmap's (0.003 mm), between vertices the triangles' plane, outside nothing. **Chunk LODs**: each halves the quads (skirts included), keys increase and equal each LOD's largest height error, and every chunk's skirts hang deeper than the widest gap two LODs can leave on its border. **Layers**: rock on an 80-degree flank, snow on the peak, the first layer alone on low gentle ground; the combined layered material keeps each layer's textures, texture size and vertex-colour mask; a splat map overrides the rules. **Collision**: 200 rays hit the HeightMapShape3D within 0.02 mm of the drawn surface. **Detail field**: its ground data has texel centres on the vertices and stays within the field's lift (1.6 mm of 4.3 mm) of the drawn surface on 378 displaced points, with the dominant layer right on all. Three property changes in a frame rebuild once. **Render**: the terrain draws from above and is culled from below (front faces wind right); the engine draws 14 times fewer primitives far away (its mesh LOD picks the coarser index LODs). |
 | demo / editor smoke | The demo and the editor with the demo open run without script errors, engine errors or leaks. |
 | standalone addon (shipped archive) | Builds the `git archive` users download (`.gitattributes` export rules applied), checks it holds only `LICENSE` and `addons/gads` with no Markdown link to a file it does not ship, puts it alone into a fresh project, lets the plugin register its globals and checks that a POM ground and a GADSDisplacementField3D with pebbles render there. |
 | editor plugin actions | In a real editor: Add GADSManager Node, Add GADSDisplacementField3D, Convert Materials (a mesh and a CSG shape), Bake Ground, Make Selected Meshes GADSMeshInstance3D and Bake Selected GADSMeshInstance3D (the bake saved into `res://gads_baked/`), each with undo and redo; the inspector's Bake / Rebuild / Clear buttons; a second bake that replaces the first while it is in use; Validate Setup; Prepare Height Maps; a save that writes no internal nodes, keeps the materials' saved variant and the field's properties (the node's preset does not touch them in the editor) and refers to the bake files instead of embedding them. |

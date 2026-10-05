@@ -226,6 +226,39 @@ static func create_layered(mapping: Mapping, textures: Dictionary, params: Dicti
 	return material
 
 
+## One layered GADS material from up to three plain ones (e.g. a terrain's ground, rock and snow):
+## the first is the main layer (a copy of it on the layered variant of its mapping and quality),
+## the second and third become layers 1 and 2 under [param masks] (default vertex colour R and G),
+## each with its own textures, depth, tint and normal strength, and a scale that keeps its own
+## texture size. Returns null when the first is not a GADS material.
+static func combine_layers(materials: Array, masks: Array = [LayerMask.VERTEX_R, LayerMask.VERTEX_G]) -> ShaderMaterial:
+	if materials.is_empty() or not is_gads_material(materials[0]):
+		return null
+	var main := materials[0] as ShaderMaterial
+	var info := parse(main.shader)
+	var out := main.duplicate() as ShaderMaterial
+	out.shader = get_shader(info["mapping"], info["quality"], info["depth_write"], true)
+	for i in range(1, mini(materials.size(), 3)):
+		var layer := materials[i] as ShaderMaterial
+		if not is_gads_material(layer):
+			continue
+		var prefix := "layer%d_" % i
+		for key: String in ["albedo", "normal", "orm", "height"]:
+			out.set_shader_parameter(prefix + key + "_texture", layer.get_shader_parameter(key + "_texture"))
+		out.set_shader_parameter(prefix + "height_m", get_param(layer, "height_m"))
+		out.set_shader_parameter(prefix + "tint", get_param(layer, "albedo_tint"))
+		out.set_shader_parameter(prefix + "normal_strength", get_param(layer, "normal_strength"))
+		var scale := 1.0
+		if info["mapping"] == Mapping.UV:
+			scale = (get_param(layer, "uv_scale") as Vector2).x / maxf((get_param(main, "uv_scale") as Vector2).x, 1e-6)
+		else:
+			scale = (get_param(main, "texture_size_m") as Vector2).x / maxf((get_param(layer, "texture_size_m") as Vector2).x, 1e-6)
+		out.set_shader_parameter(prefix + "scale", scale)
+		out.set_shader_parameter(prefix + "amount", 1.0)
+		out.set_shader_parameter(prefix + "mask_channel", masks[i - 1] if i - 1 < masks.size() else i - 1)
+	return out
+
+
 ## A material from a texture folder written by tools/prepare_textures.py: <dir>/<id>_albedo.jpg,
 ## _normal.jpg, _arm.jpg, _height.exr and <id>.gads.json (real size and suggested relief depth).
 ## [param params] override the defaults derived from the metadata.

@@ -1,11 +1,13 @@
 extends RefCounted
 ## Builds the demo scenes in code (so they need no editor setup and tests build exactly what the
-## demo shows): a gravel path, a cobblestone street, rocky ground and a brick wall with props.
+## demo shows): a gravel path, a cobblestone street, rocky ground, a brick wall with props and a
+## GADSTerrain3D with a rover leaving tracks.
 ## Every scene is a Node3D with a WorldEnvironment, a sun, a Camera3D named "Camera", a
 ## GADSManager node, and "views" metadata: view name -> [camera position, look target].
 
 const TEX := "res://demo/textures/"
-const SCENE_NAMES: Array[String] = ["Gravel path", "Cobblestone street", "Rocky ground", "Brick wall and props"]
+const SCENE_NAMES: Array[String] = ["Gravel path", "Cobblestone street", "Rocky ground", "Brick wall and props", "Hills and tracks"]
+const Rover := preload("res://demo/scenes/demo_rover.gd")
 const VIEW_NAMES: Array[String] = ["Eye level", "Grazing", "Overview"]
 
 
@@ -17,8 +19,10 @@ static func build(index: int) -> Node3D:
 			return build_cobblestone_street()
 		2:
 			return build_rocky_ground()
-		_:
+		3:
 			return build_brick_wall()
+		_:
+			return build_hills()
 
 
 # --- Shared pieces ---------------------------------------------------------------------------
@@ -389,5 +393,103 @@ static func build_brick_wall() -> Node3D:
 		"Eye level": [Vector3(0.3, 1.7, 3.8), Vector3(-0.3, 0.8, -2.0)],
 		"Grazing": [Vector3(-3.0, 1.2, -2.6), Vector3(4.0, 1.2, -2.95)],
 		"Overview": [Vector3(4.0, 3.5, 5.0), Vector3(-0.5, 0.5, -1.5)],
+	})
+	return root
+
+
+# --- 5. Hills and tracks (GADSTerrain3D, runtime deformation) --------------------------------
+
+const HILLS_SIZE := 96.0
+const HILLS_LOW := -3.0
+const HILLS_HIGH := 9.0
+
+
+static func hills_height(x: float, z: float) -> float:
+	var ridge := 6.5 * smoothstep(14.0, 30.0, -z) * (0.6 + 0.4 * sin(x / 7.0))
+	return 1.6 * sin(x / 11.0) * cos(z / 13.0) + 0.6 * sin((x + 2.0 * z) / 6.3) + ridge
+
+
+## The terrain's heightmap: hills_height() over HILLS_SIZE, 0..1 between HILLS_LOW and HILLS_HIGH.
+static func hills_heightmap(size := 257) -> ImageTexture:
+	var img := Image.create(size, size, false, Image.FORMAT_RF)
+	for j in size:
+		for i in size:
+			var x := -HILLS_SIZE * 0.5 + HILLS_SIZE * i / (size - 1)
+			var z := -HILLS_SIZE * 0.5 + HILLS_SIZE * j / (size - 1)
+			img.set_pixel(i, j, Color((hills_height(x, z) - HILLS_LOW) / (HILLS_HIGH - HILLS_LOW), 0, 0))
+	return ImageTexture.create_from_image(img)
+
+
+static func build_hills() -> Node3D:
+	var root := make_root("Hills and tracks", 30.0, 160.0)
+	var ground := ground_material("forest_ground_04")
+	var rock := ground_material("rocks_ground_05")
+	var gravel := ground_material("gravel_stones")
+	var terrain := GADSTerrain3D.new()
+	terrain.name = "Terrain"
+	terrain.heightmap = hills_heightmap()
+	terrain.size = Vector2(HILLS_SIZE, HILLS_SIZE)
+	terrain.height_offset = HILLS_LOW
+	terrain.height_scale = HILLS_HIGH - HILLS_LOW
+	terrain.vertex_spacing = 0.5
+	terrain.chunk_quads = 64
+	terrain.layers = [ground, rock, gravel] as Array[ShaderMaterial]
+	terrain.slope_range = Vector2(22.0, 32.0)
+	terrain.height_band = Vector2(5.0, 6.5)
+	root.add_child(terrain)
+	var tracks := GADSDeformationField.new()
+	tracks.name = "Tracks"
+	# A fixed window over the rover's whole loop (no follow): 32 m at 6 cm texels.
+	tracks.position = Vector3(0.0, 0.0, -2.0)
+	tracks.size_m = 32.0
+	tracks.resolution = 512
+	tracks.max_depth = 0.12
+	tracks.recovery_rate = 0.0005
+	root.add_child(tracks)
+	var rover := Node3D.new()
+	rover.name = "Rover"
+	rover.set_script(Rover)
+	rover.set("terrain", terrain)
+	rover.set("center", Vector2(0.0, -2.0))
+	var body := MeshInstance3D.new()
+	body.name = "Body"
+	var box := BoxMesh.new()
+	box.size = Vector3(1.2, 0.45, 2.0)
+	body.mesh = box
+	body.position = Vector3(0, 0.62, 0)
+	var paint := StandardMaterial3D.new()
+	paint.albedo_color = Color(0.75, 0.35, 0.12)
+	paint.roughness = 0.6
+	body.material_override = paint
+	rover.add_child(body)
+	var tyre := StandardMaterial3D.new()
+	tyre.albedo_color = Color(0.08, 0.08, 0.08)
+	tyre.roughness = 0.9
+	for side in [-0.75, 0.75]:
+		for axle in [-0.7, 0.7]:
+			var wheel_mesh := MeshInstance3D.new()
+			var cylinder := CylinderMesh.new()
+			cylinder.top_radius = 0.32
+			cylinder.bottom_radius = 0.32
+			cylinder.height = 0.3
+			wheel_mesh.mesh = cylinder
+			wheel_mesh.material_override = tyre
+			wheel_mesh.position = Vector3(side, 0.29, axle)
+			wheel_mesh.rotation_degrees = Vector3(0, 0, 90)
+			rover.add_child(wheel_mesh)
+		var track := GADSDeformer3D.new()
+		track.name = "Track" + ("L" if side < 0 else "R")
+		track.position = Vector3(side, 0.0, 0.0)
+		track.continuous = true
+		track.radius = 0.16
+		track.depth = 0.07
+		track.spacing = 0.05
+		track.contact_height = 0.3
+		rover.add_child(track)
+	root.add_child(rover)
+	_views(root, {
+		"Eye level": [Vector3(0.0, hills_height(0.0, 10.0) + 1.7, 10.0), Vector3(0.0, hills_height(0.0, 2.0), 2.0)],
+		"Grazing": [Vector3(6.2, hills_height(6.2, -3.5) + 0.5, -3.5), Vector3(9.0, hills_height(9.0, -0.5), -0.5)],
+		"Overview": [Vector3(18.0, 16.0, 22.0), Vector3(0.0, 0.0, -6.0)],
 	})
 	return root

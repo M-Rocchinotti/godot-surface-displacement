@@ -61,10 +61,21 @@ All notable changes to this project are documented here. The format follows
   distance or zoomed (`view_tessellated`, `refresh_view()`). A quarter of the triangles of a
   fixed bake in the test, as fine at the eye. The tessellator takes `view_position`,
   `pixel_error`, `focal_px` and `min_edge_pixels`; its output without them is unchanged.
+- **`GADSTerrain3D`**: a heightmap terrain from GADS pieces. Chunks with index LODs at every
+  power of two keyed by their largest height error (so Godot's mesh LOD picks the coarsest one
+  under a pixel), skirts deep enough for any pair of LODs; up to three GADS layers combined into
+  one height-blended layered material (`GADSMaterials.combine_layers()`), painted by a splat map
+  or by slope and height rules; HeightMapShape3D collision with the same triangulation; a
+  GADSDisplacementField3D on the terrain's own ground data (texel centres on the vertices, lifted
+  by what its bilinear heights can miss); `get_height()`, `get_normal()`,
+  `get_layer_weights()`. `tests/terrain_tests.gd`, a demo scene (hills with a rover leaving
+  tracks) and validator checks.
 - Editor: Bake / Rebuild / Clear / Cancel with progress and statistics in the inspector (undoable);
   Project > Tools > **Make Selected Meshes GADSMeshInstance3D** and **Bake Selected
   GADSMeshInstance3D** (undoable); Validate Setup reports stale bakes, unbakeable meshes, a
   missing native library and bakes the budget cut short.
+- `GADSDeformationField.stroke()` ruts have softer walls than round marks; a field that follows a
+  node not yet in the tree (a later sibling) centres on itself until it is.
 - `tests/bake_tests.gd` (64 checks) and editor-check steps for the new tools; CI builds the
   native library from source for Linux and Windows and runs the headless suites on Windows.
 

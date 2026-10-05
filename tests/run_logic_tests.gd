@@ -28,6 +28,7 @@ func _run() -> void:
 	test_ground_bake_sampling()
 	test_demo_textures()
 	await test_node_lifetime()
+	await test_terrain_validation()
 	await test_scatter_parameter_sync()
 	print("\nlogic tests: %d passed, %d failed" % [_passed, _failed])
 	quit(1 if _failed > 0 else 0)
@@ -643,6 +644,32 @@ func test_node_lifetime() -> void:
 	await process_frame
 	check(get_nodes_in_group(&"gads_field").is_empty() and get_nodes_in_group(&"gads_manager").is_empty(),
 			"freeing the scene unregisters the field and the manager")
+
+
+## The terrain demo validates clean, and the validator catches a terrain's mistakes.
+func test_terrain_validation() -> void:
+	print("\n== terrain validation")
+	var scene := Builder.build(4)
+	root.add_child(scene)
+	await process_frame
+	var bad := []
+	for i: Dictionary in GADSValidator.validate(scene):
+		if i["level"] != "info":
+			bad.append(i["message"])
+	check(bad.is_empty(), "the terrain demo has no errors or warnings %s" % [bad])
+	var t := scene.get_node("Terrain") as GADSTerrain3D
+	var uv := GADSMaterials.create(GADSMaterials.Mapping.UV, {}, {"height_m": 0.02})
+	var raised := GADSMaterials.create(GADSMaterials.Mapping.WORLD, {}, {"height_m": 0.02, "height_center": 1.0})
+	t.layers = [raised, uv] as Array[ShaderMaterial]
+	t.rotation_degrees = Vector3(0, 30, 0)
+	var messages := []
+	for i: Dictionary in GADSValidator.validate(scene):
+		messages.append(i["message"])
+	var text := "\n".join(messages)
+	check(text.contains("not world-planar") and text.contains("height_center 1.00") and text.contains("rotated or scaled"),
+		"a UV layer, a layer whose relief sits below and a rotated terrain are reported")
+	scene.queue_free()
+	await process_frame
 
 
 # --- Field parameters reach the pebbles, once ----------------------------------------------------
