@@ -74,18 +74,22 @@ func _run() -> void:
 	# 3. Material conversion.
 	var box := root.get_node("HeightBox") as MeshInstance3D
 	var glass := root.get_node("GlassBox") as MeshInstance3D
+	var csg := root.get_node("HeightCSG") as GeometryInstance3D
 	var old := box.material_override
+	var old_csg := csg.get("material") as Material
 	EditorInterface.get_selection().clear()
 	EditorInterface.get_selection().add_node(box)
 	EditorInterface.get_selection().add_node(glass)
+	EditorInterface.get_selection().add_node(csg)
 	_sd_plugin.convert_selection()
 	var info := SDMaterials.parse((box.material_override as ShaderMaterial).shader) if box.material_override is ShaderMaterial else {}
 	_check(not info.is_empty() and info["mapping"] == SDMaterials.Mapping.UV and glass.material_override is StandardMaterial3D,
 			"Convert Materials turns the height-map material into a UV-mapped SD material and skips the transparent one")
+	_check(SDMaterials.is_sd_material(csg.get("material")), "it converts a CSG shape's material too")
 	ur.undo()
-	_check(box.material_override == old, "undo restores the original material")
+	_check(box.material_override == old and csg.get("material") == old_csg, "undo restores the original materials")
 	ur.redo()
-	_check(box.material_override is ShaderMaterial, "redo converts again")
+	_check(box.material_override is ShaderMaterial and SDMaterials.is_sd_material(csg.get("material")), "redo converts again")
 
 	# 4. Ground bake (renders in the editor).
 	EditorInterface.get_selection().clear()

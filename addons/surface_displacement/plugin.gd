@@ -122,8 +122,9 @@ func convert_selection() -> void:
 	ur.create_action("Convert materials to Surface Displacement")
 	for a: Dictionary in assignments:
 		if a["surface"] < 0:
-			ur.add_do_property(a["node"], "material_override", a["to"])
-			ur.add_undo_property(a["node"], "material_override", a["previous"])
+			var property := SDMaterialConverter.slot_property(a["surface"])
+			ur.add_do_property(a["node"], property, a["to"])
+			ur.add_undo_property(a["node"], property, a["previous"])
 		else:
 			ur.add_do_method(a["node"], "set_surface_override_material", a["surface"], a["to"])
 			ur.add_undo_method(a["node"], "set_surface_override_material", a["surface"], a["previous"])

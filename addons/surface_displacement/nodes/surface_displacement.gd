@@ -146,16 +146,16 @@ func get_budget_ms() -> float:
 ## Adds [param material] to the materials this node switches (automatic for materials on
 ## geometry in the scene tree; use it for materials applied later by code).
 func register_material(material: Material) -> void:
-	if SDMaterials.is_sd_material(material):
-		_materials[material.get_instance_id()] = weakref(material)
-		if not Engine.is_editor_hint() and is_inside_tree():
-			SDMaterials.set_quality(material, get_effective_settings().get_quality())
+	_register_materials([material])
 
 
-## Registers the SD materials of every GeometryInstance3D under [param root].
+## Registers the SD materials of every node under [param root] that draws geometry (see
+## [method SDMaterials.materials_of]: meshes, multimeshes, particles, CSG shapes, GridMaps).
 func register_scene(root: Node) -> void:
 	_register_node(root)
 	for node in root.find_children("*", "GeometryInstance3D", true, false):
+		_register_node(node)
+	for node in root.find_children("*", "GridMap", true, false):
 		_register_node(node)
 
 
@@ -209,21 +209,27 @@ func _queue_apply() -> void:
 
 
 func _on_node_added(node: Node) -> void:
-	if node is GeometryInstance3D:
+	if node is GeometryInstance3D or node.is_class("GridMap"):
 		_register_node(node)
 	elif node is DisplacementField3D or node is PebbleScatter3D:
 		_queue_apply()
 
 
 func _register_node(node: Node) -> void:
-	if not node is GeometryInstance3D:
-		return
-	var gi := node as GeometryInstance3D
-	register_material(gi.material_override)
-	if gi is MeshInstance3D:
-		var mi := gi as MeshInstance3D
-		for s in mi.get_surface_override_material_count():
-			register_material(mi.get_surface_override_material(s))
-		if mi.mesh != null:
-			for s in mi.mesh.get_surface_count():
-				register_material(mi.mesh.surface_get_material(s))
+	if node is GeometryInstance3D or node.is_class("GridMap"):
+		_register_materials(SDMaterials.materials_of(node))
+
+
+func _register_materials(materials: Array) -> void:
+	var switch := not Engine.is_editor_hint() and is_inside_tree()
+	var quality := SDMaterials.Quality.FLAT
+	var quality_known := false
+	for material: Material in materials:
+		if not SDMaterials.is_sd_material(material):
+			continue
+		_materials[material.get_instance_id()] = weakref(material)
+		if switch:
+			if not quality_known:
+				quality = get_effective_settings().get_quality()
+				quality_known = true
+			SDMaterials.set_quality(material, quality)

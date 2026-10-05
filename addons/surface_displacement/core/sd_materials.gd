@@ -76,6 +76,55 @@ static func is_sd_material(material: Material) -> bool:
 	return material is ShaderMaterial and not parse((material as ShaderMaterial).shader).is_empty()
 
 
+## Every material [param node] draws with (any kind, each once): a GeometryInstance3D's
+## override and overlay; a MeshInstance3D's surface overrides and its mesh's materials; the mesh
+## of a MultiMeshInstance3D, CPUParticles3D or CSGMesh3D and the draw passes of a
+## GPUParticles3D; a CSG shape's material; the item meshes of a GridMap's MeshLibrary; each
+## followed along its next_pass chain.
+static func materials_of(node: Node) -> Array[Material]:
+	var out: Array[Material] = []
+	if node is GeometryInstance3D:
+		_add_material(out, (node as GeometryInstance3D).material_override)
+		_add_material(out, (node as GeometryInstance3D).material_overlay)
+	if node is MeshInstance3D:
+		var mi := node as MeshInstance3D
+		for s in mi.get_surface_override_material_count():
+			_add_material(out, mi.get_surface_override_material(s))
+		_add_mesh(out, mi.mesh)
+	elif node is MultiMeshInstance3D:
+		var multimesh := (node as MultiMeshInstance3D).multimesh
+		if multimesh != null:
+			_add_mesh(out, multimesh.mesh)
+	elif node is GPUParticles3D:
+		var particles := node as GPUParticles3D
+		for i in particles.draw_passes:
+			_add_mesh(out, particles.get_draw_pass_mesh(i))
+	elif node is CPUParticles3D:
+		_add_mesh(out, (node as CPUParticles3D).mesh)
+	elif node.is_class("CSGShape3D"):
+		# By name: CSG and GridMap are engine modules that a custom build can leave out.
+		_add_material(out, node.get("material") as Material)
+		_add_mesh(out, node.get("mesh") as Mesh)
+	elif node.is_class("GridMap"):
+		var library := node.get("mesh_library") as MeshLibrary
+		if library != null:
+			for id in library.get_item_list():
+				_add_mesh(out, library.get_item_mesh(id))
+	return out
+
+
+static func _add_mesh(out: Array[Material], mesh: Mesh) -> void:
+	if mesh != null:
+		for s in mesh.get_surface_count():
+			_add_material(out, mesh.surface_get_material(s))
+
+
+static func _add_material(out: Array[Material], material: Material) -> void:
+	while material != null and not out.has(material):
+		out.append(material)
+		material = material.next_pass
+
+
 ## Switches [param material] to [param quality], keeping its mapping and depth write. Returns
 ## true if the shader changed. Materials that are not SD variants are left alone.
 static func set_quality(material: ShaderMaterial, quality: Quality) -> bool:

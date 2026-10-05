@@ -19,6 +19,7 @@ func _run() -> void:
 	test_presets()
 	test_manager()
 	await test_settings_changes()
+	test_material_discovery()
 	test_field_geometry()
 	test_field_mesh_seams()
 	test_ground_bake_sampling()
@@ -151,6 +152,67 @@ func test_manager() -> void:
 	sd.enabled = false
 	sd.apply()
 	check(SDMaterials.parse(mat.shader)["quality"] == SDMaterials.Quality.FLAT and is_zero_approx(sd.get_budget_ms()), "enabled = false draws everything flat")
+	scene.queue_free()
+
+
+## Presets reach SD materials wherever a scene draws them, not only on MeshInstance3D surfaces.
+func test_material_discovery() -> void:
+	print("\n== materials on every kind of geometry")
+	var scene := Node3D.new()
+	var sd := SurfaceDisplacement.new()
+	sd.preset = SDSettings.Preset.HIGH
+	scene.add_child(sd)
+	var made := {}
+	var flat := func(label: String) -> ShaderMaterial:
+		made[label] = SDMaterials.create(SDMaterials.Mapping.TRIPLANAR, {}, {}, SDMaterials.Quality.FLAT)
+		return made[label]
+	var box := BoxMesh.new()
+	box.material = flat.call("mesh surface")
+	var mi := MeshInstance3D.new()
+	mi.mesh = box
+	mi.material_overlay = flat.call("material_overlay")
+	scene.add_child(mi)
+	var chained := StandardMaterial3D.new()
+	chained.next_pass = flat.call("next_pass")
+	var mi2 := MeshInstance3D.new()
+	mi2.mesh = SphereMesh.new()
+	mi2.material_override = chained
+	scene.add_child(mi2)
+	var csg := CSGBox3D.new()
+	csg.material = flat.call("CSG shape")
+	scene.add_child(csg)
+	var multimesh := MultiMesh.new()
+	multimesh.transform_format = MultiMesh.TRANSFORM_3D
+	var multimesh_mesh := PlaneMesh.new()
+	multimesh_mesh.material = flat.call("MultiMesh")
+	multimesh.mesh = multimesh_mesh
+	var mmi := MultiMeshInstance3D.new()
+	mmi.multimesh = multimesh
+	scene.add_child(mmi)
+	var library := MeshLibrary.new()
+	var tile := PlaneMesh.new()
+	tile.material = flat.call("GridMap")
+	library.create_item(0)
+	library.set_item_mesh(0, tile)
+	var grid := GridMap.new()
+	grid.mesh_library = library
+	scene.add_child(grid)
+	var particles := GPUParticles3D.new()
+	var pass_mesh := QuadMesh.new()
+	pass_mesh.material = flat.call("GPUParticles3D")
+	particles.draw_pass_1 = pass_mesh
+	scene.add_child(particles)
+	root.add_child(scene)
+	# Added after the node is ready: picked up as it enters the tree.
+	var late := CSGCylinder3D.new()
+	late.material = flat.call("CSG shape added later")
+	scene.add_child(late)
+	var missed: Array[String] = []
+	for label: String in made:
+		if SDMaterials.parse((made[label] as ShaderMaterial).shader)["quality"] != SDMaterials.Quality.POM_SELF_SHADOW:
+			missed.append(label)
+	check(missed.is_empty(), "the preset reaches SD materials on mesh surfaces, overlays, next passes, CSG shapes, MultiMeshes, GridMaps and particles%s"
+			% ("" if missed.is_empty() else " (missed: %s)" % ", ".join(missed)))
 	scene.queue_free()
 
 

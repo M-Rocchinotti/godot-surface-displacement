@@ -1,8 +1,8 @@
 extends SceneTree
 ## Writes res://check_scene.tscn for the editor check: a ground plane with a world-planar Surface
 ## Displacement material (generated height map saved as a resource), a box with a
-## StandardMaterial3D height map (to convert), a box with a transparent one (to skip) and a
-## camera; plus res://height_source.png for the height-map tool.
+## StandardMaterial3D height map (to convert), a CSG box with one (to convert), a box with a
+## transparent one (to skip) and a camera; plus res://height_source.png for the height-map tool.
 
 func _initialize() -> void:
 	var img := Image.create(64, 64, true, Image.FORMAT_RF)
@@ -38,6 +38,16 @@ func _initialize() -> void:
 		box.material_override = m
 		root.add_child(box)
 		box.owner = root
+	var csg := CSGBox3D.new()
+	csg.name = "HeightCSG"
+	csg.position = Vector3(-1.5, 0.5, 0)
+	var csg_mat := StandardMaterial3D.new()
+	csg_mat.resource_name = "HeightCSG"
+	csg_mat.heightmap_enabled = true
+	csg_mat.heightmap_texture = height
+	csg.material = csg_mat
+	root.add_child(csg)
+	csg.owner = root
 	var cam := Camera3D.new()
 	cam.name = "Camera"
 	cam.position = Vector3(1, 2, 5)

@@ -1,8 +1,8 @@
 @tool
 class_name SDMaterialConverter
 extends RefCounted
-## Converts BaseMaterial3D (StandardMaterial3D / ORMMaterial3D) materials that use a height map
-## into Surface Displacement materials. [method plan] only looks; [method apply] assigns (the
+## Converts BaseMaterial3D (StandardMaterial3D / ORMMaterial3D) materials that use a height map,
+## on meshes and CSG shapes, into Surface Displacement materials. [method plan] only looks; [method apply] assigns (the
 ## editor plugin wraps the same assignments in undo/redo).
 ##
 ## What carries over: albedo colour and texture, normal map and scale, ORM texture
@@ -15,8 +15,14 @@ extends RefCounted
 ## "skipped" with the reason).
 
 
-## {"assignments": [{"node", "surface" (-1 = material_override), "from" (the material that was
-## drawn), "previous" (what the slot held: the override, possibly null), "to"}], "skipped":
+## Slot numbers of an assignment besides surface indices.
+const SLOT_OVERRIDE := -1
+const SLOT_CSG_MATERIAL := -2
+
+
+## {"assignments": [{"node", "surface" (a MeshInstance3D surface, [constant SLOT_OVERRIDE] =
+## material_override, [constant SLOT_CSG_MATERIAL] = a CSG shape's material), "from" (the
+## material that was drawn), "previous" (what the slot held, possibly null), "to"}], "skipped":
 ## [{"node", "material", "reason"}], "converted": number of distinct materials}.
 static func plan(roots: Array[Node], metres_per_repeat := 1.0) -> Dictionary:
 	var assignments := []
@@ -27,29 +33,34 @@ static func plan(roots: Array[Node], metres_per_repeat := 1.0) -> Dictionary:
 		if r is GeometryInstance3D:
 			nodes.append(r)
 		nodes.append_array(r.find_children("*", "MeshInstance3D", true, false))
+		nodes.append_array(r.find_children("*", "CSGShape3D", true, false))
 	for node in nodes:
-		var mi := node as MeshInstance3D
-		if mi == null or mi.mesh == null:
-			continue
+		var gi := node as GeometryInstance3D
 		var slots := []
-		if mi.material_override != null:
-			slots.append([-1, mi.material_override])
-		else:
+		if gi == null:
+			continue
+		elif gi.material_override != null:
+			slots.append([SLOT_OVERRIDE, gi.material_override])
+		elif gi is MeshInstance3D:
+			var mi := gi as MeshInstance3D
+			if mi.mesh == null:
+				continue
 			for s in mi.mesh.get_surface_count():
 				var m := mi.get_surface_override_material(s)
 				slots.append([s, m if m != null else mi.mesh.surface_get_material(s)])
+		elif gi.is_class("CSGShape3D") and "material" in gi:
+			slots.append([SLOT_CSG_MATERIAL, gi.get("material")])
 		for slot: Array in slots:
 			var material := slot[1] as BaseMaterial3D
 			if material == null:
 				continue
 			var reason := skip_reason(material)
 			if not reason.is_empty():
-				skipped.append({"node": mi, "material": material, "reason": reason})
+				skipped.append({"node": gi, "material": material, "reason": reason})
 				continue
 			if not converted.has(material):
 				converted[material] = convert_material(material, metres_per_repeat)
-			var previous: Material = mi.material_override if slot[0] < 0 else mi.get_surface_override_material(slot[0])
-			assignments.append({"node": mi, "surface": slot[0], "from": slot[1], "previous": previous, "to": converted[material]})
+			assignments.append({"node": gi, "surface": slot[0], "from": slot[1], "previous": current(gi, slot[0]), "to": converted[material]})
 	return {"assignments": assignments, "skipped": skipped, "converted": converted.size()}
 
 
@@ -58,11 +69,23 @@ static func apply(planned: Dictionary) -> void:
 		assign(a["node"], a["surface"], a["to"])
 
 
-static func assign(mi: MeshInstance3D, surface: int, material: Material) -> void:
-	if surface < 0:
-		mi.material_override = material
+## The property behind a slot that is not a surface: material_override, or a CSG shape's material.
+static func slot_property(slot: int) -> String:
+	return "material" if slot == SLOT_CSG_MATERIAL else "material_override"
+
+
+## What [param slot] of [param node] holds (for a surface its override, not the mesh's material).
+static func current(node: GeometryInstance3D, slot: int) -> Material:
+	if slot >= 0:
+		return (node as MeshInstance3D).get_surface_override_material(slot)
+	return node.get(slot_property(slot)) as Material
+
+
+static func assign(node: GeometryInstance3D, slot: int, material: Material) -> void:
+	if slot >= 0:
+		(node as MeshInstance3D).set_surface_override_material(slot, material)
 	else:
-		mi.set_surface_override_material(surface, material)
+		node.set(slot_property(slot), material)
 
 
 ## Why [param m] cannot be converted, or "" if it can.
