@@ -23,6 +23,7 @@ func _run() -> void:
 	test_ground_bake_sampling()
 	test_demo_textures()
 	await test_node_lifetime()
+	await test_scatter_parameter_sync()
 	print("\nlogic tests: %d passed, %d failed" % [_passed, _failed])
 	quit(1 if _failed > 0 else 0)
 
@@ -357,3 +358,51 @@ func test_node_lifetime() -> void:
 	await process_frame
 	check(get_nodes_in_group(&"surface_displacement_field").is_empty() and get_nodes_in_group(&"surface_displacement_manager").is_empty(),
 			"freeing the scene unregisters the field and the manager")
+
+
+# --- Field parameters reach the pebbles, once ----------------------------------------------------
+
+## PebbleScatter3D copies the field's ground and layer parameters. Setting a texture parameter
+## makes the renderer rebuild the material's uniform set, so the copy must happen when the field
+## changes them, not every frame; and a change must still arrive.
+func test_scatter_parameter_sync() -> void:
+	print("\n== field parameters reach the pebble scatter")
+	var scene := Node3D.new()
+	var cam := Camera3D.new()
+	scene.add_child(cam)
+	var height := ImageTexture.create_from_image(Image.create(8, 8, true, Image.FORMAT_RH))
+	var layer := SDMaterials.create(SDMaterials.Mapping.WORLD, {"height": height}, {"height_m": 0.03, "height_center": 0.0})
+	var field := DisplacementField3D.new()
+	field.bake_on_ready = false
+	field.layers = [layer]
+	var pebbles := PebbleScatter3D.new()
+	field.add_child(pebbles)
+	scene.add_child(field)
+	root.add_child(scene)
+	cam.current = true
+	for i in 3:
+		await process_frame
+	var process_material := pebbles.get_particles().process_material as ShaderMaterial
+	var version := field.get_parameters_version()
+	check(version > 0 and process_material.get_shader_parameter("layer_height") == field.get_material().get_shader_parameter("layer_height"),
+			"the scatter has the field's layer textures")
+	cam.position = Vector3(1.3, 1.7, -2.1)
+	for i in 5:
+		await process_frame
+	check(field.get_parameters_version() == version, "a moving camera changes no ground or layer parameter (version %d -> %d)"
+			% [version, field.get_parameters_version()])
+	# The editor re-applies the layers every 30 frames in case they were edited.
+	field.sync_layers()
+	for i in 2:
+		await process_frame
+	check(field.get_parameters_version() == version, "re-applying unchanged layers sets no parameter (version %d -> %d)"
+			% [version, field.get_parameters_version()])
+	layer.set_shader_parameter("height_m", 0.05)
+	field.sync_layers()
+	for i in 2:
+		await process_frame
+	var layer_a: Array = process_material.get_shader_parameter("layer_a")
+	check(field.get_parameters_version() > version and is_equal_approx((layer_a[0] as Vector4).x, 0.05),
+			"a changed layer parameter reaches the scatter")
+	scene.queue_free()
+	await process_frame

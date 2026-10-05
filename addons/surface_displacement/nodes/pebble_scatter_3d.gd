@@ -56,6 +56,9 @@ var _particles: GPUParticles3D
 var _process_material: ShaderMaterial
 var _pebble_material: ShaderMaterial
 var _dirty := true
+## The field and parameter version last copied (see [method DisplacementField3D.get_parameters_version]).
+var _copied_field_id := 0
+var _copied_version := -1
 
 
 func _enter_tree() -> void:
@@ -120,11 +123,16 @@ func _process(_delta: float) -> void:
 		_process_material.set_shader_parameter("size_range", size_range)
 		_process_material.set_shader_parameter("valley_bias", valley_bias)
 		_process_material.set_shader_parameter("layer_density", layer_density)
-	var source := field.get_material()
-	for name: String in COPIED_FROM_FIELD:
-		_process_material.set_shader_parameter(name, source.get_shader_parameter(name))
-	for name: String in COPIED_TO_PEBBLES:
-		_pebble_material.set_shader_parameter(name, source.get_shader_parameter(name))
+	# Only when the field changed them: setting texture parameters rebuilds the materials' uniform
+	# sets, which every frame would be wasted work.
+	if field.get_instance_id() != _copied_field_id or field.get_parameters_version() != _copied_version:
+		_copied_field_id = field.get_instance_id()
+		_copied_version = field.get_parameters_version()
+		var source := field.get_material()
+		for param: String in COPIED_FROM_FIELD:
+			_process_material.set_shader_parameter(param, source.get_shader_parameter(param))
+		for param: String in COPIED_TO_PEBBLES:
+			_pebble_material.set_shader_parameter(param, source.get_shader_parameter(param))
 	var p := cam.global_position
 	var half := ceili(radius / cell_size)
 	var first := Vector2(floorf(p.x / cell_size) - half, floorf(p.z / cell_size) - half)

@@ -98,6 +98,7 @@ var _ground_texture: ImageTexture
 var _flat_height := NAN
 var _height_range := Vector2(-1.0, 1.0)
 var _origin := Vector3.ZERO
+var _params_version := 0
 
 
 func _enter_tree() -> void:
@@ -235,6 +236,12 @@ func get_material() -> ShaderMaterial:
 	return _material
 
 
+## Grows whenever the field changes a ground, layer or grid parameter of its material (not the
+## camera and origin it updates every frame), so [PebbleScatter3D] copies them only then.
+func get_parameters_version() -> int:
+	return _params_version
+
+
 func _process(_delta: float) -> void:
 	if _mesh_instance == null:
 		return
@@ -285,21 +292,29 @@ func _field_shader(quality: SDMaterials.Quality) -> Shader:
 	return load(SDMaterials.VARIANT_DIR + "sd_field_%s.gdshader" % SDMaterials.QUALITY_NAMES[quality])
 
 
+## Sets a material parameter only when its value changes: setting a texture parameter, even to
+## the texture it already has, makes the renderer rebuild the material's uniform set.
+func _set_param(param: String, value: Variant) -> void:
+	if _material.get_shader_parameter(param) != value:
+		_material.set_shader_parameter(param, value)
+		_params_version += 1
+
+
 func _apply_params() -> void:
-	_material.set_shader_parameter("base_spacing", base_spacing)
-	_material.set_shader_parameter("lift", lift)
+	_set_param("base_spacing", base_spacing)
+	_set_param("lift", lift)
 	var morph: Array[Vector4] = []
 	for k in MAX_LEVELS:
 		var r := get_morph_range(k) if k < levels else Vector2(1e9, 1e9 + 1.0)
 		morph.append(Vector4(r.x, r.y, 0.0, 0.0))
-	_material.set_shader_parameter("level_morph", morph)
-	_material.set_shader_parameter("amp_fade", get_fade_range())
+	_set_param("level_morph", morph)
+	_set_param("amp_fade", get_fade_range())
 	var max_amp := 0.0
 	for layer in layers:
 		if layer != null:
 			max_amp = maxf(max_amp, float(_param(layer, "height_m")))
 	var push := maxf(0.05, 2.0 * max_amp + 0.02)
-	_material.set_shader_parameter("push_down", push)
+	_set_param("push_down", push)
 	var reach := get_reach()
 	_mesh_instance.custom_aabb = AABB(Vector3(-reach, _height_range.x - push - 0.1, -reach),
 			Vector3(2.0 * reach, _height_range.y - _height_range.x + push + max_amp + 0.2, 2.0 * reach))
@@ -308,18 +323,18 @@ func _apply_params() -> void:
 func _apply_ground() -> void:
 	if ground_bake != null and ground_bake.data != null:
 		_ground_texture = ImageTexture.create_from_image(ground_bake.data)
-		_material.set_shader_parameter("ground_mode", 1)
-		_material.set_shader_parameter("ground_data", _ground_texture)
-		_material.set_shader_parameter("ground_rect", Vector4(ground_bake.origin.x, ground_bake.origin.y, ground_bake.texel_size, 0.0))
-		_material.set_shader_parameter("ground_decode", Vector4(ground_bake.height_min, ground_bake.height_range, ground_bake.step_limit, 0.0))
+		_set_param("ground_mode", 1)
+		_set_param("ground_data", _ground_texture)
+		_set_param("ground_rect", Vector4(ground_bake.origin.x, ground_bake.origin.y, ground_bake.texel_size, 0.0))
+		_set_param("ground_decode", Vector4(ground_bake.height_min, ground_bake.height_range, ground_bake.step_limit, 0.0))
 		_height_range = ground_bake.get_height_range()
 		_flat_height = NAN
 	else:
 		_ground_texture = null
-		_material.set_shader_parameter("ground_mode", 0)
-		_material.set_shader_parameter("ground_data", null)
+		_set_param("ground_mode", 0)
+		_set_param("ground_data", null)
 		var y := global_position.y if is_inside_tree() else 0.0
-		_material.set_shader_parameter("ground_rect", Vector4(0.0, 0.0, 1.0, y))
+		_set_param("ground_rect", Vector4(0.0, 0.0, 1.0, y))
 		_height_range = Vector2(y, y)
 		_flat_height = y
 
@@ -368,16 +383,16 @@ func _apply_layers() -> void:
 		d.append(Vector4(tint.r, tint.g, tint.b, _param(m, "metallic_scale")))
 		var texel := size.x / float(height_tex.get_width()) if height_tex != null else size.x / 1024.0
 		e.append(Vector4(_param(m, "specular"), _param(m, "pom_steps_scale"), _param(m, "self_shadow_strength"), -log(texel) / log(2.0)))
-	_material.set_shader_parameter("layer_count", count)
-	_material.set_shader_parameter("layer_height", heights)
-	_material.set_shader_parameter("layer_albedo", albedos)
-	_material.set_shader_parameter("layer_normal", normals)
-	_material.set_shader_parameter("layer_orm", orms)
-	_material.set_shader_parameter("layer_a", a)
-	_material.set_shader_parameter("layer_b", b)
-	_material.set_shader_parameter("layer_c", c)
-	_material.set_shader_parameter("layer_d", d)
-	_material.set_shader_parameter("layer_e", e)
+	_set_param("layer_count", count)
+	_set_param("layer_height", heights)
+	_set_param("layer_albedo", albedos)
+	_set_param("layer_normal", normals)
+	_set_param("layer_orm", orms)
+	_set_param("layer_a", a)
+	_set_param("layer_b", b)
+	_set_param("layer_c", c)
+	_set_param("layer_d", d)
+	_set_param("layer_e", e)
 
 
 ## The clipmap mesh: [param levels] rings of [param n] x [param n] quads (vertex positions in
