@@ -113,7 +113,7 @@ func add_camera(from: Vector3, to: Vector3, fov := 60.0, up := Vector3.UP) -> Ca
 ## A quad with corners a, b, c, d (counter-clockwise seen from the front, i.e. its normal is
 ## (b - a) x (c - a)) and UVs uv_a..uv_d, with normals and tangents, as a MeshInstance3D in the
 ## scene. Godot's front faces wind clockwise on screen, so the triangles are emitted reversed.
-func add_quad(a: Vector3, b: Vector3, c: Vector3, d: Vector3, uvs: Array, material: Material) -> MeshInstance3D:
+func add_quad(a: Vector3, b: Vector3, c: Vector3, d: Vector3, uvs: Array, material: Material, colors := []) -> MeshInstance3D:
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	var n := (b - a).cross(c - a).normalized()
@@ -121,6 +121,8 @@ func add_quad(a: Vector3, b: Vector3, c: Vector3, d: Vector3, uvs: Array, materi
 	for i in [0, 2, 1, 0, 3, 2]:
 		st.set_normal(n)
 		st.set_uv(uvs[i])
+		if not colors.is_empty():
+			st.set_color(colors[i])
 		st.add_vertex(pts[i])
 	st.generate_tangents()
 	var mi := MeshInstance3D.new()
@@ -227,8 +229,9 @@ static func trace_height_field(origin: Vector3, dir: Vector3, surface: Dictionar
 	var z0 := n.dot(origin - p0) / na
 	var dz_dt := nd / na
 	var detail_amp: float = (surface["detail"] as Dictionary)["amp"] if surface.has("detail") else 0.0
-	var z_top := (1.0 - center) * amp + 0.5 * detail_amp
-	var z_bot := -center * amp - 0.5 * detail_amp
+	var depth := slab_depth(surface)
+	var z_top := (1.0 - center) * depth + 0.5 * detail_amp
+	var z_bot := -center * depth - 0.5 * detail_amp
 	var t_top := (z_top - z0) / dz_dt
 	var t_bot := (z_bot - z0) / dz_dt
 	var t_raster := -z0 / dz_dt
@@ -276,11 +279,42 @@ static func relief_at(surface: Dictionary, p: Vector3) -> float:
 ## layer surface["detail"] = {"field", "amp" (m), "scale" (repeats per main repeat)}, centred on
 ## 0.5 like the shaders' detail layer.
 static func relief_value(surface: Dictionary, uv: Vector2) -> float:
-	var relief := float(surface["amp"]) * (sample_field(surface["field"], uv) - float(surface["center"]))
+	var center := float(surface["center"])
+	var h := sample_field(surface["field"], uv)
+	var relief := float(surface["amp"]) * (h - center)
 	if surface.has("detail"):
 		var detail: Dictionary = surface["detail"]
 		relief += float(detail["amp"]) * (sample_field(detail["field"], uv * float(detail["scale"])) - 0.5)
+	# Layers of a layered material: {"field", "amp" (m), "scale", "mask", "blend_width"}, the mask
+	# constant (as over one pixel's march), blended by height like gads_height_blend().
+	for layer: Dictionary in surface.get("layers", []):
+		var m: float = layer["mask"]
+		if m <= 0.0:
+			continue
+		var hk := sample_field(layer["field"], uv * float(layer["scale"]))
+		var t := height_blend(h, hk, m, float(layer["blend_width"]))
+		relief = lerpf(relief, float(layer["amp"]) * (hk - center), t)
+		h = lerpf(h, hk, t)
 	return relief
+
+
+## The weight of a layer of height [param above] over the relief below of height [param below]
+## for mask [param m] (the shaders' gads_height_blend()).
+static func height_blend(below: float, above: float, m: float, width: float) -> float:
+	if m <= 0.0:
+		return 0.0
+	if m >= 1.0:
+		return 1.0
+	return smoothstep(-width, width, above - below + (2.0 * m - 1.0) * (1.0 + width))
+
+
+## The deepest relief of [param surface]: the main amplitude, or a deeper active layer's.
+static func slab_depth(surface: Dictionary) -> float:
+	var depth := float(surface["amp"])
+	for layer: Dictionary in surface.get("layers", []):
+		if float(layer["mask"]) > 0.0:
+			depth = maxf(depth, float(layer["amp"]))
+	return depth
 
 
 ## Whether the height field of [param surface] blocks the ray from surface point [param from]
@@ -294,7 +328,7 @@ static func height_field_shadowed(from: Vector3, to_light: Vector3, surface: Dic
 	if rate <= 0.0:
 		return false
 	var z0 := n.dot(from - (surface["point"] as Vector3)) / na
-	var z_top := (1.0 - float(surface["center"])) * float(surface["amp"])
+	var z_top := (1.0 - float(surface["center"])) * slab_depth(surface)
 	if surface.has("detail"):
 		z_top += 0.5 * float((surface["detail"] as Dictionary)["amp"])
 	var steps := ceili((z_top - z0) / 0.0002)

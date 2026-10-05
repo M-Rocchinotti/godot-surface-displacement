@@ -91,7 +91,30 @@ static func displacement_of(material: Material) -> Dictionary:
 		"detail_texture": sm.get_shader_parameter("detail_height_texture") as Texture2D,
 		"detail_height_m": GADSMaterials.get_param(sm, "detail_height_m"),
 		"detail_scale": GADSMaterials.get_param(sm, "detail_scale"),
+		"layers": _layers_of(sm),
 	}
+
+
+## The layers of a layered GADS material, as the tessellator takes them (with "texture").
+static func _layers_of(sm: ShaderMaterial) -> Array:
+	var out := []
+	if not GADSMaterials.parse(sm.shader).get("layered", false):
+		return out
+	for k in [1, 2]:
+		var prefix := "layer%d_" % k
+		var tex := sm.get_shader_parameter(prefix + "height_texture") as Texture2D
+		var amount: float = GADSMaterials.get_param(sm, prefix + "amount")
+		# The tessellator takes the layers in order: an unused layer 1 still holds layer 2's place.
+		out.append({
+			"texture": tex if amount > 0.0 else null,
+			"height_m": GADSMaterials.get_param(sm, prefix + "height_m"),
+			"scale": GADSMaterials.get_param(sm, prefix + "scale"),
+			"mask_channel": GADSMaterials.get_param(sm, prefix + "mask_channel"),
+			"amount": amount if tex != null else 0.0,
+			"slope": GADSMaterials.get_param(sm, prefix + "slope"),
+			"blend_width": GADSMaterials.get_param(sm, prefix + "blend_width"),
+		})
+	return out
 
 
 ## Why [param mesh] cannot be baked, or "" when it can.
@@ -131,6 +154,12 @@ static func cache_key(mesh: Mesh, materials: Array[Material], xform: Transform3D
 			planar = planar or d["mapping"] != GADSMaterials.Mapping.UV
 			d["texture"] = _resource_id(d["texture"])
 			d["detail_texture"] = _resource_id(d["detail_texture"])
+			var layer_ids := []
+			for layer: Dictionary in d["layers"]:
+				var l := layer.duplicate()
+				l["texture"] = _resource_id(l["texture"])
+				layer_ids.append(l)
+			d["layers"] = layer_ids
 		parts.append(d)
 	var b := xform.basis
 	var basis_values := [b.x, b.y, b.z]
@@ -330,6 +359,21 @@ func _make_tessellator(settings: Dictionary) -> RefCounted:
 						return null
 					maps[tex] = tess.call("add_height_map", img)
 				d["height_map" if key == "texture" else "detail_height_map"] = maps[tex]
+			var layers := []
+			for layer: Dictionary in d["layers"]:
+				var l := layer.duplicate()
+				var tex: Texture2D = l["texture"]
+				l.erase("texture")
+				if tex != null:
+					if not maps.has(tex):
+						var img := tex.get_image()
+						if img == null or img.is_empty():
+							error = "cannot read the layer height map %s" % tex.resource_path
+							return null
+						maps[tex] = tess.call("add_height_map", img)
+					l["height_map"] = maps[tex]
+				layers.append(l)
+			d["layers"] = layers
 		tess.call("add_surface", _source.surface_get_arrays(s), d)
 	tess.call("set_transform", _transform)
 	var native_settings := {}

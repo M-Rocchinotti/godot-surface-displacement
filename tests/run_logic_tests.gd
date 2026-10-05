@@ -46,25 +46,28 @@ func test_variants() -> void:
 	print("\n== shader variants")
 	var count := 0
 	var ok := true
-	for m in GADSMaterials.MAPPING_NAMES.size():
-		for q in GADSMaterials.QUALITY_NAMES.size():
-			for depth in [false, true]:
-				var path := GADSMaterials.variant_path(m, q, depth)
-				var shader := load(path) as Shader
-				if shader == null:
-					ok = false
-					print("  missing variant %s" % path)
-					continue
-				count += 1
-				var info := GADSMaterials.parse(shader)
-				var want_depth: bool = depth and q != GADSMaterials.Quality.FLAT
-				ok = ok and info.get("mapping") == m and info.get("quality") == q and info.get("depth_write") == want_depth
-				# Each variant defines exactly what its name says (the generator is the source).
-				var code := shader.code
-				ok = ok and code.contains("#define GADS_POM") == (q != GADSMaterials.Quality.FLAT)
-				ok = ok and code.contains("#define GADS_SELF_SHADOW") == (q == GADSMaterials.Quality.POM_SELF_SHADOW)
-				ok = ok and code.contains("#define GADS_DEPTH_WRITE") == want_depth
-	check(ok, "every mapping x quality x depth variant exists, parses back and defines what its name says (%d loaded)" % count)
+	for layered in [false, true]:
+		for m in GADSMaterials.MAPPING_NAMES.size():
+			for q in GADSMaterials.QUALITY_NAMES.size():
+				for depth in [false, true]:
+					var path := GADSMaterials.variant_path(m, q, depth, layered)
+					var shader := load(path) as Shader
+					if shader == null:
+						ok = false
+						print("  missing variant %s" % path)
+						continue
+					count += 1
+					var info := GADSMaterials.parse(shader)
+					var want_depth: bool = depth and q != GADSMaterials.Quality.FLAT
+					ok = ok and info.get("mapping") == m and info.get("quality") == q and info.get("depth_write") == want_depth
+					ok = ok and info.get("layered") == layered
+					# Each variant defines exactly what its name says (the generator is the source).
+					var code := shader.code
+					ok = ok and code.contains("#define GADS_POM") == (q != GADSMaterials.Quality.FLAT)
+					ok = ok and code.contains("#define GADS_SELF_SHADOW") == (q == GADSMaterials.Quality.POM_SELF_SHADOW)
+					ok = ok and code.contains("#define GADS_DEPTH_WRITE") == want_depth
+					ok = ok and code.contains("#define GADS_LAYERED") == layered
+	check(ok, "every layering x mapping x quality x depth variant exists, parses back and defines what its name says (%d loaded)" % count)
 	check(GADSMaterials.parse(null).is_empty() and not GADSMaterials.is_gads_material(StandardMaterial3D.new()), "other shaders and materials are not taken for GADS variants")
 	var mat := GADSMaterials.create(GADSMaterials.Mapping.UV, {}, {"height_m": 0.02}, GADSMaterials.Quality.POM, true)
 	GADSMaterials.set_quality(mat, GADSMaterials.Quality.FLAT)

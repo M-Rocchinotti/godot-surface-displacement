@@ -178,6 +178,9 @@ bool Tessellator::build_topology() {
 	for (const Displacement &d : displacements_) {
 		bool main_ok = d.height_map >= 0 && size_t(d.height_map) < maps_.size();
 		bool detail_ok = d.detail_map < 0 || size_t(d.detail_map) < maps_.size();
+		for (const Layer &l : d.layers) {
+			detail_ok = detail_ok && (l.map < 0 || size_t(l.map) < maps_.size());
+		}
 		if (!main_ok || !detail_ok) {
 			error_ = "a displacement refers to a height map that was not added";
 			return false;
@@ -418,39 +421,102 @@ double Tessellator::detail_texels(const Displacement &d) const {
 	return has_detail(d) ? d.detail_scale * maps_[d.detail_map]->width() / double(maps_[d.height_map]->width()) : 1.0;
 }
 
-// The relief (m) of one projection at uv (in main-map repeats), the detail layer included, as the
-// shaders' gads_relief(). `lod` is a mip level in the finest texels the displacement has (those
-// texel_size_m() measures); each map is sampled at the matching level of its own texels.
-double Tessellator::relief_at(const Displacement &d, const V2 &uv, double lod) const {
+// Texels of layer k per main-map texel.
+double Tessellator::layer_texels(const Displacement &d, int k) const {
+	return d.layers[k].scale * maps_[d.layers[k].map]->width() / double(maps_[d.height_map]->width());
+}
+
+// The finest texels the displacement samples, per main-map texel (at least 1).
+double Tessellator::finest_texels(const Displacement &d) const {
+	double finest = std::max(1.0, detail_texels(d));
+	for (int k = 0; k < 2; k++) {
+		if (has_layer(d, k)) {
+			finest = std::max(finest, layer_texels(d, k));
+		}
+	}
+	return finest;
+}
+
+static double smoothstep01(double edge0, double edge1, double x) {
+	double t = std::clamp((x - edge0) / (edge1 - edge0), 0.0, 1.0);
+	return t * t * (3.0 - 2.0 * t);
+}
+
+// The masks of layers 1 and 2 at a point of vertex colour `color` moving along `dir` (world), as
+// the shaders' gads_layer_masks x gads_slope_band().
+void Tessellator::layer_masks(const Displacement &d, const float color[4], const V3 &dir, double r_masks[2]) const {
+	for (int k = 0; k < 2; k++) {
+		const Layer &l = d.layers[k];
+		if (!has_layer(d, k)) {
+			r_masks[k] = 0.0;
+			continue;
+		}
+		double m = (l.mask_channel >= 0 && l.mask_channel < 4 ? double(color[l.mask_channel]) : 1.0) * l.amount;
+		if (l.slope.y > l.slope.x) {
+			m *= smoothstep01(l.slope.x, l.slope.y, dir.y);
+		}
+		r_masks[k] = m;
+	}
+}
+
+// Weight of a layer of height `above` over the relief below of height `below` for mask m (as the
+// shaders' gads_height_blend()).
+static double height_blend(double below, double above, double m, double width) {
+	if (m <= 0.0) {
+		return 0.0;
+	}
+	if (m >= 1.0) {
+		return 1.0;
+	}
+	return smoothstep01(-width, width, above - below + (2.0 * m - 1.0) * (1.0 + width));
+}
+
+// The relief (m) of one projection at uv (in main-map repeats), the detail layer and the layers
+// of a layered material included, as the shaders' gads_relief(). `lod` is a mip level in the
+// finest texels the displacement has (those texel_size_m() measures); each map is sampled at the
+// matching level of its own texels.
+double Tessellator::relief_at(const Displacement &d, const V2 &uv, double lod, const double masks[2]) const {
 	const HeightMap &map = *maps_[d.height_map];
-	double texels = detail_texels(d);
-	double main_lod = lod - std::log2(std::max(texels, 1.0));
-	double relief = d.height_m * (remap_height(map.sample_lod(uv, std::max(main_lod, 0.0)), d.remap) - d.center);
+	double main_lod = lod - std::log2(finest_texels(d));
+	double h = remap_height(map.sample_lod(uv, std::max(main_lod, 0.0)), d.remap);
+	double relief = d.height_m * (h - d.center);
 	if (has_detail(d)) {
 		const HeightMap &detail = *maps_[d.detail_map];
-		relief += d.detail_height_m * (detail.sample_lod(uv * d.detail_scale, std::max(main_lod + std::log2(texels), 0.0)) - 0.5);
+		relief += d.detail_height_m * (detail.sample_lod(uv * d.detail_scale, std::max(main_lod + std::log2(detail_texels(d)), 0.0)) - 0.5);
+	}
+	for (int k = 0; k < 2; k++) {
+		if (masks[k] <= 0.0) {
+			continue;
+		}
+		const Layer &l = d.layers[k];
+		double hk = maps_[l.map]->sample_lod(uv * l.scale, std::max(main_lod + std::log2(layer_texels(d, k)), 0.0));
+		double t = height_blend(h, hk, masks[k], l.blend_width);
+		relief += (l.height_m * (hk - d.center) - relief) * t;
+		h += (hk - h) * t;
 	}
 	return relief;
 }
 
-double Tessellator::sample_displacement(int surface, const V3 &world, const V3 &dir, const V2 &uv, double lod) const {
+double Tessellator::sample_displacement(int surface, const V3 &world, const V3 &dir, const V2 &uv, double lod, const float color[4]) const {
 	int di = inputs_[surface].displacement;
 	if (di < 0) {
 		return 0.0;
 	}
 	const Displacement &d = displacements_[di];
+	double masks[2];
+	layer_masks(d, color, dir, masks);
 	if (d.mapping == MAPPING_UV) {
-		return relief_at(d, uv_transform(d, uv), lod);
+		return relief_at(d, uv_transform(d, uv), lod, masks);
 	}
 	if (d.mapping == MAPPING_WORLD) {
-		return relief_at(d, planar_uv(d, -1, world, dir), lod);
+		return relief_at(d, planar_uv(d, -1, world, dir), lod, masks);
 	}
 	double w[3];
 	triplanar_weights(dir, d.triplanar_sharpness, w);
 	double relief = 0.0;
 	for (int a = 0; a < 3; a++) {
 		if (w[a] > 0.0) {
-			relief += w[a] * relief_at(d, planar_uv(d, a, world, dir), lod);
+			relief += w[a] * relief_at(d, planar_uv(d, a, world, dir), lod, masks);
 		}
 	}
 	return relief;
@@ -458,7 +524,7 @@ double Tessellator::sample_displacement(int surface, const V3 &world, const V3 &
 
 double Tessellator::corner_h(const Corner &c) const {
 	const Group &g = groups_[c.group];
-	return sample_displacement(c.surface, g.world, g.dir, c.uv, 0.0);
+	return sample_displacement(c.surface, g.world, g.dir, c.uv, 0.0, c.color);
 }
 
 // --- Error -------------------------------------------------------------------------------------
@@ -472,8 +538,9 @@ double Tessellator::texel_size_m(int t) const {
 	}
 	const Displacement &d = displacements_[di];
 	const HeightMap &map = *maps_[d.height_map];
-	// The detail layer's texels are finer when it repeats more often than its size shrinks.
-	double finer = std::max(1.0, detail_texels(d));
+	// The detail layer's and the layers' texels are finer when they repeat more often than their
+	// size shrinks.
+	double finer = finest_texels(d);
 	if (d.mapping != MAPPING_UV) {
 		return d.texture_size_m.x / map.width() / finer;
 	}
@@ -519,6 +586,18 @@ float Tessellator::tri_error(int t) const {
 	}
 	double lo = 1e30, hi = -1e30, longest_texels = 0.0;
 	double detail_lo = 1e30, detail_hi = -1e30;
+	double z_lo = 1e30, z_hi = -1e30;
+	// A layer counts where any corner's colour lets it in (the slope band is left out: bounds only
+	// need to be conservative).
+	bool layer_active[2] = { false, false };
+	for (int l = 0; l < 2; l++) {
+		if (has_layer(d, l)) {
+			int ch = d.layers[l].mask_channel;
+			for (int k = 0; k < 3; k++) {
+				layer_active[l] = layer_active[l] || ch < 0 || ch > 3 || c[k]->color[ch] > 0.0f;
+			}
+		}
+	}
 	for (int p = 0; p < plane_count; p++) {
 		V2 uv[3];
 		for (int k = 0; k < 3; k++) {
@@ -537,6 +616,14 @@ float Tessellator::tri_error(int t) const {
 			detail_lo = std::min(detail_lo, r_lo);
 			detail_hi = std::max(detail_hi, r_hi);
 		}
+		for (int l = 0; l < 2; l++) {
+			if (layer_active[l]) {
+				const Layer &layer = d.layers[l];
+				maps_[layer.map]->range(uv_min * layer.scale, uv_max * layer.scale, r_lo, r_hi);
+				z_lo = std::min(z_lo, layer.height_m * (r_lo - d.center));
+				z_hi = std::max(z_hi, layer.height_m * (r_hi - d.center));
+			}
+		}
 		for (int k = 0; k < 3; k++) {
 			V2 e = uv[(k + 1) % 3] - uv[k];
 			longest_texels = std::max(longest_texels, std::hypot(e.x * map.width(), e.y * map.height()));
@@ -544,11 +631,19 @@ float Tessellator::tri_error(int t) const {
 				const HeightMap &detail = *maps_[d.detail_map];
 				longest_texels = std::max(longest_texels, d.detail_scale * std::hypot(e.x * detail.width(), e.y * detail.height()));
 			}
+			for (int l = 0; l < 2; l++) {
+				if (layer_active[l]) {
+					const HeightMap &lm = *maps_[d.layers[l].map];
+					longest_texels = std::max(longest_texels, d.layers[l].scale * std::hypot(e.x * lm.width(), e.y * lm.height()));
+				}
+			}
 		}
 	}
-	// Corner values and the field both stay inside [lo, hi] (plus the detail layer's range): the
-	// deviation cannot exceed it.
-	double bound = std::fabs(d.height_m) * (hi - lo) + (has_detail(d) ? d.detail_height_m * std::max(0.0, detail_hi - detail_lo) : 0.0);
+	// Corner values and the field both stay inside the reliefs' range (the main one, the active
+	// layers', plus the detail layer's): the deviation cannot exceed it.
+	z_lo = std::min(z_lo, d.height_m * (lo - d.center));
+	z_hi = std::max(z_hi, d.height_m * (hi - d.center));
+	double bound = (z_hi - z_lo) + (has_detail(d) ? d.detail_height_m * std::max(0.0, detail_hi - detail_lo) : 0.0);
 	if (bound <= settings_.max_error || longest_texels > SCAN_LIMIT_TEXELS) {
 		return float(bound);
 	}
@@ -561,7 +656,11 @@ float Tessellator::tri_error(int t) const {
 			V3 world = g[0]->world * w0 + g[1]->world * a + g[2]->world * b;
 			V3 dir = (g[0]->dir * w0 + g[1]->dir * a + g[2]->dir * b).normalized(g[0]->dir);
 			V2 uv = c[0]->uv * w0 + c[1]->uv * a + c[2]->uv * b;
-			double h = sample_displacement(tr.surface, world, dir, uv, 0.0);
+			float color[4];
+			for (int k = 0; k < 4; k++) {
+				color[k] = float(c[0]->color[k] * w0 + c[1]->color[k] * a + c[2]->color[k] * b);
+			}
+			double h = sample_displacement(tr.surface, world, dir, uv, 0.0, color);
 			double lin = c[0]->h * w0 + c[1]->h * a + c[2]->h * b;
 			err = std::max(err, std::fabs(h - lin));
 		}
@@ -928,7 +1027,7 @@ void Tessellator::build_outputs() {
 		double sum = 0.0;
 		for (int ci : cs) {
 			double lod = settings_.filter_heights && coarse[g] ? corner_lod[ci] : 0.0;
-			sum += sample_displacement(corners_[ci].surface, groups_[g].world, groups_[g].dir, corners_[ci].uv, lod);
+			sum += sample_displacement(corners_[ci].surface, groups_[g].world, groups_[g].dir, corners_[ci].uv, lod, corners_[ci].color);
 		}
 		value[g] = sum / double(cs.size());
 	});
@@ -1011,7 +1110,7 @@ void Tessellator::build_outputs() {
 				V3 rest_n = to_object_normal.xform(g.dir).normalized();
 				// The shaders take the footprint in main-map texels; corner_lod is in the finest ones.
 				int di = inputs_[c.surface].displacement;
-				float main_lod = di < 0 ? corner_lod[ci] : float(std::max(0.0, corner_lod[ci] - std::log2(std::max(detail_texels(displacements_[di]), 1.0))));
+				float main_lod = di < 0 ? corner_lod[ci] : float(std::max(0.0, corner_lod[ci] - std::log2(finest_texels(displacements_[di]))));
 				o.custom0.insert(o.custom0.end(), { float(g.rest.x), float(g.rest.y), float(g.rest.z), main_lod });
 				o.custom1.insert(o.custom1.end(), { float(rest_n.x), float(rest_n.y), float(rest_n.z), float(finest[c.group]) / 32.0f });
 			}

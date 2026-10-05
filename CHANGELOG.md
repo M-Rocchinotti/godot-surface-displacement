@@ -33,6 +33,11 @@ All notable changes to this project are documented here. The format follows
   second, finer relief repeated `detail_scale` times per main repeat, marched, self-shadowed and
   baked together with the main one, and a detail normal map blended by Reoriented Normal
   Mapping. Off (and bit for bit unchanged) while its depth and strength are 0.
+- **Layered master material** (`gads_layered_*` variants, `GADSMaterials.create_layered()`): up
+  to two layers on top of the main one, each with its own textures, depth and tiling, lying
+  where a vertex colour channel (or everywhere) times an amount times a slope band puts them,
+  blended by height (the higher relief wins within the mask). The march, the self-shadow and
+  the bake follow the blended relief; vertex colours carry into baked meshes.
 - Editor: Bake / Rebuild / Clear / Cancel with progress and statistics in the inspector (undoable);
   Project > Tools > **Make Selected Meshes GADSMeshInstance3D** and **Bake Selected
   GADSMeshInstance3D** (undoable); Validate Setup reports stale bakes, unbakeable meshes, a

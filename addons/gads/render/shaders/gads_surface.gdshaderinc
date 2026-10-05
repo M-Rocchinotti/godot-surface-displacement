@@ -4,21 +4,16 @@
 
 #include "res://addons/gads/render/shaders/gads_core.gdshaderinc"
 
-// After a march the hit uv jumps at relief edges, so textures are sampled with the rasterized
-// uv's derivatives. Without a march (flat variants of UV and world mapping) the implicit
-// derivatives are the same and texture() matches BaseMaterial3D bit for bit.
-#if defined(GADS_POM) || defined(GADS_MAPPING_TRIPLANAR)
-#define GADS_SAMPLE(tex, uv, ddx, ddy) textureGrad(tex, uv, ddx, ddy)
-#else
-#define GADS_SAMPLE(tex, uv, ddx, ddy) texture(tex, uv)
-#endif
-
 void vertex() {
 	bool baked = gads_baked > 0.5;
 	gads_geom_normal = normalize(MODEL_NORMAL_MATRIX * NORMAL);
 	gads_world_pos = (MODEL_MATRIX * vec4(baked ? CUSTOM0.xyz : VERTEX, 1.0)).xyz;
 	gads_world_normal = baked ? normalize(MODEL_NORMAL_MATRIX * CUSTOM1.xyz) : gads_geom_normal;
 	gads_tess = baked ? vec2(CUSTOM1.w * 32.0, CUSTOM0.w) : vec2(0.0);
+#ifdef GADS_LAYERED
+	gads_layer_masks = vec2(gads_mask_channel(COLOR, layer1_mask_channel) * layer1_amount,
+			gads_mask_channel(COLOR, layer2_mask_channel) * layer2_amount);
+#endif
 #ifdef GADS_DEPTH_WRITE
 	// Writing VERTEX (even unchanged) stops the engine from drawing this material's depth
 	// pre-pass with its shared flat-depth material. The pre-pass must run this fragment() so it
@@ -29,17 +24,17 @@ void vertex() {
 
 // Marches one projection. Frame space: view space for UV mapping, world space otherwise.
 // Returns the hit's offset from the rasterized point (frame space) and writes its uv and height.
-vec3 gads_resolve_plane(GADSPlane p, vec3 n, vec3 v, float amp, float fade, float lod, out vec2 uv_hit,
+vec3 gads_resolve_plane(GADSPlane p, vec3 n, vec3 v, GADS_RELIEF_ARG arg, float fade, float lod, out vec2 uv_hit,
 		out float z_hit, inout float steps_used) {
 	uv_hit = p.uv;
 	z_hit = 0.0;
 #ifdef GADS_POM
-	if (amp > 1e-5 && lod < gads_pom_range.w && !IN_SHADOW_PASS) {
+	if (gads_relief_amp(arg) > 1e-5 && lod < gads_pom_range.w && !IN_SHADOW_PASS) {
 		vec2 duv_dz = gads_duv_dz(p, n, v);
-		float z_top = gads_slab_top(amp);
-		float z_bot = gads_slab_bottom(amp);
+		float z_top = gads_slab_top(arg);
+		float z_bot = gads_slab_bottom(arg);
 		int steps = gads_step_count(dot(n, v), fade);
-		z_hit = gads_march(p.uv, duv_dz, z_top, z_bot, amp, lod, steps, int(gads_pom_steps.z), uv_hit, steps_used);
+		z_hit = gads_march(p.uv, duv_dz, z_top, z_bot, arg, lod, steps, int(gads_pom_steps.z), uv_hit, steps_used);
 	}
 #endif
 	// Moving z along the relief axis moves the ray point by z * (N.A) / (N.V) towards the camera.
@@ -52,7 +47,17 @@ void fragment() {
 	mat3 world_to_view = mat3(VIEW_MATRIX);
 	float fade = gads_fade(view_distance);
 	// A baked mesh's geometry already carries the relief.
-	float amp = gads_baked > 0.5 ? 0.0 : height_m * fade;
+#ifdef GADS_LAYERED
+	float up = normalize(gads_world_normal).y;
+	GADS_RELIEF_ARG arg = vec3(gads_baked > 0.5 ? 0.0 : fade, gads_layer_masks.x * gads_slope_band(layer1_slope, up),
+			gads_layer_masks.y * gads_slope_band(layer2_slope, up));
+	// Masks for the texture blend, also on a baked mesh (whose relief scale is 0).
+	GADS_RELIEF_ARG sample_arg = vec3(1.0, arg.yz);
+#else
+	GADS_RELIEF_ARG arg = gads_baked > 0.5 ? 0.0 : height_m * fade;
+	GADS_RELIEF_ARG sample_arg = arg;
+#endif
+	float amp = gads_relief_amp(arg);
 	float steps_used = 0.0;
 	float planes_marched = 0.0;
 	vec3 offset_view = vec3(0.0);
@@ -88,18 +93,17 @@ void fragment() {
 	float lod = gads_march_lod(p);
 	vec2 uv_hit;
 	float z_hit;
-	float amp_uv = inv_det != 0.0 ? amp : 0.0;
-	offset_view = gads_resolve_plane(p, n, v, amp_uv, fade, lod, uv_hit, z_hit, steps_used);
+	GADS_RELIEF_ARG arg_uv = inv_det != 0.0 ? arg : arg * 0.0;
+	offset_view = gads_resolve_plane(p, n, v, arg_uv, fade, lod, uv_hit, z_hit, steps_used);
 	planes_marched = steps_used > 0.0 ? 1.0 : 0.0;
-	albedo_sum = GADS_SAMPLE(albedo_texture, uv_hit, p.ddx, p.ddy).rgb;
-	orm_sum = GADS_SAMPLE(orm_texture, uv_hit, p.ddx, p.ddy).rgb;
-	vec3 nm = GADS_SAMPLE(normal_texture, uv_hit, p.ddx, p.ddy).rgb;
+	vec3 nm;
+	gads_sample_surface(uv_hit, p.ddx, p.ddy, lod, sample_arg, albedo_sum, orm_sum, nm);
 	if (gads_baked > 0.5) {
-		nm = gads_detail_normal(nm, p, uv_hit);
+		nm = gads_detail_normal(nm, p, uv_hit, sample_arg);
 	}
 	nm = gads_add_detail_normal(nm, uv_hit, p.ddx, p.ddy);
 	NORMAL_MAP = nm;
-	NORMAL_MAP_DEPTH = normal_strength;
+	NORMAL_MAP_DEPTH = gads_normal_strength();
 	normal_world = view_to_world * n;
 	main_plane = p;
 	main_uv = uv_hit;
@@ -121,17 +125,16 @@ void fragment() {
 	float lod = gads_march_lod(p);
 	vec2 uv_hit;
 	float z_hit;
-	vec3 offset_world = gads_resolve_plane(p, n, v, amp, fade, lod, uv_hit, z_hit, steps_used);
+	vec3 offset_world = gads_resolve_plane(p, n, v, arg, fade, lod, uv_hit, z_hit, steps_used);
 	planes_marched = steps_used > 0.0 ? 1.0 : 0.0;
 	offset_view = world_to_view * offset_world;
-	albedo_sum = GADS_SAMPLE(albedo_texture, uv_hit, p.ddx, p.ddy).rgb;
-	orm_sum = GADS_SAMPLE(orm_texture, uv_hit, p.ddx, p.ddy).rgb;
-	vec3 nm = GADS_SAMPLE(normal_texture, uv_hit, p.ddx, p.ddy).rgb;
+	vec3 nm;
+	gads_sample_surface(uv_hit, p.ddx, p.ddy, lod, sample_arg, albedo_sum, orm_sum, nm);
 	if (gads_baked > 0.5) {
-		nm = gads_detail_normal(nm, p, uv_hit);
+		nm = gads_detail_normal(nm, p, uv_hit, sample_arg);
 	}
 	nm = gads_add_detail_normal(nm, uv_hit, p.ddx, p.ddy);
-	normal_world = gads_apply_normal_map(nm, normalize(p.gu), -normalize(p.gv), normalize(gads_geom_normal), normal_strength);
+	normal_world = gads_apply_normal_map(nm, normalize(p.gu), -normalize(p.gv), normalize(gads_geom_normal), gads_normal_strength());
 	NORMAL = normalize(world_to_view * normal_world);
 	main_plane = p;
 	main_uv = uv_hit;
@@ -163,16 +166,19 @@ void fragment() {
 		vec2 uv_hit;
 		float z_hit;
 		float before = steps_used;
-		offset_world += wa * gads_resolve_plane(p, n, v, amp, fade, lod, uv_hit, z_hit, steps_used);
+		offset_world += wa * gads_resolve_plane(p, n, v, arg, fade, lod, uv_hit, z_hit, steps_used);
 		planes_marched += steps_used > before ? 1.0 : 0.0;
-		albedo_sum += wa * GADS_SAMPLE(albedo_texture, uv_hit, p.ddx, p.ddy).rgb;
-		orm_sum += wa * GADS_SAMPLE(orm_texture, uv_hit, p.ddx, p.ddy).rgb;
-		vec3 nm = GADS_SAMPLE(normal_texture, uv_hit, p.ddx, p.ddy).rgb;
+		vec3 albedo_p;
+		vec3 orm_p;
+		vec3 nm;
+		gads_sample_surface(uv_hit, p.ddx, p.ddy, lod, sample_arg, albedo_p, orm_p, nm);
+		albedo_sum += wa * albedo_p;
+		orm_sum += wa * orm_p;
 		if (gads_baked > 0.5) {
-			nm = gads_detail_normal(nm, p, uv_hit);
+			nm = gads_detail_normal(nm, p, uv_hit, sample_arg);
 		}
 		nm = gads_add_detail_normal(nm, uv_hit, p.ddx, p.ddy);
-		nsum += wa * gads_apply_normal_map(nm, normalize(p.gu), -normalize(p.gv), normalize(gads_geom_normal), normal_strength);
+		nsum += wa * gads_apply_normal_map(nm, normalize(p.gu), -normalize(p.gv), normalize(gads_geom_normal), gads_normal_strength());
 		if (wa > main_w) {
 			main_w = wa;
 			main_plane = p;
@@ -187,7 +193,11 @@ void fragment() {
 	offset_view = world_to_view * offset_world;
 #endif
 
+#ifdef GADS_LAYERED
+	ALBEDO = albedo_sum; // Each layer's tint is applied in gads_sample_surface().
+#else
 	ALBEDO = albedo_sum * albedo_tint.rgb;
+#endif
 	AO = mix(1.0, orm_sum.r, ao_strength);
 	ROUGHNESS = clamp(orm_sum.g * roughness_scale, 0.0, 1.0);
 	METALLIC = clamp(orm_sum.b * metallic_scale, 0.0, 1.0);
@@ -227,6 +237,9 @@ void fragment() {
 		gads_ss_n = normalize(to_view * main_n);
 		gads_ss_axis = normalize(to_view * main_plane.axis);
 		gads_ss_params = vec4(main_lod, steps_used > 0.0 ? amp : 0.0, height_center, gads_shadow.w * self_shadow_strength * in_range);
+#ifdef GADS_LAYERED
+		gads_ss_arg = arg;
+#endif
 	}
 #endif
 

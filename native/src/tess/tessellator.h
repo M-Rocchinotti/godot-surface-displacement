@@ -37,6 +37,19 @@ enum Mapping { MAPPING_UV = 0,
 	MAPPING_WORLD = 1,
 	MAPPING_TRIPLANAR = 2 };
 
+// A layer of a layered GADS material: it covers the relief below where its mask is (a vertex
+// colour channel times amount, times a band of the displacement direction's y), the higher
+// relief winning within the mask (height-aware blending, as gads_height_blend() in the shaders).
+struct Layer {
+	int map = -1; // index into add_height_map(); -1 = none
+	double height_m = 0.03;
+	double scale = 1.0; // repeats per main repeat
+	int mask_channel = 0; // 0-3: vertex colour R, G, B, A; 4: everywhere
+	double amount = 0.0;
+	V2 slope; // smoothstep band of the direction's y; off when y <= x
+	double blend_width = 0.1;
+};
+
 // The displacement of one surface: the GADS material parameters that place its height map.
 struct Displacement {
 	int height_map = -1; // index into add_height_map(); -1 = not displaced
@@ -54,6 +67,7 @@ struct Displacement {
 	int detail_map = -1; // index into add_height_map(); -1 = none
 	double detail_height_m = 0.0;
 	double detail_scale = 8.0;
+	Layer layers[2]; // layered materials: layers 1 and 2
 };
 
 struct SurfaceInput {
@@ -165,10 +179,14 @@ private:
 	};
 
 	bool build_topology();
-	double sample_displacement(int surface, const V3 &world, const V3 &dir, const V2 &uv, double lod) const;
-	double relief_at(const Displacement &d, const V2 &uv, double lod) const;
+	double sample_displacement(int surface, const V3 &world, const V3 &dir, const V2 &uv, double lod, const float color[4]) const;
+	double relief_at(const Displacement &d, const V2 &uv, double lod, const double masks[2]) const;
 	bool has_detail(const Displacement &d) const { return d.detail_map >= 0 && d.detail_height_m > 0.0; }
+	bool has_layer(const Displacement &d, int k) const { return d.layers[k].map >= 0 && d.layers[k].amount > 0.0; }
 	double detail_texels(const Displacement &d) const;
+	double layer_texels(const Displacement &d, int k) const;
+	double finest_texels(const Displacement &d) const;
+	void layer_masks(const Displacement &d, const float color[4], const V3 &dir, double r_masks[2]) const;
 	double corner_h(const Corner &c) const;
 	float tri_error(int t) const;
 	double texel_size_m(int t) const;

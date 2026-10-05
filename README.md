@@ -47,8 +47,11 @@ what the engine allows:
 ## Features
 
 - Ready-made shaders for UV, world-planar and triplanar mapping, each flat / POM /
-  POM + self-shadow, the POM ones optionally with depth write (15 surface shaders plus 3 for the
-  field, generated from one `.gdshaderinc` library you can include in your own shaders).
+  POM + self-shadow, the POM ones optionally with depth write, single or layered (30 surface
+  shaders plus 3 for the field, generated from one `.gdshaderinc` library you can include in
+  your own shaders).
+- Multiple displacement layers: a detail relief and detail normal map on every material, and
+  layered materials with up to three height-blended layers masked by vertex colour and slope.
 - POM measured against a CPU ray / height-field intersection: 0.13 mm 90th-percentile hit error
   on a 50 mm relief, from steep to grazing views, for all mappings (`tests/render_tests.gd`).
 - Self-shadowing whose `light()` matches Godot's built-in lighting to 0.07 % (99th percentile),
@@ -149,6 +152,28 @@ what the engine allows:
 | `detail_height_texture`, `detail_height_m` | black, 0 | Optional detail relief on top of the main one (grain on stones, chips in bricks): `detail_height_m * (d - 0.5)`, marched, self-shadowed and baked together with the main relief. Off at 0. |
 | `detail_normal_texture`, `detail_normal_strength` | flat, 0 | Optional detail normal map, blended onto the main one (Reoriented Normal Mapping). Off at 0. |
 | `detail_scale` | 8 | Detail repeats per main texture repeat. |
+
+#### Layered materials
+
+`gads_layered_<mapping>_<quality>[_depth].gdshader` (or `GADSMaterials.create_layered()`) puts up
+to two more layers on top of the main one, each with its own albedo, normal, ORM and height
+maps, depth (`layerN_height_m`) and tiling (`layerN_scale`, repeats per main repeat). A layer
+lies where its mask is: a vertex colour channel or everywhere (`layerN_mask_channel`), times
+`layerN_amount`, times a band of the surface's up-facing when `layerN_slope.y > layerN_slope.x`
+(`(0.6, 0.85)`: tops only, for moss or snow). Within the mask the higher relief wins
+(height-aware blending: sand fills the gaps between stones before it covers them), with a
+transition `layerN_blend_width` high. The march, the self-shadow and the bake all follow the
+blended relief; GADSManager presets switch layered materials like any other.
+
+```gdscript
+var ground := GADSMaterials.create_layered(GADSMaterials.Mapping.WORLD,
+    {"albedo": rocks_albedo, "normal": rocks_normal, "orm": rocks_arm, "height": rocks_height},
+    {"height_m": 0.06, "height_center": 0.0},
+    [{"albedo": sand_albedo, "normal": sand_normal, "height": sand_height, "height_m": 0.02,
+      "mask": GADSMaterials.LayerMask.VERTEX_R},                  # painted with vertex colour R
+     {"albedo": snow_albedo, "height": snow_height, "height_m": 0.03,
+      "mask": GADSMaterials.LayerMask.EVERYWHERE, "slope": Vector2(0.6, 0.85)}])  # on tops
+```
 
 Your own shaders can use the library the same way the variants do: `render_mode
 diffuse_burley, specular_schlick_ggx;` (the `light()` reproduces these modes), `#define
@@ -394,7 +419,7 @@ addons/gads/                      the addon (all that is shipped)
   core/                           GADSManager (node), GADSSettings (presets), GADSGlobals
   materials/                      GADSMaterials (variants, parameters)
   render/shaders/                 the .gdshaderinc library, field / pebble / capture shaders
-  render/shaders/variants/        the 15 surface and 3 field shaders (generated)
+  render/shaders/variants/        the 30 surface and 3 field shaders (generated)
   render/textures/gads_dfg_lut.exr  Godot's DFG table, recomputed (for the energy compensation)
   terrain/                        GADSDisplacementField3D, GADSPebbleScatter3D, GADSGroundBake
   geometry/                       GADSMeshInstance3D, GADSMeshBaker (baked displacement)
@@ -453,7 +478,7 @@ VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json xvfb-run -a -s "-screen 0 
 
 | Suite | What it checks |
 |---|---|
-| shader variants | The 18 variant files in the repository are what `tools/generate_variants.py` generates. |
+| shader variants | The 33 variant files in the repository are what `tools/generate_variants.py` generates. |
 | logic tests (headless, 53 checks) | Variants parse back to their mapping / quality / depth write; preset table (Ultra keeps soft self-shadowing and at least Medium's parallax next to its geometry, omni and spot lights self-shadow from High up), budgets and feature switches (a switch never adds a feature); edits to a Custom preset's settings apply; presets reach GADS materials on mesh surfaces, overlays, next passes, CSG shapes, MultiMeshes, GridMaps and particles, also those added later; Validate Setup reports each mistake it knows (and nothing on a correct setup); the pebble scatter gets the field's parameters when they change and not when they do not; the ring mesh (vertex count, no triangles in the holes, every ring's outer edge collapsing exactly onto the next ring's inner edge, seam flags); morph bands inside their rings for Ultra's grid and a dense one, a new field's defaults equal Ultra's grid; the ground bake's CPU twin (`GADSGroundBake.sample()`): bilinear heights at 16-bit precision, the gradient normal, nothing displaceable at or beyond the bake's border, the edge continued smoothly beyond it, a 30-degree slope is ground and a 45-degree slope is not at 5 cm and at 20 cm texels, a 15 cm kerb is a step at 5 cm texels, a cell without ground, per-cell layers; every demo texture imported with mipmaps, heights as one-channel half float. |
 | render tests (headed, 77 checks) | **POM against a CPU ray / height-field intersection** (world floor with relief above and below, UV floor, UV wall, triplanar floor and two walls; steep, 45-degree and grazing views): median hit error under 0.2 mm and 90th percentile under 0.4 mm on a 50 mm relief (measured worst 90th percentile 0.13 mm; without the bisection 1.0 mm). **Inverted `height_remap`** (1, 0) on an inverted map draws the same relief (99th percentile 0.10 mm). **World-planar walls**: finite, lit pixels (a smoke test, see the file). **No swimming**: 190 relief markers over 24 camera positions stay within 0.19 mm of their traced position. **Triplanar** marches 1 plane on a floor and 2 on a 45-degree roof. **light() vs Godot's built-in lighting** (dielectric, metal, metal at a grazing view): 99th percentile at most 0.07 %, maximum 0.17 % (limits 0.12 % / 0.3 %); the flat variant equals ORMMaterial3D exactly. **LIGHT_VERTEX**: on the 2 041 pixels whose received shadow depends on where it is computed, 100 % are lit or shadowed as on the relief. **Self-shadow** against a CPU height-field shadow: 99.8 % of 4 929 pixels agree (limit 98 %); from an omni and a spot light, against the shadow towards the light's position: 99.5 % (limit 98 %), and nothing changes with the setting off. **Depth write**: with it, props are cut where the relief (not the plane) predicts on 100 % of the 1 397 pixels where the two disagree, and 4 of 318 484 wall pixels are empty; without it, as the plane predicts and none empty. **Mip shimmer** 10-60 m away: POM flickers 1.02 x as much as flat normal mapping (limit 1.3), and the march samples the mip level the hardware would pick (90th percentile 0.006 levels off). **Distance fade**: 136 mm parallax offset before the fade, 0 beyond it. Globals (the registered defaults and this project's are the Medium preset), parameter defaults equal to the shaders' own, emission pass-through. |
 | field tests (headed, 36 checks) | **Vertex heights** against the height map: 1 539 vertices in all 4 rings, largest error 0.03 mm. **Over a baked ground** (slope, kerb, hole, other ground, the bake's edge): 12 966 vertices against `GADSGroundBake.sample()`, largest error 0.20 mm. **The field's own parallax** against the CPU ray tracer: 90th percentile 0.05 / 0.07 / 0.10 mm (steep / 45 degrees / grazing); its self-shadow agrees with the CPU height-field shadow on 99.8 % of pixels. **No cracks**: 0 background pixels inside the grid from 6 camera positions. **No swimming**: 0 mm height change in the inner ring while the camera walks; in the morph bands at most 0.96 mm per 1 cm camera step (limit 2 mm). **Field vs parallax ground**: 0.15 % mean luminance difference inside the grid (limit 1 %), 0.08 % in the last metre before the relief fades (limit 0.5 %), 0 beyond the grid. **Ground bake**: 1 698 points within 1.9 mm of the mesh surface. **Pebbles stay put**: 0 of 1 536 pebble pixels change when the camera moves 1.24 m across cell boundaries. Lifetime: presets, resizes, a second viewport, freeing the scene, a scene change during a bake. All four demo scenes render at every preset, their ground faces up, and their runtime bakes take about 0.3 s (printed by the test). The demo's fly camera flies. |

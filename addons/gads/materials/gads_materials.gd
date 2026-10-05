@@ -4,13 +4,16 @@ extends RefCounted
 ## Creates GADS materials and switches their shader variant.
 ##
 ## Every GADS material is a [ShaderMaterial] whose shader is one of the generated variants in
-## [code]render/shaders/variants/[/code]: [code]gads_<mapping>_<quality>[_depth].gdshader[/code]. The mapping
-## (UV, world-planar, triplanar) and the depth write are per-material choices; the quality (flat,
-## POM, POM with self-shadowing) is what [GADSManager] switches at runtime. Switching keeps
-## every parameter, because the variants share one set of uniforms.
+## [code]render/shaders/variants/[/code]: [code]gads_[layered_]<mapping>_<quality>[_depth].gdshader[/code].
+## The mapping (UV, world-planar, triplanar), the layering (one relief, or up to three blended by
+## vertex colour, slope and height) and the depth write are per-material choices; the quality
+## (flat, POM, POM with self-shadowing) is what [GADSManager] switches at runtime. Switching
+## keeps every parameter, because the variants share one set of uniforms.
 
 enum Mapping { UV, WORLD, TRIPLANAR }
 enum Quality { FLAT, POM, POM_SELF_SHADOW }
+## Where a layer of a layered material lies: a vertex colour channel, or everywhere.
+enum LayerMask { VERTEX_R, VERTEX_G, VERTEX_B, VERTEX_A, EVERYWHERE }
 
 const VARIANT_DIR := "res://addons/gads/render/shaders/variants/"
 const MAPPING_NAMES: Array[String] = ["uv", "world", "triplanar"]
@@ -39,25 +42,42 @@ const PARAMETER_DEFAULTS := {
 	"detail_scale": 8.0,
 	"detail_normal_strength": 0.0,
 }
+## The defaults of the layered variants' layer parameters (layerN_<name>, N = 1, 2).
+const LAYER_PARAMETER_DEFAULTS := {
+	"tint": Color(1, 1, 1, 1),
+	"normal_strength": 1.0,
+	"height_m": 0.03,
+	"scale": 1.0,
+	"amount": 0.0,
+	"slope": Vector2(0.0, 0.0),
+	"blend_width": 0.1,
+}
 
 
 ## A shader parameter of an GADS material: its value, or the shader's default when it was never set
 ## (null for an unset texture).
 static func get_param(material: ShaderMaterial, name: String) -> Variant:
 	var value: Variant = material.get_shader_parameter(name)
-	return PARAMETER_DEFAULTS.get(name) if value == null else value
+	if value != null:
+		return value
+	if name.begins_with("layer") and name.length() > 7 and name[6] == "_":
+		if name.ends_with("_mask_channel"):
+			return LayerMask.VERTEX_R if name[5] == "1" else LayerMask.VERTEX_G
+		return LAYER_PARAMETER_DEFAULTS.get(name.substr(7))
+	return PARAMETER_DEFAULTS.get(name)
 
-static func variant_path(mapping: Mapping, quality: Quality, depth_write := false) -> String:
+static func variant_path(mapping: Mapping, quality: Quality, depth_write := false, layered := false) -> String:
 	var depth := depth_write and quality != Quality.FLAT
-	return VARIANT_DIR + "gads_%s_%s%s.gdshader" % [MAPPING_NAMES[mapping], QUALITY_NAMES[quality], "_depth" if depth else ""]
+	return VARIANT_DIR + "gads_%s%s_%s%s.gdshader" % ["layered_" if layered else "", MAPPING_NAMES[mapping], QUALITY_NAMES[quality],
+		"_depth" if depth else ""]
 
 
-static func get_shader(mapping: Mapping, quality: Quality, depth_write := false) -> Shader:
-	return load(variant_path(mapping, quality, depth_write))
+static func get_shader(mapping: Mapping, quality: Quality, depth_write := false, layered := false) -> Shader:
+	return load(variant_path(mapping, quality, depth_write, layered))
 
 
-## {"mapping": Mapping, "quality": Quality, "depth_write": bool} of an GADS variant, or {} for any
-## other shader.
+## {"mapping": Mapping, "quality": Quality, "depth_write": bool, "layered": bool} of a GADS
+## variant, or {} for any other shader.
 static func parse(shader: Shader) -> Dictionary:
 	if shader == null or not shader.resource_path.begins_with(VARIANT_DIR):
 		return {}
@@ -66,12 +86,14 @@ static func parse(shader: Shader) -> Dictionary:
 		return {}
 	var depth := stem.ends_with("_depth")
 	stem = stem.trim_prefix("gads_").trim_suffix("_depth")
+	var layered := stem.begins_with("layered_")
+	stem = stem.trim_prefix("layered_")
 	for m in MAPPING_NAMES.size():
 		if not stem.begins_with(MAPPING_NAMES[m] + "_"):
 			continue
 		var q := QUALITY_NAMES.find(stem.trim_prefix(MAPPING_NAMES[m] + "_"))
 		if q >= 0:
-			return {"mapping": m, "quality": q, "depth_write": depth}
+			return {"mapping": m, "quality": q, "depth_write": depth, "layered": layered}
 	return {}
 
 
@@ -135,7 +157,7 @@ static func set_quality(material: ShaderMaterial, quality: Quality) -> bool:
 	if info.is_empty():
 		return false
 	var depth: bool = info["depth_write"] or bool(material.get_meta(&"gads_depth_write", false))
-	var shader := get_shader(info["mapping"], quality, depth)
+	var shader := get_shader(info["mapping"], quality, depth, info["layered"])
 	if material.shader == shader:
 		return false
 	# A flat variant cannot carry the depth write; remember it for the way back.
@@ -154,7 +176,7 @@ static func set_depth_write(material: ShaderMaterial, enabled: bool) -> void:
 		material.set_meta(&"gads_depth_write", true)
 	elif material.has_meta(&"gads_depth_write"):
 		material.remove_meta(&"gads_depth_write")
-	material.shader = get_shader(info["mapping"], info["quality"], enabled)
+	material.shader = get_shader(info["mapping"], info["quality"], enabled, info["layered"])
 
 
 ## A new GADS material. [param textures]: any of "albedo", "normal", "orm", "height",
@@ -176,6 +198,31 @@ static func create(mapping: Mapping, textures: Dictionary, params := {}, quality
 		material.set_shader_parameter("detail_normal_strength", 1.0)
 	for key: String in params:
 		material.set_shader_parameter(key, params[key])
+	return material
+
+
+## A layered GADS material: the main layer from [param textures] and [param params] as in
+## [method create], plus up to two layers on top. Each layer is a Dictionary: textures under
+## "albedo", "normal", "orm", "height"; settings "height_m", "scale" (repeats per main repeat),
+## "mask" ([enum LayerMask], where it lies; default R for layer 1, G for layer 2), "amount"
+## (default 1), "slope" (Vector2 band of the surface's up-facing, e.g. (0.6, 0.85) for tops
+## only), "blend_width", "tint", "normal_strength".
+static func create_layered(mapping: Mapping, textures: Dictionary, params: Dictionary, layers: Array,
+		quality := Quality.POM_SELF_SHADOW, depth_write := false) -> ShaderMaterial:
+	var material := create(mapping, textures, params, quality, depth_write)
+	material.shader = get_shader(mapping, quality, depth_write, true)
+	for i in mini(layers.size(), 2):
+		var layer: Dictionary = layers[i]
+		var prefix := "layer%d_" % (i + 1)
+		for key: String in ["albedo", "normal", "orm", "height"]:
+			if layer.has(key):
+				material.set_shader_parameter(prefix + key + "_texture", layer[key])
+		material.set_shader_parameter(prefix + "amount", float(layer.get("amount", 1.0)))
+		if layer.has("mask"):
+			material.set_shader_parameter(prefix + "mask_channel", int(layer["mask"]))
+		for key: String in ["height_m", "scale", "slope", "blend_width", "tint", "normal_strength"]:
+			if layer.has(key):
+				material.set_shader_parameter(prefix + key, layer[key])
 	return material
 
 

@@ -140,6 +140,8 @@ static func _check_field(field: GADSDisplacementField3D) -> Array:
 		var info := GADSMaterials.parse(layer.shader)
 		if info.is_empty() or info["mapping"] != GADSMaterials.Mapping.WORLD:
 			issues.append(_issue("error", "%s: layer %s is not a world-planar GADS material." % [label, layer.resource_name]))
+		elif info["layered"]:
+			issues.append(_issue("warning", "%s: layer %s is a layered material; the field displaces only its main layer (use one field layer per material layer)." % [label, layer.resource_name]))
 		elif not is_zero_approx(float(GADSMaterials.get_param(layer, "height_center"))):
 			issues.append(_issue("warning", "%s: layer %s has height_center %.2f; the field's relief sits above the ground (0), so the parallax around it should too." % [label, layer.resource_name, GADSMaterials.get_param(layer, "height_center")]))
 	if field.is_inside_tree():

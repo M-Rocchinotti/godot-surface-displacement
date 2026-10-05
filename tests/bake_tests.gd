@@ -38,6 +38,7 @@ func _run() -> void:
 	await _test("library_matches_sources", test_library_matches_sources)
 	await _test("follows_the_height_field", test_accuracy)
 	await _test("detail_layer_baked", test_detail_layer)
+	await _test("layered_material_baked", test_layered)
 	await _test("refines_only_where_the_relief_is", test_adaptivity)
 	await _test("closed_meshes_stay_closed", test_watertight)
 	await _test("locked_borders_stay", test_locked_borders)
@@ -266,6 +267,69 @@ func test_detail_layer() -> void:
 	print("  %d triangles with the detail layer, %d without; largest distance to the combined field %.3f mm" % [n, triangle_count(plain.mesh), worst * 1000.0])
 	check(worst < 2.0 * tolerance, "the geometry follows the combined relief within twice the tolerance")
 	check(n > 2 * triangle_count(plain.mesh), "the detail layer is refined too")
+
+
+## A layered material: a wave layer at half strength everywhere over the bump, blended by height,
+## and a second layer that vertex colour G paints on one half of a subdivided plane. The bake
+## follows the blended relief the shaders draw.
+func test_layered() -> void:
+	var field := bump_field(256, 0.08)
+	var wave := Harness.make_wave_field(128)
+	var amp := 0.06
+	var tolerance := 0.0005
+	var wave_tex := ImageTexture.create_from_image(wave["image"])
+	var mat := GADSMaterials.create_layered(GADSMaterials.Mapping.UV, {"height": ImageTexture.create_from_image(field["image"])},
+			{"height_m": amp, "height_center": 0.0},
+			[{"height": wave_tex, "height_m": 0.02, "scale": 2.0, "mask": GADSMaterials.LayerMask.EVERYWHERE, "amount": 0.5, "blend_width": 0.15},
+			{"height": wave_tex, "height_m": 0.04, "scale": 3.0, "mask": GADSMaterials.LayerMask.VERTEX_G, "amount": 1.0, "blend_width": 0.1}],
+			GADSMaterials.Quality.POM)
+	# A plane whose vertices left of x = 0 carry G = 0, right of it G = 1.
+	var source := PlaneMesh.new()
+	source.size = Vector2(2, 2)
+	source.subdivide_width = 7
+	source.subdivide_depth = 7
+	var arrays := source.get_mesh_arrays()
+	var colors := PackedColorArray()
+	for p: Vector3 in arrays[Mesh.ARRAY_VERTEX]:
+		colors.append(Color(1, 1.0 if p.x > 0.01 else 0.0, 1, 1))
+	arrays[Mesh.ARRAY_COLOR] = colors
+	var mesh := ArrayMesh.new()
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	var baker := bake_with(mesh, mat, {"max_error": tolerance})
+	check(baker.mesh != null, "a layered material bakes (%s)" % baker.error)
+	if baker.mesh == null:
+		return
+	var out := baker.mesh.surface_get_arrays(0)
+	var v: PackedVector3Array = out[Mesh.ARRAY_VERTEX]
+	var uv: PackedVector2Array = out[Mesh.ARRAY_TEX_UV]
+	var col: PackedColorArray = out[Mesh.ARRAY_COLOR]
+	var idx: PackedInt32Array = out[Mesh.ARRAY_INDEX]
+	var worst := 0.0
+	var errors := []
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 9
+	for i in range(0, idx.size(), 3):
+		var a := rng.randf()
+		var b := rng.randf() * (1.0 - a)
+		var c := 1.0 - a - b
+		var p := v[idx[i]] * a + v[idx[i + 1]] * b + v[idx[i + 2]] * c
+		var t := uv[idx[i]] * a + uv[idx[i + 1]] * b + uv[idx[i + 2]] * c
+		var g := col[idx[i]].g * a + col[idx[i + 1]].g * b + col[idx[i + 2]].g * c
+		var surface := {"amp": amp, "center": 0.0, "field": field, "layers": [
+			{"field": wave, "amp": 0.02, "scale": 2.0, "mask": 0.5, "blend_width": 0.15},
+			{"field": wave, "amp": 0.04, "scale": 3.0, "mask": g, "blend_width": 0.1}]}
+		var e := absf(p.y - Harness.relief_value(surface, t))
+		errors.append(e)
+		worst = maxf(worst, e)
+	errors.sort()
+	var p95: float = errors[int(errors.size() * 0.95)]
+	var reported: float = baker.stats["max_error_left"]
+	print("  %d triangles; distance to the blended relief: 95th percentile %.3f mm, largest %.3f mm; the bake reports %.3f mm left where edges reached a texel" % [
+		idx.size() / 3, p95 * 1000.0, worst * 1000.0, reported * 1000.0])
+	check(p95 < 2.0 * tolerance, "95 % of the surface follows the height-blended layers within twice the tolerance")
+	# Blend transitions sharper than a texel cannot be followed; the bake says how far off it stays.
+	check(worst <= maxf(2.0 * tolerance, reported) + 0.0002, "nowhere further from the blended relief than the bake reports")
+	check(col.size() == v.size(), "the vertex colours (the layer masks) are carried into the baked mesh")
 
 
 func test_adaptivity() -> void:

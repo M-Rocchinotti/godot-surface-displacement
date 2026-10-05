@@ -28,6 +28,7 @@ func _run() -> void:
 	await _test("globals_and_parameter_defaults", test_globals_and_defaults)
 	await _test("pom_matches_ray_traced_height_field", test_pom_vs_reference)
 	await _test("detail_layer_matches_height_field", test_detail_layer)
+	await _test("layered_material", test_layered)
 	await _test("inverted_height_remap", test_height_remap)
 	await _test("world_planar_on_walls_stays_finite", test_world_planar_walls)
 	await _test("pom_relief_does_not_swim", test_pom_no_swimming)
@@ -159,7 +160,7 @@ func _surfaces(tile: float) -> Array:
 ## the surface centre to the camera) and returns the per-pixel error of the hit position against
 ## the CPU reference (metres), with the number of pixels compared.
 func measure_pom_error(surface: Array, field: Dictionary, tex: Texture2D, amp: float, tile: float,
-		cam_dir: Vector3, distance := 1.3, stride := 24, detail := {}) -> Dictionary:
+		cam_dir: Vector3, distance := 1.3, stride := 24, detail := {}, layers := []) -> Dictionary:
 	h.new_debug_scene()
 	var params: Dictionary = {"height_m": amp, "texture_size_m": Vector2(tile, tile)}
 	params.merge(surface[6], true)
@@ -168,7 +169,13 @@ func measure_pom_error(surface: Array, field: Dictionary, tex: Texture2D, amp: f
 		textures["detail_height"] = detail["texture"]
 		params["detail_height_m"] = detail["amp"]
 		params["detail_scale"] = detail["scale"]
-	var mat := GADSMaterials.create(surface[1], textures, params, GADSMaterials.Quality.POM)
+	var mat: ShaderMaterial
+	if layers.is_empty():
+		mat = GADSMaterials.create(surface[1], textures, params, GADSMaterials.Quality.POM)
+	else:
+		var layer_defs := layers.map(func(l: Dictionary) -> Dictionary: return {"height": l["texture"], "height_m": l["amp"],
+				"scale": l["scale"], "mask": GADSMaterials.LayerMask.EVERYWHERE, "amount": l["mask"], "blend_width": l["blend_width"]})
+		mat = GADSMaterials.create_layered(surface[1], textures, params, layer_defs, GADSMaterials.Quality.POM)
 	var pts: Array = surface[2]
 	h.add_quad(pts[0], pts[1], pts[2], pts[3], surface[3], mat)
 	var axis: Vector3 = surface[4]
@@ -181,6 +188,8 @@ func measure_pom_error(surface: Array, field: Dictionary, tex: Texture2D, amp: f
 			"center": float(params["height_center"]), "field": field}
 	if not detail.is_empty():
 		ref_surface["detail"] = detail
+	if not layers.is_empty():
+		ref_surface["layers"] = layers
 	var errors := []
 	for py in range(stride / 2, SIZE.y, stride):
 		for px in range(stride / 2, SIZE.x, stride):
@@ -240,6 +249,65 @@ func test_detail_layer() -> void:
 	var a: Image = plain["image"]
 	var b: Image = with_off["image"]
 	check(a.get_data() == b.get_data(), "detail_height_m 0 leaves the image bit for bit unchanged")
+
+
+## Layered materials. The march hits the height-blended relief of two layers (a wave layer at half
+## strength everywhere, so the higher relief wins) as exactly as a single relief; a layer banded by
+## slope lies on a box's top only; a layer masked by vertex colour lies where the colour is.
+func test_layered() -> void:
+	var tile := 1.0
+	var amp := 0.05
+	var field := Harness.make_stone_field(512, 70, 7)
+	var tex := ImageTexture.create_from_image(field["image"])
+	var wave := Harness.make_wave_field(128)
+	var layer := {"field": wave, "texture": ImageTexture.create_from_image(wave["image"]), "amp": 0.03, "scale": 2.0, "mask": 0.5,
+			"blend_width": 0.15}
+	var surfaces := _surfaces(tile)
+	for index in [2, 0, 4]: # uv floor, world floor (relief above), triplanar floor
+		var surface: Array = surfaces[index]
+		for view in [Vector3(0.25, 1.0, 0.35), Vector3(0.3, 0.75, 0.75)]:
+			var r := await measure_pom_error(surface, field, tex, amp, tile, view.normalized(), 1.3, 24, {}, [layer])
+			var e: Array = r["errors"]
+			print("  %-26s %4d px  median %.3f mm  p90 %.3f mm" % [surface[0], e.size(), percentile(e, 0.5) * 1000.0, percentile(e, 0.9) * 1000.0])
+			check(e.size() >= 150 and percentile(e, 0.5) < 0.0002 and percentile(e, 0.9) < 0.0004,
+					"%s, two layers blended by height: hit within 0.2 mm (median) / 0.4 mm (90 %%) of the blended height field" % surface[0])
+	# Colours: base red, layer 1 blue on tops (slope band), layer 2 green where vertex colour G is.
+	var s := h.new_lit_scene(Color(1, 1, 1))
+	var cam := h.add_camera(Vector3(1.6, 2.0, 2.4), Vector3(0, 0.2, 0), 50.0)
+	var layers := [
+		{"tint": Color(0, 0, 1), "mask": GADSMaterials.LayerMask.EVERYWHERE, "slope": Vector2(0.6, 0.85)},
+		{"tint": Color(0, 1, 0), "mask": GADSMaterials.LayerMask.VERTEX_G},
+	]
+	var box_mat := GADSMaterials.create_layered(GADSMaterials.Mapping.TRIPLANAR, {}, {"height_m": 0.0, "albedo_tint": Color(1, 0, 0)}, layers,
+			GADSMaterials.Quality.FLAT)
+	# A box without green in its vertex colour (a mesh without colours reads as white).
+	var box_arrays := BoxMesh.new().get_mesh_arrays()
+	var box_colors := PackedColorArray()
+	box_colors.resize((box_arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array).size())
+	box_colors.fill(Color(1, 0, 1, 1))
+	box_arrays[Mesh.ARRAY_COLOR] = box_colors
+	var box_mesh := ArrayMesh.new()
+	box_mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, box_arrays)
+	var box := MeshInstance3D.new()
+	box.mesh = box_mesh
+	box.material_override = box_mat
+	s.add_child(box)
+	var quad_mat := GADSMaterials.create_layered(GADSMaterials.Mapping.UV, {}, {"height_m": 0.0, "albedo_tint": Color(1, 0, 0)}, layers,
+			GADSMaterials.Quality.FLAT)
+	var q := [Vector3(-2.2, 0, 1.6), Vector3(-0.8, 0, 1.6), Vector3(-0.8, 0, 0.2), Vector3(-2.2, 0, 0.2)]
+	var white := Color(1, 1, 1, 1)
+	var no_green := Color(1, 0, 1, 1)
+	h.add_quad(q[0], q[1], q[2], q[3], [Vector2(0, 1), Vector2(1, 1), Vector2(1, 0), Vector2(0, 0)], quad_mat, [no_green, white, white, no_green])
+	await h.frames(4)
+	var img := await h.capture()
+	var top := img.get_pixelv(Vector2i(cam.unproject_position(Vector3(0, 0.5, 0))))
+	var side := img.get_pixelv(Vector2i(cam.unproject_position(Vector3(0.1, 0.0, 0.5))))
+	var painted := img.get_pixelv(Vector2i(cam.unproject_position(Vector3(-0.85, 0.0, 0.9))))
+	var unpainted := img.get_pixelv(Vector2i(cam.unproject_position(Vector3(-2.15, 0.0, 0.9))))
+	print("  top %s, side %s, quad painted %s, unpainted %s" % [top, side, painted, unpainted])
+	check(top.b > 4.0 * top.r and side.r > 4.0 * side.b, "a slope-banded layer covers the box's top and leaves its sides")
+	# The quad faces up, so layer 1 (tops) covers it; layer 2 covers that where green is painted.
+	check(painted.g > 4.0 * painted.b and unpainted.b > 4.0 * unpainted.g, "a vertex-colour layer lies where the colour is")
 
 
 func test_pom_vs_reference() -> void:

@@ -297,6 +297,9 @@ func _max_depth() -> float:
 		var d := GADSMeshBaker.displacement_of(m)
 		if not d.is_empty():
 			depth = maxf(depth, d["height_m"])
+			for layer: Dictionary in d["layers"]:
+				if layer["amount"] > 0.0:
+					depth = maxf(depth, layer["height_m"])
 	return depth
 
 
