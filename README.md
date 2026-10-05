@@ -295,7 +295,14 @@ thread and are undoable. **Bake Selected GADSMeshInstance3D** in Project > Tools
 | `hard_angle` | 30 degrees | Source normals further apart stay a hard edge in the rebuilt normals. |
 | `generate_lods` | on | Godot's automatic LODs on the baked mesh. |
 | `cache_directory` | `res://gads_baked` | One `<name>_<key>.mesh` per bake; the scene refers to the file. |
+| `geometry_range`, `geometry_range_margin` | 0, 2 m | Beyond `geometry_range` the source mesh is drawn with the materials' parallax instead of the baked geometry, cross-faded over the margin (0: geometry at every distance). `suggest_geometry_range()` gives the distance where the relief covers about two pixels. |
 | `collision` | None | Trimesh or Convex: a static body with a shape from a coarser pass (`collision_max_triangles` 20 000, tolerance x `collision_error_scale` 4), on `collision_layer` / `collision_mask`. |
+
+**Level of detail.** Near the camera the baked geometry, with Godot's automatic LODs chosen by
+screen-space error (`lod_bias` on the node, `rendering/mesh_lod/lod_change/threshold_pixels`
+for the project); beyond `geometry_range` the source mesh with parallax; beyond the preset's
+fade distance plain normal mapping. Each step is cheaper than the one before and the switches
+cross-fade.
 
 What the bake does: longest-edge bisection where the height field deviates from the triangles by
 more than the tolerance (in world metres), worst regions first until the budget; one position

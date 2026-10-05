@@ -55,6 +55,7 @@ func _run() -> void:
 	await _test("save_and_load", test_save_load)
 	if DisplayServer.get_name() != "headless":
 		await _test("renders_like_parallax", test_render)
+		await _test("geometry_to_parallax_by_distance", test_geometry_range)
 	print("\nbake tests: %d passed, %d failed" % [_passed, _failed])
 	h.clear_scene()
 	h.viewport.queue_free()
@@ -749,3 +750,39 @@ static func _mean_difference(a: Image, b: Image, pixels: Array) -> float:
 	for p: Vector2i in pixels:
 		sum += _difference(a.get_pixelv(p), b.get_pixelv(p))
 	return sum / maxf(pixels.size(), 1.0)
+
+
+## Beyond geometry_range the source mesh with parallax replaces the baked geometry: the
+## Tessellation view shows the baked bump's refinement near and none (blue) far away, through a
+## telephoto lens so the plane fills the view at every distance.
+func test_geometry_range() -> void:
+	var field := bump_field(128, 0.1)
+	var s := h.new_debug_scene()
+	var node := _make_node(uv_material(field, 0.08))
+	node.quality = GADSMeshInstance3D.Quality.HIGH
+	s.add_child(node)
+	node.bake()
+	node.geometry_range = 12.0
+	node.geometry_range_margin = 1.0
+	var fallback := node.get_fallback()
+	check(fallback != null and fallback.mesh == node.source_mesh and node.get_child_count(false) == 0,
+			"an internal child draws the source mesh beyond the range")
+	var suggested := node.suggest_geometry_range()
+	print("  suggested range for an 80 mm relief at 1080p, 70 degrees: %.1f m" % suggested)
+	check(suggested > 30.0 and suggested < 60.0, "suggest_geometry_range() is where the relief covers about two pixels")
+	GADSGlobals.set_value(GADSGlobals.DEBUG, Vector4(GADSManager.DebugView.TESSELLATION, 0.1, 0, 0))
+	var cam := h.add_camera(Vector3(0, 1, 1), Vector3.ZERO, 6.0)
+	var colors := {}
+	for distance in [6.0, 20.0]:
+		cam.look_at_from_position(Vector3(0, 1, 1).normalized() * distance, Vector3.ZERO)
+		await h.frames(4)
+		var img := await h.capture()
+		colors[distance] = img.get_pixel(SIZE.x / 2, SIZE.y / 2)
+	print("  centre at 6 m %s, at 20 m %s" % [colors[6.0], colors[20.0]])
+	check(colors[6.0].r > colors[6.0].b, "near: the baked geometry (refined, warm)")
+	check(colors[20.0].b > 0.9 and colors[20.0].r < 0.2, "far: the source mesh with parallax (no refinement, blue)")
+	node.geometry_range = 0.0
+	await process_frame
+	check(node.get_fallback() == null and node.visibility_range_end == 0.0, "geometry_range 0 removes the fallback and the node's range")
+	node.queue_free()
+	await process_frame

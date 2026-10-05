@@ -38,6 +38,10 @@ All notable changes to this project are documented here. The format follows
   where a vertex colour channel (or everywhere) times an amount times a slope band puts them,
   blended by height (the higher relief wins within the mask). The march, the self-shadow and
   the bake follow the blended relief; vertex colours carry into baked meshes.
+- **Geometry to parallax by distance**: `GADSMeshInstance3D.geometry_range` cross-fades the
+  baked geometry into the source mesh drawn with the materials' parallax beyond a distance
+  (`suggest_geometry_range()` gives where the relief shrinks below two pixels), so detail goes
+  geometry (with Godot's screen-space-error LODs), then parallax, then normal mapping.
 - Editor: Bake / Rebuild / Clear / Cancel with progress and statistics in the inspector (undoable);
   Project > Tools > **Make Selected Meshes GADSMeshInstance3D** and **Bake Selected
   GADSMeshInstance3D** (undoable); Validate Setup reports stale bakes, unbakeable meshes, a

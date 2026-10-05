@@ -78,6 +78,21 @@ const BAKED_PARAMETER := &"gads_baked"
 ## Where bakes are saved (one file per key; files of earlier bakes are not deleted).
 @export_dir var cache_directory := "res://gads_baked"
 
+@export_group("Distance")
+## Beyond this distance (m) the source mesh is drawn with the materials' parallax instead of the
+## baked geometry, cross-faded over geometry_range_margin on either side: geometry near the camera,
+## parallax further out, plain normal mapping beyond the presets' fade. 0: geometry at every
+## distance. [method suggest_geometry_range] gives the distance where the relief shrinks below a
+## couple of pixels. While it is set, the node uses its own visibility range.
+@export_range(0.0, 1000.0, 0.1, "or_greater", "suffix:m") var geometry_range := 0.0:
+	set(value):
+		geometry_range = value
+		_update_fallback()
+@export_range(0.0, 50.0, 0.1, "or_greater", "suffix:m") var geometry_range_margin := 2.0:
+	set(value):
+		geometry_range_margin = value
+		_update_fallback()
+
 @export_group("Collision")
 ## A static body with this shape, made by a coarser pass of its own.
 @export var collision := GADSMeshBaker.Collision.NONE:
@@ -106,6 +121,8 @@ const BAKED_PARAMETER := &"gads_baked"
 var _baker: GADSMeshBaker
 var _pending := {}
 var _body: StaticBody3D
+var _fallback: MeshInstance3D
+var _owns_visibility_range := false
 
 
 func _ready() -> void:
@@ -121,6 +138,7 @@ func _ready() -> void:
 		_apply_state({"baked": false})
 	_apply_parameter()
 	_update_collision()
+	_update_fallback()
 
 
 func _validate_property(property: Dictionary) -> void:
@@ -397,6 +415,7 @@ func _apply_state(state: Dictionary) -> void:
 	mesh = state.get("mesh") if baked else source_mesh
 	_apply_parameter()
 	_update_collision()
+	_update_fallback()
 	update_configuration_warnings()
 	notify_property_list_changed()
 
@@ -424,3 +443,56 @@ func _update_collision() -> void:
 	_body.collision_layer = collision_layer
 	_body.collision_mask = collision_mask
 	(_body.get_child(0) as CollisionShape3D).shape = collision_shape
+
+
+## The distance (m) where the deepest relief of the materials covers [param pixels] pixels on a
+## screen [param screen_height] pixels high with a vertical field of view of [param fov_deg]:
+## beyond it the baked geometry adds little over parallax.
+func suggest_geometry_range(pixels := 2.0, screen_height := 1080.0, fov_deg := 70.0) -> float:
+	var depth := _max_depth()
+	if depth <= 0.0:
+		return 0.0
+	return depth * screen_height / (2.0 * tan(deg_to_rad(fov_deg) * 0.5) * pixels)
+
+
+## The node that draws the source mesh with parallax beyond geometry_range (an internal child),
+## or null.
+func get_fallback() -> MeshInstance3D:
+	return _fallback
+
+
+## Beyond geometry_range: an internal child draws the source mesh (the materials then march, as
+## gads_baked is not set on it), and the two cross-fade through their visibility ranges.
+func _update_fallback() -> void:
+	if not is_inside_tree():
+		return
+	var want := baked and geometry_range > 0.0 and source_mesh != null
+	if not want:
+		if _fallback != null:
+			_fallback.queue_free()
+			_fallback = null
+		if _owns_visibility_range:
+			visibility_range_end = 0.0
+			visibility_range_end_margin = 0.0
+			visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_DISABLED
+			_owns_visibility_range = false
+		return
+	if _fallback == null:
+		_fallback = MeshInstance3D.new()
+		_fallback.name = "GADSParallaxFallback"
+		add_child(_fallback, false, Node.INTERNAL_MODE_BACK)
+	_fallback.mesh = source_mesh
+	_fallback.material_override = material_override
+	_fallback.material_overlay = material_overlay
+	for s in get_surface_override_material_count():
+		if s < _fallback.get_surface_override_material_count():
+			_fallback.set_surface_override_material(s, get_surface_override_material(s))
+	_fallback.cast_shadow = cast_shadow
+	_fallback.layers = layers
+	_fallback.visibility_range_begin = geometry_range
+	_fallback.visibility_range_begin_margin = geometry_range_margin
+	_fallback.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF
+	visibility_range_end = geometry_range
+	visibility_range_end_margin = geometry_range_margin
+	visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF
+	_owns_visibility_range = true
