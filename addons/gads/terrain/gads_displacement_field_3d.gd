@@ -86,6 +86,9 @@ signal baked
 @export var camera: Camera3D
 
 const MAX_LAYERS := 4
+## The height range of the transition between two layers' reliefs where they meet (normalised
+## heights; the layered material's default layer blend width).
+const BLEND_WIDTH := 0.1
 ## The field shader's per-layer surface-effect parameters (see _apply_layers).
 const EFFECT_PARAMS := ["layer_fx_cover_color", "layer_fx_cover", "layer_fx_water", "layer_fx_cavity", "layer_fx_edge", "layer_fx_radius"]
 const MAX_LEVELS := 8
@@ -261,10 +264,19 @@ func get_surface_height(world_position: Vector3) -> float:
 	if displaceable <= 0.0:
 		return ground
 	w = w / sum if sum > 1e-4 else Color(1, 0, 0, 0)
+	# Blended by height, as the shader blends the layers (gads_field_layers).
 	var relief := 0.0
+	var h_acc := 0.0
+	var acc := 0.0
 	for i in count:
-		if w[i] > 0.001 and layers[i] != null:
-			relief += w[i] * _layer_relief(layers[i], xz)
+		if w[i] <= 0.001 or layers[i] == null:
+			continue
+		var hl := _layer_h(layers[i], xz)
+		acc += w[i]
+		var t := height_blend(h_acc, hl, w[i] / acc, BLEND_WIDTH)
+		relief = lerpf(relief, float(_param(layers[i], "height_m")) * hl, t)
+		h_acc = lerpf(h_acc, hl, t)
+	relief *= acc
 	var deformation := GADSDeformationField.find_active(get_tree()) if is_inside_tree() else null
 	if deformation != null:
 		relief -= deformation.get_depth(world_position)
@@ -352,6 +364,23 @@ func _finest_texel() -> float:
 
 ## A layer material's relief (m) at world xz: height_m x its remapped height map there (mip 0,
 ## bilinear, repeating; world-planar mapping with its size, offset and rotation).
+## The weight of the relief [param above] over [param below] (normalised heights) for its share
+## [param m] of the weights: the higher relief wins in between, over a transition [param width]
+## high (the shaders' gads_height_blend).
+static func height_blend(below: float, above: float, m: float, width: float) -> float:
+	if m <= 0.0:
+		return 0.0
+	if m >= 1.0:
+		return 1.0
+	return smoothstep(-width, width, above - below + (2.0 * m - 1.0) * (1.0 + width))
+
+
+## A layer's normalised height (0..1 after its remap) at world [param xz], full resolution.
+func _layer_h(m: ShaderMaterial, xz: Vector2) -> float:
+	var depth := float(_param(m, "height_m"))
+	return _layer_relief(m, xz) / depth if absf(depth) > 1e-9 else 0.0
+
+
 func _layer_relief(m: ShaderMaterial, xz: Vector2) -> float:
 	var tex := m.get_shader_parameter("height_texture") as Texture2D
 	if tex == null:

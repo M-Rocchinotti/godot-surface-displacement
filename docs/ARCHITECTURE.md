@@ -147,7 +147,15 @@ snapping moves ring boundaries, the geometry does not pop either (render test: u
 
 ### 4.3 Heights, layers, the ground
 
-`y = ground + lift + fade_field(d) * fade_pom(d) * sum_i w_i * height_m_i * h_i(xz, lod)`
+`y = ground + lift + fade_field(d) * fade_pom(d) * relief(w, xz, lod)`
+
+The relief blends the layers' `height_m_i * h_i(xz, lod)` by height, as the layered material
+does: in layer order, each layer lies over the blend of the ones before it with weight
+`t = smoothstep(-b, b, h_i - h_below + (2 m - 1)(1 + b))`, where `m` is its share of the weights so
+far, `h` the normalised heights and `b` = 0.1: where layers meet, the higher relief wins (stones
+stick out of sand) instead of an average. The fragments shade with the weights this blend gives
+each layer at the marched hit, and `get_surface_height()` blends the same way on the CPU. A single
+layer, or weights of 0 and 1, give the plain `w_i * height_m_i * h_i`.
 
 - `ground` and the layer weights `w` come from an `GADSGroundBake` (or a flat plane at the node's
   height). The bake renders the ground group's meshes top-down in their own `World3D` with a

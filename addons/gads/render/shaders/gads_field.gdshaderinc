@@ -10,9 +10,11 @@
 // coarser, so at the edge (m = 1) its vertices, positions and heights are bit-identical to the
 // next ring's (m = 0). Edge vertices force m = 1 / m = 0, whatever the distances say.
 //
-// Height, "up only": y = ground + lift + fade * sum_i(w_i * height_m_i * h_i), where ground and
-// the layer weights w come from the baked ground or a flat plane (gads_ground.gdshaderinc) and h_i
-// from each layer's height map at the mip that matches the vertex spacing. Where no layer is
+// Height, "up only": y = ground + lift + fade * relief, where ground and the layer weights w come
+// from the baked ground or a flat plane (gads_ground.gdshaderinc) and the relief blends the
+// layers' height_m_i * h_i by height, as the layered material does: where layers meet, the higher
+// relief wins (stones stick out of sand) instead of an average. h_i is each layer's height map at
+// the mip that matches the vertex spacing. Where no layer is
 // displaceable, the vertices dive `push_down` below the ground so the original ground mesh hides
 // them. The vertices pass the layer weights on to the fragments.
 //
@@ -88,30 +90,66 @@ float gads_layer_h(int i, vec2 xz, float lod) {
 	return gads_remap_height(h, layer_a[i].yz);
 }
 
-// Relief above the ground (m) at world xz: sum over layers of weight * height_m * h, minus the
-// runtime deformation there. `lod` is log2 of metres per sample; each layer adds -log2 of its
-// texel size.
-float gads_field_relief(vec2 xz, float lod, vec4 w) {
-	float r = -gads_deformation(xz);
+// The transition between two layers' reliefs (normalised heights), as gads_core's
+// gads_height_blend: the weight of `above` over `below` for its share m of the weights, the
+// higher relief winning in between, over a transition `width` high.
+#define GADS_FIELD_BLEND_WIDTH 0.1
+float gads_field_height_blend(float below, float above, float m, float width) {
+	if (m <= 0.0) {
+		return 0.0;
+	}
+	if (m >= 1.0) {
+		return 1.0;
+	}
+	return smoothstep(-width, width, above - below + (2.0 * m - 1.0) * (1.0 + width));
+}
+
+// The layers' relief above the ground (m) at world xz, blended by height: each layer lies over
+// the ones before it by its share of their weights so far, the higher relief winning in between;
+// scaled by the weights' sum (the distance fade passes scaled weights). `eff`: the weight the
+// blend gives each layer, for the shading. `lod` is log2 of metres per sample; each layer adds
+// -log2 of its texel size.
+float gads_field_layers(vec2 xz, float lod, vec4 w, out vec4 eff) {
+	eff = vec4(0.0);
+	float relief = 0.0;
+	float h_acc = 0.0;
+	float acc = 0.0;
 	for (int i = 0; i < GADS_FIELD_LAYERS; i++) {
 		if (i >= layer_count) {
 			break;
 		}
-		if (w[i] > 0.001) {
-			r += w[i] * layer_a[i].x * gads_layer_h(i, xz, max(lod + layer_e[i].w, 0.0));
+		if (w[i] <= 0.001) {
+			continue;
 		}
+		float h = gads_layer_h(i, xz, max(lod + layer_e[i].w, 0.0));
+		acc += w[i];
+		float t = gads_field_height_blend(h_acc, h, w[i] / acc, GADS_FIELD_BLEND_WIDTH);
+		relief = mix(relief, layer_a[i].x * h, t);
+		h_acc = mix(h_acc, h, t);
+		eff *= 1.0 - t;
+		eff[i] = t;
 	}
-	return r;
+	return relief * acc;
 }
 
+// Relief above the ground (m) at world xz, minus the runtime deformation there.
+float gads_field_relief(vec2 xz, float lod, vec4 w) {
+	vec4 eff;
+	return gads_field_layers(xz, lod, w, eff) - gads_deformation(xz);
+}
+
+// The deepest relief the weighted layers can show (the march's slab): the highest active layer's
+// depth (blended by height, the relief reaches any of them), scaled like the relief.
 float gads_field_amp(vec4 w) {
 	float a = 0.0;
+	float acc = 0.0;
 	for (int i = 0; i < GADS_FIELD_LAYERS; i++) {
-		if (i < layer_count) {
-			a += w[i] * layer_a[i].x;
+		if (i < layer_count && w[i] > 0.001) {
+			a = max(a, layer_a[i].x);
+			acc += w[i];
 		}
 	}
-	return a;
+	return a * acc;
 }
 
 // Normalised layer weights from the ground's, and how displaceable the point is (0 = not at all).
@@ -250,6 +288,12 @@ void fragment() {
 		hit = wpos + v * ((z_hit - z_proxy) * n.y / nv);
 	}
 #endif
+	if (layer_count > 1) {
+		// The shading follows the height-aware blend at the hit, as the relief does.
+		vec4 eff;
+		gads_field_layers(xz_hit, lod, w, eff);
+		w = eff;
+	}
 	vec3 albedo = vec3(0.0);
 	vec3 orm = vec3(0.0);
 	vec3 nsum = vec3(0.0);

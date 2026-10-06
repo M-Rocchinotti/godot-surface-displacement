@@ -157,6 +157,10 @@ All notable changes to this project are documented here. The format follows
   collision and the detail field's ground data. Edited maps are one texel per vertex, saved into
   `data_directory`. Runtime API: `sculpt()`, `paint_splatmap()`, `set_height_region()` /
   `set_splat_region()`, `intersect_ray()` (no physics needed), the `edited` signal.
+- **Field layers blend by height**: where the near-camera field's layers meet, the higher relief
+  wins (stones stick out of sand) instead of an average, in the geometry, the parallax, the
+  shading and `get_surface_height()`, as the layered material blends its layers, so the field
+  and the terrain's material agree at layer borders.
 - **Native terrain chunks**: GADSTerrain3D builds its chunks (heights, normals, layer weights,
   LOD errors, skirts, index LODs, occluders) with the native `GADSTerrainMesher` when the library
   is loaded: the same arrays as the GDScript builder (kept as the fallback; tested equal), many

@@ -29,6 +29,7 @@ func _run() -> void:
 	await _test("runtime_deformation_moves_the_geometry", test_deformation)
 	await _test("baked_ground_matches_the_cpu_reference", test_baked_ground)
 	await _test("field_pom_matches_ray_traced_height_field", test_field_pom)
+	await _test("layers_blend_by_height", test_layer_height_blend)
 	await _test("no_cracks_between_rings", test_no_cracks)
 	await _test("geometry_does_not_swim", test_no_swimming)
 	await _test("edge_blends_into_pom", test_edge_seam)
@@ -330,6 +331,82 @@ static func percentile(values: Array, q: float) -> float:
 	var sorted := values.duplicate()
 	sorted.sort()
 	return sorted[clampi(int(q * (sorted.size() - 1) + 0.5), 0, sorted.size() - 1)]
+
+
+## Where two layers meet, the higher relief wins, as in the layered material: stones (red, a
+## stone field) stick out of sand (blue, flat) over a band of mixed weights instead of fading into
+## it, in the colours, and the relief query blends the same way.
+func test_layer_height_blend() -> void:
+	var tile := 1.0
+	h.new_lit_scene(Color(0.6, 0.6, 0.6))
+	h.add_sun(70.0, 30.0, false)
+	var stones := Harness.make_stone_field(256, 40, 5)
+	var red := Image.create(4, 4, false, Image.FORMAT_RGB8)
+	red.fill(Color(0.9, 0.1, 0.1))
+	var blue := Image.create(4, 4, false, Image.FORMAT_RGB8)
+	blue.fill(Color(0.1, 0.1, 0.9))
+	var flat := Image.create(4, 4, false, Image.FORMAT_RF)
+	flat.fill(Color(0.3, 0, 0))
+	var sand := GADSMaterials.create(GADSMaterials.Mapping.WORLD, {"height": ImageTexture.create_from_image(flat), "albedo": ImageTexture.create_from_image(blue)},
+		{"height_m": 0.04, "height_center": 0.0, "texture_size_m": Vector2(tile, tile)}, GADSMaterials.Quality.POM)
+	var rock := GADSMaterials.create(GADSMaterials.Mapping.WORLD, {"height": ImageTexture.create_from_image(stones["image"]), "albedo": ImageTexture.create_from_image(red)},
+		{"height_m": 0.04, "height_center": 0.0, "texture_size_m": Vector2(tile, tile)}, GADSMaterials.Quality.POM)
+	# Ground data: sand, then a stripe of stones; the weights cross over between the texels.
+	var n := 64
+	var texel := 0.1
+	var heights := PackedFloat32Array()
+	heights.resize(n * n)
+	var codes := PackedInt32Array()
+	codes.resize(n * n)
+	for z in n:
+		for x in n:
+			codes[z * n + x] = 1 if x >= n / 2 else 0
+	var bake := GADSGroundBake.from_arrays(Vector2i(n, n), heights, codes, Vector2(-n * texel * 0.5, -n * texel * 0.5), texel)
+	var tracked := add_tracked_camera(Vector3(0, 1.7, 0))
+	var f := GADSDisplacementField3D.new()
+	f.layers = [sand, rock]
+	f.camera = tracked
+	f.bake_on_ready = false
+	f.ground_bake = bake
+	h.scene.add_child(f)
+	f.set_quality(GADSMaterials.Quality.POM)
+	add_top_camera(Vector2(0.0, 0.0), 0.0025)
+	await h.frames(8)
+	var img := await h.capture()
+	# The band where both weights are between 0.2 and 0.8: x within 0.03 m of the stripe's edge
+	# (texel centres 0.05 m either side of it).
+	var pure := 0
+	var mixed := 0
+	for py in range(0, SIZE.y, 2):
+		for px in range(0, SIZE.x, 2):
+			var xz := pixel_to_xz(Vector2i(px, py), Vector2.ZERO, 0.0025)
+			if absf(xz.x) > 0.03:
+				continue
+			var c := img.get_pixel(px, py)
+			if c.r + c.b < 0.05:
+				continue
+			var share := c.r / (c.r + c.b)
+			if share > 0.85 or share < 0.15:
+				pure += 1
+			else:
+				mixed += 1
+	print("  in the band of mixed weights: %d pixels show one layer, %d a mix" % [pure, mixed])
+	check(pure > 3 * mixed and pure > 200, "where layers meet, one layer shows at each point (the higher relief wins), not an average")
+	# The relief query: on the band, the stone where it is higher than the sand's 0.3, else sand.
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 5
+	var worst := 0.0
+	for i in 200:
+		var xz := Vector2(rng.randf_range(-0.03, 0.03), rng.randf_range(-0.5, 0.5))
+		var s := bake.sample(xz)
+		var w: Color = s["weights"]
+		var hs := 0.3
+		var hr := Harness.sample_field(stones, xz / tile)
+		var t := GADSDisplacementField3D.height_blend(hs, hr, w.g / (w.r + w.g), GADSDisplacementField3D.BLEND_WIDTH)
+		var want := lerpf(0.04 * hs, 0.04 * hr, t) * (w.r + w.g)
+		worst = maxf(worst, absf(f.get_surface_height(Vector3(xz.x, 0, xz.y)) - want))
+	check(worst < 1e-5, "get_surface_height() blends the layers by height too (%.6f m)" % worst)
+	h.clear_scene()
 
 
 # --- 1b. The field's fragments march the relief like the surfaces -------------------------------
