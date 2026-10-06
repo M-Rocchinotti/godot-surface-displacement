@@ -83,6 +83,10 @@ struct SurfaceInput {
 	std::vector<V3> normals; // empty: face normals
 	std::vector<V2> uv, uv2; // empty: absent
 	std::vector<float> colors; // 4 per vertex, empty: absent
+	// Skinning: bone_count (4 or 8) bone indices and weights per vertex; 0: not skinned.
+	std::vector<int> bones;
+	std::vector<float> weights;
+	int bone_count = 0;
 	std::vector<int> indices; // empty: unindexed triangles
 	int displacement = -1; // index into add_displacement(); -1 = not displaced
 };
@@ -90,6 +94,9 @@ struct SurfaceInput {
 struct SurfaceOutput {
 	std::vector<float> positions, normals, tangents, uv, uv2, colors, custom0, custom1;
 	std::vector<int> indices;
+	std::vector<int> bones; // bone_count per vertex (skinned surfaces)
+	std::vector<float> weights;
+	int bone_count = 0;
 	bool has_uv = false, has_uv2 = false, has_colors = false;
 };
 
@@ -250,6 +257,14 @@ private:
 	std::vector<SurfaceInput> inputs_;
 	std::vector<Group> groups_;
 	std::vector<Corner> corners_;
+	// Skinning of each corner (parallel to corners_ when a surface is skinned, else empty): its
+	// bone_count strongest influences, weights summing to 1.
+	struct Skin {
+		int b[8] = { 0, 0, 0, 0, 0, 0, 0, 0 };
+		float w[8] = { 0, 0, 0, 0, 0, 0, 0, 0 };
+	};
+	std::vector<Skin> skins_;
+	static Skin mix_skins(const Skin &x, const Skin &y, int count);
 	std::vector<Tri> tris_;
 	EdgeTable edges_;
 	std::vector<std::vector<int>> extra_;

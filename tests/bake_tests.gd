@@ -62,6 +62,7 @@ func _run() -> void:
 	await _test("export", test_export)
 	await _test("sculpt", test_sculpt)
 	await _test("bake_cache", test_bake_cache)
+	await _test("skinned", test_skinned)
 	await _test("import_options", test_import)
 	if DisplayServer.get_name() != "headless":
 		await _test("renders_like_parallax", test_render)
@@ -1452,6 +1453,73 @@ func test_runtime_budget() -> void:
 ## Sculpting: picking finds the uv under a ray; a sculpt map raises the baked surface by its
 ## offsets at the source uvs, on a mesh without any relief and on top of a relief; the bake key
 ## follows it; removing it bakes flat again.
+## Skinned meshes: the bake keeps the bone weights, interpolated between the source vertices
+## (linear across the strip here), summing to 1; clusters deform with the node's skeleton.
+func test_skinned() -> void:
+	var source := plane()
+	var arrays := source.get_mesh_arrays()
+	var v: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+	var bones := PackedInt32Array()
+	var weights := PackedFloat32Array()
+	for p in v:
+		var right := (p.x + 1.0) * 0.5
+		bones.append_array([0, 1, 0, 0])
+		weights.append_array([1.0 - right, right, 0.0, 0.0])
+	arrays[Mesh.ARRAY_BONES] = bones
+	arrays[Mesh.ARRAY_WEIGHTS] = weights
+	var skinned := ArrayMesh.new()
+	skinned.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	var holder := Node3D.new()
+	root.add_child(holder)
+	var skeleton := Skeleton3D.new()
+	skeleton.name = "Skeleton"
+	skeleton.add_bone("left")
+	skeleton.add_bone("right")
+	holder.add_child(skeleton)
+	var node := GADSMeshInstance3D.new()
+	node.name = "Skinned"
+	node.source_mesh = skinned
+	node.material_override = uv_material(bump_field(128, 0.1), 0.03)
+	node.cache_directory = CACHE_DIR
+	node.cluster_triangles = 300
+	node.skin = skeleton.create_skin_from_rest_transforms()
+	skeleton.add_child(node)
+	node.skeleton = node.get_path_to(skeleton)
+	check(GADSMeshBaker.check_mesh(skinned) == "" and node.bake() == OK, "a skinned mesh bakes")
+	var count := 0
+	var worst := 0.0
+	var sums := 0.0
+	var clusters := GADSMeshInstance3D.cluster_meshes_of(node.mesh)
+	clusters.push_front(node.mesh)
+	for m: Mesh in clusters:
+		for s in m.get_surface_count():
+			var out := m.surface_get_arrays(s)
+			if out[Mesh.ARRAY_BONES] == null:
+				continue
+			var ov: PackedVector3Array = out[Mesh.ARRAY_VERTEX]
+			var ob: PackedInt32Array = out[Mesh.ARRAY_BONES]
+			var ow: PackedFloat32Array = out[Mesh.ARRAY_WEIGHTS]
+			for i in ov.size():
+				var right := 0.0
+				var total := 0.0
+				for k in 4:
+					total += ow[i * 4 + k]
+					if ob[i * 4 + k] == 1:
+						right += ow[i * 4 + k]
+				worst = maxf(worst, absf(right - (ov[i].x + 1.0) * 0.5))
+				sums = maxf(sums, absf(total - 1.0))
+				count += 1
+	print("  %d vertices in %d meshes: weights within %.6f of the linear blend, sums within %.6f of 1" % [count, clusters.size(), worst, sums])
+	check(count > 100 and worst < 1e-4 and sums < 1e-4, "the bone weights are interpolated between the source vertices and sum to 1 (as 16-bit weights)")
+	var shared := not node.get_children(true).filter(func(c: Node) -> bool: return c is MeshInstance3D and c.name.begins_with("GADSCluster")).is_empty()
+	for c in node.get_children(true):
+		if c is MeshInstance3D and c.name.begins_with("GADSCluster"):
+			shared = shared and (c as MeshInstance3D).skin == node.skin and c.get_node_or_null((c as MeshInstance3D).skeleton) == skeleton
+	check(shared, "its clusters deform with the node's skin and skeleton")
+	holder.queue_free()
+	await process_frame
+
+
 func test_bake_cache() -> void:
 	var dir := CACHE_DIR.path_join("clean")
 	var node := GADSMeshInstance3D.new()

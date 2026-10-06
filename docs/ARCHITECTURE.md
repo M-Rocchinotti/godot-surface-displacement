@@ -326,6 +326,12 @@ map's content hash is part of the bake key, so a stroke never loads a stale bake
 uv through `TriangleMesh.intersect_ray`'s face index and the barycentric weights, with the uv
 density there for a brush radius in metres.
 
+**Skinning.** When a surface has bone weights, every corner carries up to eight (bone, weight)
+pairs beside it; a split's new corner gets both ends' influences at half weight (a bone in both
+adds up), keeps the strongest 4 or 8 (as the surface has; ties by bone index, so the result does
+not depend on order) and normalises them, which is the linear blend wherever the ends share
+their bones.
+
 **Bake pipeline** (`geometry/gads_mesh_baker.gd`): resolves each surface's material, turns the
 GADS parameters into the tessellator's displacement description, runs a render pass and an
 optional coarser collision pass on a worker thread, builds LODs with `ImporterMesh.generate_lods`

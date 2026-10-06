@@ -144,9 +144,6 @@ static func check_mesh(mesh: Mesh) -> String:
 	for s in mesh.get_surface_count():
 		if surface_primitive(mesh, s) != Mesh.PRIMITIVE_TRIANGLES:
 			return "surface %d is not made of triangles" % s
-		var arrays := mesh.surface_get_arrays(s)
-		if arrays[Mesh.ARRAY_BONES] != null:
-			return "skinned meshes are not supported (surface %d has bone weights)" % s
 	return ""
 
 
@@ -473,8 +470,13 @@ func _work() -> void:
 				# (and so the node's surface material overrides) the same in every cluster.
 				arrays = _placeholder_surface(anchor)
 			# The mesh's own surface material: overrides on the node keep working on the baked mesh.
+			# Skinned surfaces keep their bones (4 or 8 influences a vertex, as the source).
+			var surface_flags := flags
+			var weights: Variant = arrays[Mesh.ARRAY_WEIGHTS]
+			if weights is PackedFloat32Array and (weights as PackedFloat32Array).size() == 8 * (arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array).size():
+				surface_flags |= Mesh.ARRAY_FLAG_USE_8_BONE_WEIGHTS
 			im.add_surface(Mesh.PRIMITIVE_TRIANGLES, arrays, [], {}, _source.surface_get_material(s),
-				(_source as ArrayMesh).surface_get_name(s) if _source is ArrayMesh else "", flags)
+				(_source as ArrayMesh).surface_get_name(s) if _source is ArrayMesh else "", surface_flags)
 		if im.get_surface_count() == 0:
 			_ok = false
 			return

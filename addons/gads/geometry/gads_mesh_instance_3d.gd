@@ -546,6 +546,13 @@ func get_fallback() -> MeshInstance3D:
 
 ## Beyond geometry_range: an internal child draws the source mesh (the materials then march, as
 ## gads_baked is not set on it), and the two cross-fade through their visibility ranges.
+## A skinned mesh's clusters and fallback (internal children) deform with the node's skeleton.
+func _share_skin(mi: MeshInstance3D) -> void:
+	mi.skin = skin
+	var bones := get_node_or_null(skeleton) if not skeleton.is_empty() else null
+	mi.skeleton = mi.get_path_to(bones) if bones != null and mi.is_inside_tree() else NodePath()
+
+
 func _update_fallback() -> void:
 	if not is_inside_tree():
 		return
@@ -566,6 +573,7 @@ func _update_fallback() -> void:
 		_fallback.name = "GADSParallaxFallback"
 		add_child(_fallback, false, Node.INTERNAL_MODE_BACK)
 	_fallback.mesh = source_mesh
+	_share_skin(_fallback)
 	_fallback.material_override = material_override
 	_fallback.material_overlay = material_overlay
 	for s in get_surface_override_material_count():
@@ -766,6 +774,7 @@ func _sync_clusters() -> void:
 		for s in mini(get_surface_override_material_count(), mi.get_surface_override_material_count()):
 			mi.set_surface_override_material(s, get_surface_override_material(s))
 		mi.set_instance_shader_parameter(BAKED_PARAMETER, 1.0)
+		_share_skin(mi)
 	_update_cluster_visibility()
 	if not _cluster_nodes.is_empty() and is_inside_tree():
 		set_process(true)

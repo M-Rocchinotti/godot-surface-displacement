@@ -213,6 +213,13 @@ bool Tessellator::build_topology() {
 	double eps = settings_.weld_distance >= 0.0 ? settings_.weld_distance : std::max(diag * 1e-6, 1e-9);
 	double cell = std::max(eps, 1e-12);
 
+	bool skinned = false;
+	for (const SurfaceInput &s : inputs_) {
+		skinned = skinned || (s.bone_count > 0 && s.bones.size() >= s.positions.size() * size_t(s.bone_count) &&
+										   s.weights.size() >= s.positions.size() * size_t(s.bone_count));
+	}
+	skins_.clear();
+
 	// Corners (one per source vertex) and position groups (corners within eps share one).
 	std::unordered_map<CellKey, std::vector<int>, CellHash> cells;
 	cells.reserve(vertex_count);
@@ -265,6 +272,17 @@ bool Tessellator::build_topology() {
 				}
 			}
 			corners_.push_back(c);
+			if (skinned) {
+				Skin sk;
+				int n = std::min(s.bone_count, 8);
+				if (s.bones.size() >= (vi + 1) * size_t(n) && s.weights.size() >= (vi + 1) * size_t(n)) {
+					for (int k = 0; k < n; k++) {
+						sk.b[k] = s.bones[vi * n + k];
+						sk.w[k] = s.weights[vi * n + k];
+					}
+				}
+				skins_.push_back(sk);
+			}
 		}
 	}
 	axis_directions_ = settings_.direction_mode == DIRECTION_AXIS || (settings_.direction_mode == DIRECTION_AUTO && any_displaced && all_world);
@@ -951,6 +969,10 @@ void Tessellator::split_edge(int ga, int gb) {
 			n.vec = corner_vec(n);
 			cm = int(corners_.size());
 			corners_.push_back(n);
+			if (!skins_.empty()) {
+				int count = std::max(inputs_[x.surface].bone_count, 1);
+				skins_.push_back(mix_skins(skins_[ca], skins_[cb], count));
+			}
 			mids.emplace_back(ck, cm);
 		}
 		int gc = corners_[cc].group;
@@ -960,6 +982,50 @@ void Tessellator::split_edge(int ga, int gb) {
 		new_tri(ca, cm, cc, tr.surface, tr.level + 1);
 		new_tri(cm, cb, cc, tr.surface, tr.level + 1);
 	}
+}
+
+// The skin halfway between two corners: both influences at half weight (a bone in both adds up),
+// the `count` strongest kept (ties: the lower bone first, so it does not depend on order) and
+// normalised. Linear in between, as the positions are.
+Tessellator::Skin Tessellator::mix_skins(const Skin &x, const Skin &y, int count) {
+	int b[16];
+	float w[16];
+	int n = 0;
+	for (const Skin *s : { &x, &y }) {
+		for (int k = 0; k < 8; k++) {
+			if (s->w[k] <= 0.0f) {
+				continue;
+			}
+			int at = -1;
+			for (int j = 0; j < n; j++) {
+				if (b[j] == s->b[k]) {
+					at = j;
+				}
+			}
+			if (at < 0) {
+				b[n] = s->b[k];
+				w[n] = 0.0f;
+				at = n++;
+			}
+			w[at] += 0.5f * s->w[k];
+		}
+	}
+	int order[16];
+	for (int i = 0; i < n; i++) {
+		order[i] = i;
+	}
+	std::sort(order, order + n, [&](int i, int j) { return w[i] != w[j] ? w[i] > w[j] : b[i] < b[j]; });
+	Skin out;
+	int keep = std::min({ n, count, 8 });
+	float total = 0.0f;
+	for (int k = 0; k < keep; k++) {
+		total += w[order[k]];
+	}
+	for (int k = 0; k < keep; k++) {
+		out.b[k] = b[order[k]];
+		out.w[k] = total > 0.0f ? w[order[k]] / total : 0.0f;
+	}
+	return out;
 }
 
 void Tessellator::refine(int t) {
@@ -1279,6 +1345,7 @@ void Tessellator::build_outputs() {
 		o.has_uv = !inputs_[si].uv.empty();
 		o.has_uv2 = !inputs_[si].uv2.empty();
 		o.has_colors = !inputs_[si].colors.empty();
+		o.bone_count = skins_.empty() ? 0 : std::min(inputs_[si].bone_count, 8);
 	}
 	for (const Tri &tr : tris_) {
 		if (!tr.alive) {
@@ -1304,6 +1371,13 @@ void Tessellator::build_outputs() {
 				}
 				if (o.has_colors) {
 					o.colors.insert(o.colors.end(), { c.color[0], c.color[1], c.color[2], c.color[3] });
+				}
+				if (o.bone_count > 0) {
+					const Skin &sk = skins_[ci];
+					for (int k = 0; k < o.bone_count; k++) {
+						o.bones.push_back(sk.b[k]);
+						o.weights.push_back(sk.w[k]);
+					}
 				}
 				// For the shaders: where the vertex was (textures are mapped at the rest position) and
 				// the mip level of its footprint, the direction it moved in and the refinement level of
@@ -1429,6 +1503,7 @@ std::vector<std::vector<SurfaceOutput>> Tessellator::clusters(int max_triangles)
 			cluster[s].has_uv = outputs_[s].has_uv;
 			cluster[s].has_uv2 = outputs_[s].has_uv2;
 			cluster[s].has_colors = outputs_[s].has_colors;
+			cluster[s].bone_count = outputs_[s].bone_count;
 		}
 		std::vector<std::pair<int, int>> touched;
 		for (size_t i = leaf.first; i < leaf.second; i++) {
@@ -1448,6 +1523,12 @@ std::vector<std::vector<SurfaceOutput>> Tessellator::clusters(int max_triangles)
 					copy_vertex(src.colors, dst.colors, v, 4);
 					copy_vertex(src.custom0, dst.custom0, v, 4);
 					copy_vertex(src.custom1, dst.custom1, v, 4);
+					if (src.bone_count > 0) {
+						for (int k = 0; k < src.bone_count; k++) {
+							dst.bones.push_back(src.bones[size_t(v) * src.bone_count + k]);
+						}
+						copy_vertex(src.weights, dst.weights, v, src.bone_count);
+					}
 					touched.emplace_back(t.surface, v);
 				}
 				dst.indices.push_back(m);

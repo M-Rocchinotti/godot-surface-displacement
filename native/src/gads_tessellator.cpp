@@ -27,6 +27,8 @@ enum {
 	ARRAY_TEX_UV2 = 5,
 	ARRAY_CUSTOM0 = 6,
 	ARRAY_CUSTOM1 = 7,
+	ARRAY_BONES = 10,
+	ARRAY_WEIGHTS = 11,
 	ARRAY_INDEX = 12,
 	ARRAY_MAX = 13,
 };
@@ -135,6 +137,17 @@ void GADSTessellator::add_surface(const Array &p_arrays, const Dictionary &p_dis
 		PackedColorArray colors = p_arrays[ARRAY_COLOR];
 		for (int64_t i = 0; i < colors.size(); i++) {
 			s.colors.insert(s.colors.end(), { colors[i].r, colors[i].g, colors[i].b, colors[i].a });
+		}
+	}
+	if (p_arrays[ARRAY_BONES].get_type() == Variant::PACKED_INT32_ARRAY && p_arrays[ARRAY_WEIGHTS].get_type() == Variant::PACKED_FLOAT32_ARRAY &&
+			vertices.size() > 0) {
+		PackedInt32Array bones = p_arrays[ARRAY_BONES];
+		PackedFloat32Array weights = p_arrays[ARRAY_WEIGHTS];
+		int count = int(bones.size() / vertices.size());
+		if ((count == 4 || count == 8) && weights.size() == bones.size()) {
+			s.bone_count = count;
+			s.bones.assign(bones.ptr(), bones.ptr() + bones.size());
+			s.weights.assign(weights.ptr(), weights.ptr() + weights.size());
 		}
 	}
 	if (p_arrays[ARRAY_INDEX].get_type() == Variant::PACKED_INT32_ARRAY) {
@@ -291,6 +304,15 @@ static Array surface_arrays(const gads::SurfaceOutput &o) {
 	}
 	arrays[ARRAY_CUSTOM0] = floats(o.custom0);
 	arrays[ARRAY_CUSTOM1] = floats(o.custom1);
+	if (o.bone_count > 0) {
+		PackedInt32Array bones;
+		bones.resize(int64_t(o.bones.size()));
+		if (!o.bones.empty()) {
+			std::memcpy(bones.ptrw(), o.bones.data(), o.bones.size() * sizeof(int));
+		}
+		arrays[ARRAY_BONES] = bones;
+		arrays[ARRAY_WEIGHTS] = floats(o.weights);
+	}
 	PackedInt32Array indices;
 	indices.resize(int64_t(o.indices.size()));
 	if (!o.indices.empty()) {
