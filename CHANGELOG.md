@@ -157,6 +157,10 @@ All notable changes to this project are documented here. The format follows
   collision and the detail field's ground data. Edited maps are one texel per vertex, saved into
   `data_directory`. Runtime API: `sculpt()`, `paint_splatmap()`, `set_height_region()` /
   `set_splat_region()`, `intersect_ray()` (no physics needed), the `edited` signal.
+- **Linux ARM64 native library** (`libgads.linux.template_release.arm64.so`, cross-built with
+  `python tools/build_native.py linux_arm64` and the GNU aarch64 toolchain): baking, procedural
+  maps and the native terrain passes on ARM64 Linux. A bake test checks that every shipped
+  library embeds the current sources' hash. (Built and checked here, not run on ARM hardware.)
 - **Silhouette parallax**: `GADSMaterials.set_silhouette()` (UV-mapped POM materials, four new
   `_sil` variants) makes the march follow the surface's curvature along the view ray (the
   normal's derivative in that direction, from screen-space derivatives) and discards where the

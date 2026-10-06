@@ -3,6 +3,7 @@
 
     python tools/build_native.py                  # this platform (linux or windows)
     python tools/build_native.py linux windows    # Windows cross-built with MinGW on Linux
+    python tools/build_native.py linux windows linux_arm64   # and Linux ARM64 (aarch64-linux-gnu-g++)
     python tools/build_native.py --hash           # print the source hash the library embeds
 
 Clones godot-cpp at the pinned revision into native/godot-cpp on first use. Needs SCons and a
@@ -55,13 +56,22 @@ def ensure_godot_cpp() -> None:
     subprocess.run(["git", "checkout", "-q", "FETCH_HEAD"], cwd=GODOT_CPP, check=True)
 
 
-def build(target_platform: str) -> int:
+def build(target: str) -> int:
+    env = dict(os.environ)
+    target_platform = target
+    args = []
+    if target == "linux_arm64":
+        # Cross-built with the GNU toolchain (apt: g++-aarch64-linux-gnu) unless this is ARM64.
+        target_platform = "linux"
+        args.append("arch=arm64")
+        if platform.machine().lower() not in ("aarch64", "arm64"):
+            env["GADS_CROSS_PREFIX"] = "aarch64-linux-gnu"
     args = ["scons", f"platform={target_platform}", "target=template_release", "optimize=speed", "debug_symbols=no",
-            f"-j{os.cpu_count() or 4}"]
+            f"-j{os.cpu_count() or 4}"] + args
     if target_platform == "windows" and platform.system() != "Windows":
         args.append("use_mingw=yes")
     print("[build_native]", " ".join(args), flush=True)
-    return subprocess.run(args, cwd=NATIVE).returncode
+    return subprocess.run(args, cwd=NATIVE, env=env).returncode
 
 
 def main(argv: list[str]) -> int:

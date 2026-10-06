@@ -119,7 +119,7 @@ are separately compiled shaders: they disagreed in the last bit on 1.3 % of pixe
 as holes. The written depth is therefore rounded to 12 mantissa bits (0.25 mm at 2 m); a value that
 lands exactly on a rounding step can still disagree (0 to 13 per million pixels measured).
 
-### 3.x Silhouette parallax
+### 3.4 Silhouette parallax
 
 With `GADS_SILHOUETTE` (UV mapping) the surface is taken as curved along the view ray: the
 normal curvature kappa in the ray's direction over the surface `t` is the derivative of the

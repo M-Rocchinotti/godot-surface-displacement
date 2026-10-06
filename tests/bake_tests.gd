@@ -204,6 +204,26 @@ func test_library_matches_sources() -> void:
 	var built: String = ClassDB.class_call_static("GADSTessellator", "get_build_hash")
 	print("  sources %s, library %s" % [source_hash, built])
 	check(built == source_hash, "the library was built from the current native sources (python tools/build_native.py)")
+	# Every library the extension ships (the other platforms' too) embeds the same hash.
+	var config := ConfigFile.new()
+	config.load("res://addons/gads/native/gads.gdextension")
+	var stale := []
+	for key in config.get_section_keys("libraries"):
+		var path: String = config.get_value("libraries", key)
+		if not _embeds(FileAccess.get_file_as_bytes(path), source_hash):
+			stale.append(key)
+	check(config.get_section_keys("libraries").size() >= 3 and stale.is_empty(),
+		"every shipped library (%s) was built from them (stale: %s)" % [", ".join(config.get_section_keys("libraries")), stale])
+
+
+## Whether [param bytes] contain [param text] (ASCII) at a byte boundary.
+static func _embeds(bytes: PackedByteArray, text: String) -> bool:
+	var hex := bytes.hex_encode()
+	var needle := text.to_ascii_buffer().hex_encode()
+	var at := hex.find(needle)
+	while at >= 0 and at % 2 != 0:
+		at = hex.find(needle, at + 1)
+	return at >= 0
 
 
 func _collect_sources(dir_path: String, rel: String, out: Array[String]) -> void:

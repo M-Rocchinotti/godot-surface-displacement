@@ -16,7 +16,7 @@ scattered stones, cobblestones as real stones, brick walls with deep joints.
   native adaptive tessellator (dense only where the height map needs it, crack-free across seams
   and hard edges, rebuilt normals and tangents, LODs, optional collision). Non-destructive and
   cached; Bake / Rebuild / Clear in the inspector. The native library ships for Linux and
-  Windows x86_64 (`native/`).
+  Windows x86_64 and Linux ARM64 (`native/`).
 - **GADSDeformationField** / **GADSDeformer3D**: footprints, tracks and craters written at runtime,
   pressing the field's geometry and the ground's parallax down; persistent, recovering.
 - **GADSTerrain3D**: a heightmap terrain with chunk LODs by screen-space error, up to three
@@ -67,7 +67,7 @@ Your own shaders: `render_mode diffuse_burley, specular_schlick_ggx;`, define `G
 header of `gads_core.gdshaderinc` lists the signatures).
 
 Requirements: Godot 4.7+, Forward+ (Vulkan tested). Limitations: POM gives no silhouettes on
-walls and props (bake those); baking needs the native library (Linux, Windows x86_64) (skinned and
+walls and props (bake those); baking needs the native library (Linux, Windows x86_64; Linux ARM64) (skinned and
 morphing meshes bake in their rest pose); the near-camera geometry needs height-field ground (world-planar ground
 materials); feet sink into the relief by up to its depth; depth write is opt-in and costs
 early-Z; omni and spot lights self-shadow only at High and Ultra (each one costs a march per

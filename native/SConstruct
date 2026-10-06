@@ -37,6 +37,16 @@ def source_hash() -> str:
 
 base = Environment(tools=["default"], PLATFORM="")
 base["build_profile"] = os.path.join(NATIVE, "build_profile.json")
+# Cross-compiling for Linux on another architecture (tools/build_native.py linux_arm64): the GNU
+# toolchain with this prefix, e.g. aarch64-linux-gnu.
+cross = os.environ.get("GADS_CROSS_PREFIX", "")
+if cross:
+    base["CC"] = cross + "-gcc"
+    base["CXX"] = cross + "-g++"
+    base["AR"] = cross + "-ar"
+    base["RANLIB"] = cross + "-ranlib"
+    base["LINK"] = cross + "-g++"
+    base["SHLINK"] = cross + "-g++"
 env = SConscript("godot-cpp/SConstruct", {"env": base, "api_version": "4.7"})
 
 gen = os.path.join(NATIVE, "gen")
