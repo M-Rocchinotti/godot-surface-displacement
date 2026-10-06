@@ -67,6 +67,7 @@ func _run() -> void:
 	await _test("import_options", test_import)
 	if DisplayServer.get_name() != "headless":
 		await _test("renders_like_parallax", test_render)
+		await _test("silhouette", test_silhouette)
 		await _test("geometry_to_parallax_by_distance", test_geometry_range)
 		await _test("runtime_tessellation_follows_the_camera", test_runtime_tessellation)
 		await _test("runtime_budget_and_adaptive_quality", test_runtime_budget)
@@ -772,6 +773,56 @@ func test_profiler() -> void:
 	check(overlay.get_report().get("totals", {}).get("objects", 0) == 2, "the stats overlay profiles its target")
 	scene.queue_free()
 	await process_frame
+
+
+## Silhouette POM: a sphere with stones carved into it (height_center 1) shows them in its outline
+## like the baked sphere does; plain parallax keeps the smooth outline.
+func test_silhouette() -> void:
+	var stones := Harness.make_stone_field(256, 30, 3)
+	var params := {"height_m": 0.08, "height_center": 1.0, "uv_scale": Vector2(4, 2)}
+	var textures := {"height": ImageTexture.create_from_image(stones["image"])}
+	var s := h.new_lit_scene(Color(0.6, 0.6, 0.6))
+	h.add_camera(Vector3(0, 0, 2.2), Vector3.ZERO, 40.0)
+	var sphere := SphereMesh.new()
+	sphere.radius = 0.5
+	sphere.height = 1.0
+	sphere.radial_segments = 96
+	sphere.rings = 48
+	var mi := MeshInstance3D.new()
+	mi.mesh = sphere
+	mi.material_override = GADSMaterials.create(GADSMaterials.Mapping.UV, textures, params, GADSMaterials.Quality.POM)
+	s.add_child(mi)
+	await h.frames(4)
+	var plain := await h.capture()
+	var sil_mat := GADSMaterials.create(GADSMaterials.Mapping.UV, textures, params, GADSMaterials.Quality.POM)
+	GADSMaterials.set_silhouette(sil_mat, true)
+	mi.material_override = sil_mat
+	await h.frames(4)
+	var carved := await h.capture()
+	mi.queue_free()
+	var node := _make_node(GADSMaterials.create(GADSMaterials.Mapping.UV, textures, params, GADSMaterials.Quality.POM))
+	node.source_mesh = sphere
+	node.quality = GADSMeshInstance3D.Quality.HIGH
+	s.add_child(node)
+	node.bake()
+	await h.frames(4)
+	var baked := await h.capture()
+	node.queue_free()
+	var plain_off := 0
+	var carved_off := 0
+	var outline := 0
+	for y in SIZE.y:
+		for x in SIZE.x:
+			var b := baked.get_pixel(x, y).get_luminance() > 0.002
+			var p := plain.get_pixel(x, y).get_luminance() > 0.002
+			var c := carved.get_pixel(x, y).get_luminance() > 0.002
+			if p and not b:
+				outline += 1
+			plain_off += 1 if p != b else 0
+			carved_off += 1 if c != b else 0
+	print("  pixels whose coverage differs from the baked sphere: plain parallax %d, silhouette parallax %d (the smooth outline covers %d the baked one does not)" % [plain_off, carved_off, outline])
+	check(outline > 300, "the carved relief shows in the baked sphere's outline")
+	check(carved_off < plain_off * 0.6, "silhouette parallax draws the outline like the baked mesh, plain parallax does not")
 
 
 ## A baked mesh lit like the parallax version of the same material (with a normal map that matches

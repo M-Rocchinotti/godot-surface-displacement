@@ -4,7 +4,8 @@ extends RefCounted
 ## Creates GADS materials and switches their shader variant.
 ##
 ## Every GADS material is a [ShaderMaterial] whose shader is one of the generated variants in
-## [code]render/shaders/variants/[/code]: [code]gads_[layered_]<mapping>_<quality>[_depth].gdshader[/code].
+## [code]render/shaders/variants/[/code]: [code]gads_[layered_]<mapping>_<quality>[_sil][_depth].gdshader[/code]
+## ([code]_sil[/code]: silhouette POM, UV mapping).
 ## The mapping (UV, world-planar, triplanar), the layering (one relief, or up to three blended by
 ## vertex colour, slope and height) and the depth write are per-material choices; the quality
 ## (flat, POM, POM with self-shadowing) is what [GADSManager] switches at runtime. Switching
@@ -85,18 +86,19 @@ static func get_param(material: ShaderMaterial, name: String) -> Variant:
 		return LAYER_PARAMETER_DEFAULTS.get(name.substr(7))
 	return PARAMETER_DEFAULTS.get(name)
 
-static func variant_path(mapping: Mapping, quality: Quality, depth_write := false, layered := false) -> String:
+static func variant_path(mapping: Mapping, quality: Quality, depth_write := false, layered := false, silhouette := false) -> String:
 	var depth := depth_write and quality != Quality.FLAT
-	return VARIANT_DIR + "gads_%s%s_%s%s.gdshader" % ["layered_" if layered else "", MAPPING_NAMES[mapping], QUALITY_NAMES[quality],
-		"_depth" if depth else ""]
+	var sil := silhouette and quality != Quality.FLAT and mapping == Mapping.UV and not layered
+	return VARIANT_DIR + "gads_%s%s_%s%s%s.gdshader" % ["layered_" if layered else "", MAPPING_NAMES[mapping], QUALITY_NAMES[quality],
+		"_sil" if sil else "", "_depth" if depth else ""]
 
 
-static func get_shader(mapping: Mapping, quality: Quality, depth_write := false, layered := false) -> Shader:
-	return load(variant_path(mapping, quality, depth_write, layered))
+static func get_shader(mapping: Mapping, quality: Quality, depth_write := false, layered := false, silhouette := false) -> Shader:
+	return load(variant_path(mapping, quality, depth_write, layered, silhouette))
 
 
-## {"mapping": Mapping, "quality": Quality, "depth_write": bool, "layered": bool} of a GADS
-## variant, or {} for any other shader.
+## {"mapping": Mapping, "quality": Quality, "depth_write": bool, "layered": bool, "silhouette":
+## bool} of a GADS variant, or {} for any other shader.
 static func parse(shader: Shader) -> Dictionary:
 	if shader == null or not shader.resource_path.begins_with(VARIANT_DIR):
 		return {}
@@ -105,6 +107,8 @@ static func parse(shader: Shader) -> Dictionary:
 		return {}
 	var depth := stem.ends_with("_depth")
 	stem = stem.trim_prefix("gads_").trim_suffix("_depth")
+	var sil := stem.ends_with("_sil")
+	stem = stem.trim_suffix("_sil")
 	var layered := stem.begins_with("layered_")
 	stem = stem.trim_prefix("layered_")
 	for m in MAPPING_NAMES.size():
@@ -112,7 +116,7 @@ static func parse(shader: Shader) -> Dictionary:
 			continue
 		var q := QUALITY_NAMES.find(stem.trim_prefix(MAPPING_NAMES[m] + "_"))
 		if q >= 0:
-			return {"mapping": m, "quality": q, "depth_write": depth, "layered": layered}
+			return {"mapping": m, "quality": q, "depth_write": depth, "layered": layered, "silhouette": sil}
 	return {}
 
 
@@ -176,12 +180,15 @@ static func set_quality(material: ShaderMaterial, quality: Quality) -> bool:
 	if info.is_empty():
 		return false
 	var depth: bool = info["depth_write"] or bool(material.get_meta(&"gads_depth_write", false))
-	var shader := get_shader(info["mapping"], quality, depth, info["layered"])
+	var sil: bool = info["silhouette"] or bool(material.get_meta(&"gads_silhouette", false))
+	var shader := get_shader(info["mapping"], quality, depth, info["layered"], sil)
 	if material.shader == shader:
 		return false
-	# A flat variant cannot carry the depth write; remember it for the way back.
+	# A flat variant cannot carry the depth write or the silhouette; remember them for the way back.
 	if depth:
 		material.set_meta(&"gads_depth_write", true)
+	if sil:
+		material.set_meta(&"gads_silhouette", true)
 	material.shader = shader
 	return true
 
@@ -195,7 +202,24 @@ static func set_depth_write(material: ShaderMaterial, enabled: bool) -> void:
 		material.set_meta(&"gads_depth_write", true)
 	elif material.has_meta(&"gads_depth_write"):
 		material.remove_meta(&"gads_depth_write")
-	material.shader = get_shader(info["mapping"], info["quality"], enabled, info["layered"])
+	material.shader = get_shader(info["mapping"], info["quality"], enabled, info["layered"],
+		info["silhouette"] or bool(material.get_meta(&"gads_silhouette", false)))
+
+
+## Opts [param material] in or out of silhouette POM: on a curved UV-mapped prop the parallax
+## follows the surface's curvature and the relief shows in the outline (where the view ray passes
+## over the relief, nothing is drawn). Parallax qualities only (kept through a flat preset); costs
+## the curvature estimate and a discard, which turns off early depth for the material.
+static func set_silhouette(material: ShaderMaterial, enabled: bool) -> void:
+	var info := parse(material.shader)
+	if info.is_empty():
+		return
+	if enabled:
+		material.set_meta(&"gads_silhouette", true)
+	elif material.has_meta(&"gads_silhouette"):
+		material.remove_meta(&"gads_silhouette")
+	var depth: bool = info["depth_write"] or bool(material.get_meta(&"gads_depth_write", false))
+	material.shader = get_shader(info["mapping"], info["quality"], depth, info["layered"], enabled)
 
 
 ## A new GADS material. [param textures]: any of "albedo", "normal", "orm", "height",

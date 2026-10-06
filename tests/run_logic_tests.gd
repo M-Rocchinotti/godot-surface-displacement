@@ -36,6 +36,7 @@ func _run() -> void:
 	await test_platform_caps()
 	test_sculpt_brush()
 	test_erosion()
+	test_silhouette_variants()
 	await test_scatter_parameter_sync()
 	print("\nlogic tests: %d passed, %d failed" % [_passed, _failed])
 	quit(1 if _failed > 0 else 0)
@@ -1072,6 +1073,28 @@ func test_platform_caps() -> void:
 
 ## GADSSculpt brush dabs: raise and lower by the strength at the centre, nothing at the radius;
 ## smooth lowers a spike; flatten levels towards a height.
+func test_silhouette_variants() -> void:
+	print("\n== silhouette variants")
+	var m := GADSMaterials.create(GADSMaterials.Mapping.UV, {}, {}, GADSMaterials.Quality.POM)
+	GADSMaterials.set_silhouette(m, true)
+	var info := GADSMaterials.parse(m.shader)
+	check(m.shader.resource_path.ends_with("gads_uv_pom_sil.gdshader") and info["silhouette"] and info["quality"] == GADSMaterials.Quality.POM,
+		"set_silhouette() picks the _sil variant, which parses back")
+	GADSMaterials.set_quality(m, GADSMaterials.Quality.FLAT)
+	var flat_path := m.shader.resource_path
+	GADSMaterials.set_quality(m, GADSMaterials.Quality.POM_SELF_SHADOW)
+	check(flat_path.ends_with("gads_uv_flat.gdshader") and m.shader.resource_path.ends_with("gads_uv_pom_ss_sil.gdshader"),
+		"a flat preset drops it and the way back brings it back")
+	GADSMaterials.set_depth_write(m, true)
+	check(m.shader.resource_path.ends_with("gads_uv_pom_ss_sil_depth.gdshader") and GADSMaterials.parse(m.shader)["depth_write"],
+		"with the depth write: _sil_depth")
+	GADSMaterials.set_silhouette(m, false)
+	check(m.shader.resource_path.ends_with("gads_uv_pom_ss_depth.gdshader"), "and off again")
+	var w := GADSMaterials.create(GADSMaterials.Mapping.WORLD, {}, {}, GADSMaterials.Quality.POM)
+	GADSMaterials.set_silhouette(w, true)
+	check(w.shader.resource_path.ends_with("gads_world_pom.gdshader"), "world-planar ground has no silhouette variant (it stays as it is)")
+
+
 func test_erosion() -> void:
 	print("\n== erosion")
 	if not GADSProcedural.is_available():

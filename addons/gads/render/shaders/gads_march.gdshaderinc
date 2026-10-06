@@ -69,4 +69,77 @@ float gads_march(vec2 uv0, vec2 duv_dz, float z_top, float z_bot, GADS_RELIEF_AR
 	return z_hit;
 }
 
+#ifdef GADS_SILHOUETTE
+// gads_march on a curved surface: the surface falls away from its tangent plane by curv * z^2
+// along the ray (curv = curvature along the ray's way over the surface / 2 x tan^2 of the view
+// angle; > 0 convex), so the ray's height above the curved surface is z + curv * z^2. On a convex
+// surface it can pass over the relief and leave it at the silhouette: then `missed` is true (the
+// fragment is discarded and the relief's outline shows). The walk ends where the ray must have
+// met the relief (its height over the curved surface reaches the slab bottom) or, when it never
+// gets that deep, where it turns back up.
+float gads_march_curved(vec2 uv0, vec2 duv_dz, float z_top, float z_bot, float curv, GADS_RELIEF_ARG amp, float lod, int steps,
+		int refine, out vec2 uv_hit, inout float steps_used, out bool missed) {
+	missed = false;
+	float z_end = z_bot;
+	// Only a ray that never gets as deep as the slab bottom can pass over the relief (one that does
+	// must meet it on the way: the relief is never below the bottom).
+	bool can_miss = false;
+	if (curv > 1e-6) {
+		float disc = 1.0 + 4.0 * curv * z_bot;
+		can_miss = disc < 0.0;
+		z_end = can_miss ? -0.5 / curv : (-1.0 + sqrt(disc)) / (2.0 * curv);
+	}
+	float dz = (z_top - z_end) / float(steps);
+	float z_above = z_top;
+	float f_above = z_top + curv * z_top * z_top - GADS_RELIEF(uv0 + duv_dz * z_top, lod, amp);
+	float z_below = z_end;
+	float f_below = 0.0;
+	bool hit = f_above <= 0.0;
+	if (hit) {
+		z_below = z_top;
+		f_below = f_above;
+	}
+	for (int i = 1; i <= GADS_MAX_STEPS; i++) {
+		if (hit || i > steps) {
+			break;
+		}
+		float z = z_top - dz * float(i);
+		float f = z + curv * z * z - GADS_RELIEF(uv0 + duv_dz * z, lod, amp);
+		steps_used += 1.0;
+		if (f <= 0.0) {
+			hit = true;
+			z_below = z;
+			f_below = f;
+		} else {
+			z_above = z;
+			f_above = f;
+		}
+	}
+	if (!hit) {
+		missed = can_miss;
+		uv_hit = uv0 + duv_dz * z_end;
+		return z_end;
+	}
+	for (int j = 0; j < GADS_MAX_REFINE; j++) {
+		if (j >= refine) {
+			break;
+		}
+		float zm = 0.5 * (z_above + z_below);
+		float fm = zm + curv * zm * zm - GADS_RELIEF(uv0 + duv_dz * zm, lod, amp);
+		steps_used += 1.0;
+		if (fm <= 0.0) {
+			z_below = zm;
+			f_below = fm;
+		} else {
+			z_above = zm;
+			f_above = fm;
+		}
+	}
+	float denom = f_above - f_below;
+	float z_hit = denom > 1e-9 ? z_above - f_above * (z_above - z_below) / denom : z_below;
+	uv_hit = uv0 + duv_dz * z_hit;
+	return z_hit;
+}
+#endif
+
 #endif // GADS_MARCH_INCLUDED

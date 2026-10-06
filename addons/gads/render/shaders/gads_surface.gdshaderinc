@@ -51,6 +51,65 @@ vec3 gads_resolve_plane(GADSPlane p, vec3 n, vec3 v, GADS_RELIEF_ARG arg, float 
 	return v * (z_hit * dot(n, p.axis) / max(dot(n, v), GADS_MIN_NDOTV));
 }
 
+#ifdef GADS_SILHOUETTE
+// gads_resolve_plane on a curved surface (UV mapping): marches with the surface's curvature
+// `kappa` (1/m) along the ray's way over it (gads_march_curved); `missed`: the ray passed over the
+// relief at the silhouette.
+vec3 gads_resolve_plane_curved(GADSPlane p, vec3 n, vec3 v, GADS_RELIEF_ARG arg, float fade, float lod, float deform, float kappa,
+		out vec2 uv_hit, out float z_hit, inout float steps_used, out bool missed) {
+	uv_hit = p.uv;
+	z_hit = 0.0;
+	missed = false;
+#ifdef GADS_POM
+	if (gads_relief_amp(arg) > 1e-5 && lod < gads_pom_range.w && !IN_SHADOW_PASS) {
+		vec2 duv_dz = gads_duv_dz(p, n, v);
+		float z_top = gads_slab_top(arg);
+		float z_bot = gads_slab_bottom(arg);
+		int steps = gads_step_count(dot(n, v), fade);
+		vec2 uv0 = p.uv;
+		if (deform != 0.0) {
+			uv0 -= duv_dz * deform;
+		}
+		// The surface falls away by kappa / 2 x (distance over it)^2; the ray covers tan(view
+		// angle) metres over it per metre of height.
+		float nv = max(dot(n, v), GADS_MIN_NDOTV);
+		float tan2 = max(1.0 - nv * nv, 0.0) / (nv * nv);
+		z_hit = gads_march_curved(uv0, duv_dz, z_top, z_bot, 0.5 * kappa * tan2, arg, lod, steps, int(gads_pom_steps.z), uv_hit,
+				steps_used, missed);
+		if (deform != 0.0) {
+			z_hit -= deform;
+		}
+	}
+#endif
+	return v * (z_hit * dot(n, p.axis) / max(dot(n, v), GADS_MIN_NDOTV));
+}
+
+// The surface's normal curvature (1/m; > 0 convex) along the way the view ray runs over it: the
+// derivative of the interpolated normal in that direction, from the screen-space derivatives of
+// the normal (dn1, dn2) and of the position (dp1, dp2), all in view space.
+float gads_view_curvature(vec3 n, vec3 v, vec3 dp1, vec3 dp2, vec3 dn1, vec3 dn2) {
+	vec3 t = n * dot(n, v) - v;
+	float tl = length(t);
+	if (tl < 1e-6) {
+		return 0.0;
+	}
+	t /= tl;
+	// t = a dp1 + b dp2 (both span the tangent plane): the normal equations.
+	float g11 = dot(dp1, dp1);
+	float g12 = dot(dp1, dp2);
+	float g22 = dot(dp2, dp2);
+	float r1 = dot(t, dp1);
+	float r2 = dot(t, dp2);
+	float det = g11 * g22 - g12 * g12;
+	if (abs(det) < 1e-30) {
+		return 0.0;
+	}
+	float a = (r1 * g22 - r2 * g12) / det;
+	float b = (r2 * g11 - r1 * g12) / det;
+	return dot(dn1 * a + dn2 * b, t);
+}
+#endif
+
 void fragment() {
 	float view_distance = length(VERTEX);
 	mat3 view_to_world = mat3(INV_VIEW_MATRIX);
@@ -110,7 +169,18 @@ void fragment() {
 	GADS_RELIEF_ARG arg_uv = inv_det != 0.0 ? arg : arg * 0.0;
 	// Runtime deformation presses along world up, as much as the surface faces up.
 	float deform = gads_deformation(gads_world_pos.xz) * max(dot(n, mat3(VIEW_MATRIX) * vec3(0.0, 1.0, 0.0)), 0.0);
+#ifdef GADS_SILHOUETTE
+	// Curved: where the view ray passes over the relief at the outline, nothing is drawn, so
+	// the relief shows in the silhouette.
+	bool missed;
+	float kappa = gads_view_curvature(n, v, dp1, dp2, dFdx(n), dFdy(n));
+	offset_view = gads_resolve_plane_curved(p, n, v, arg_uv, fade, lod, deform, kappa, uv_hit, z_hit, steps_used, missed);
+	if (missed) {
+		discard;
+	}
+#else
 	offset_view = gads_resolve_plane(p, n, v, arg_uv, fade, lod, deform, uv_hit, z_hit, steps_used);
+#endif
 	planes_marched = steps_used > 0.0 ? 1.0 : 0.0;
 	vec3 nm;
 	gads_sample_surface(uv_hit, p.ddx, p.ddy, lod, sample_arg, albedo_sum, orm_sum, nm);

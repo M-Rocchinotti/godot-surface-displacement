@@ -157,6 +157,11 @@ All notable changes to this project are documented here. The format follows
   collision and the detail field's ground data. Edited maps are one texel per vertex, saved into
   `data_directory`. Runtime API: `sculpt()`, `paint_splatmap()`, `set_height_region()` /
   `set_splat_region()`, `intersect_ray()` (no physics needed), the `edited` signal.
+- **Silhouette parallax**: `GADSMaterials.set_silhouette()` (UV-mapped POM materials, four new
+  `_sil` variants) makes the march follow the surface's curvature along the view ray (the
+  normal's derivative in that direction, from screen-space derivatives) and discards where the
+  ray passes over the relief, so carved relief shows in a curved prop's outline. Kept through
+  flat presets and the depth write.
 - **Field layers blend by height**: where the near-camera field's layers meet, the higher relief
   wins (stones stick out of sand) instead of an average, in the geometry, the parallax, the
   shading and `get_surface_height()`, as the layered material blends its layers, so the field
