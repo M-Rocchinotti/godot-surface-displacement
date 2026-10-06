@@ -1,3 +1,4 @@
+#include "gads_height_generator.h"
 #include "gads_tessellator.h"
 
 #include <gdextension_interface.h>
@@ -12,6 +13,7 @@ static void initialize_gads(ModuleInitializationLevel p_level) {
 		return;
 	}
 	GDREGISTER_CLASS(GADSTessellator);
+	GDREGISTER_CLASS(GADSHeightGenerator);
 }
 
 static void uninitialize_gads(ModuleInitializationLevel p_level) {

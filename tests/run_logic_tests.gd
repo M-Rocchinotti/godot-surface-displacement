@@ -31,6 +31,7 @@ func _run() -> void:
 	await test_terrain_validation()
 	test_texture_sets()
 	test_mesh_diagnostics()
+	test_procedural()
 	await test_scatter_parameter_sync()
 	print("\nlogic tests: %d passed, %d failed" % [_passed, _failed])
 	quit(1 if _failed > 0 else 0)
@@ -828,3 +829,117 @@ func test_scatter_parameter_sync() -> void:
 			"a changed layer parameter reaches the scatter")
 	scene.queue_free()
 	await process_frame
+
+
+## GADSProcedural: every kind of height map fills 0..1, tiles (the wrap-around column and row
+## look like their neighbours), is the same for the same seed and differs for another; normals,
+## occlusion and curvature of known shapes; a material and a texture set from a kind.
+func test_procedural() -> void:
+	print("\n== procedural height maps")
+	if not GADSProcedural.is_available():
+		check(false, "the native generator is loaded")
+		return
+	var kinds := GADSProcedural.get_kinds()
+	var native: PackedStringArray = ClassDB.class_call_static(&"GADSHeightGenerator", &"get_kinds")
+	var same := kinds.size() == native.size()
+	for k in kinds:
+		same = same and native.has(k)
+	check(same and kinds.size() == 11, "a preset for each of the native generator's %d kinds" % native.size())
+	var size := 128
+	var bad := []
+	var seams := []
+	var started := Time.get_ticks_usec()
+	for kind in kinds:
+		var img := GADSProcedural.height_image(kind, size)
+		if img == null or img.get_format() != Image.FORMAT_RF or img.get_width() != size:
+			bad.append("%s: no RF %d image" % [kind, size])
+			continue
+		var h := img.get_data().to_float32_array()
+		var lo := 1e9
+		var hi := -1e9
+		for v in h:
+			lo = minf(lo, v)
+			hi = maxf(hi, v)
+		if lo < 0.0 or hi > 1.0 or hi - lo < 0.99:
+			bad.append("%s: range %.3f..%.3f" % [kind, lo, hi])
+		# Mean difference across each column boundary and each row boundary; the wrap-around
+		# one (last to first) must not stand out from its two neighbours.
+		for axis in 2:
+			var b := PackedFloat32Array()
+			b.resize(size)
+			for k in size:
+				var sum := 0.0
+				for i in size:
+					var a := h[i * size + k] if axis == 0 else h[k * size + i]
+					var c := h[i * size + (k + 1) % size] if axis == 0 else h[((k + 1) % size) * size + i]
+					sum += absf(a - c)
+				b[k] = sum / size
+			var wrap := b[size - 1]
+			var around := maxf(b[size - 2], b[0])
+			if wrap > 2.0 * around + 0.002:
+				seams.append("%s %s: %.4f against %.4f" % [kind, "x" if axis == 0 else "y", wrap, around])
+	var ms := (Time.get_ticks_usec() - started) / 1000.0
+	print("  %d kinds at %d px in %.0f ms (with the checks)" % [kinds.size(), size, ms])
+	check(bad.is_empty(), "every kind is a %d px float map spanning 0..1 %s" % [size, bad])
+	check(seams.is_empty(), "every kind tiles: the wrap-around boundary is like its neighbours %s" % [seams])
+	var a := GADSProcedural.height_image("stones", 64, {"seed": 4}).get_data()
+	var b := GADSProcedural.height_image("stones", 64, {"seed": 4}).get_data()
+	var c := GADSProcedural.height_image("stones", 64, {"seed": 5}).get_data()
+	check(a == b and a != c, "the same seed gives the same map, another seed another")
+	# Normals of a sine ramp along u: n = (-dh/du, 0, 1) normalised (OpenGL convention).
+	var n := 64
+	var ramp := Image.create(n, n, false, Image.FORMAT_RF)
+	for y in n:
+		for x in n:
+			ramp.set_pixel(x, y, Color(0.5 + 0.5 * sin(TAU * (x + 0.5) / n), 0, 0))
+	var depth := 0.1
+	var nm := GADSProcedural.normal_image(ramp, depth, Vector2.ONE)
+	var worst := 0.0
+	for x in n:
+		var slope := 0.5 * depth * TAU * cos(TAU * (x + 0.5) / n) # dh/du in m per m
+		var want := Vector3(-slope, 0.0, 1.0).normalized()
+		var px := nm.get_pixel(x, n / 2)
+		var got := Vector3(px.r * 2.0 - 1.0, px.g * 2.0 - 1.0, px.b * 2.0 - 1.0)
+		worst = maxf(worst, got.distance_to(want))
+	check(nm.get_format() == Image.FORMAT_RGB8 and worst < 0.03, "normals of a sine ramp match its slope (largest difference %.3f)" % worst)
+	# Occlusion: open on a flat map, closed in a pit; curvature: above 0.5 on a bump.
+	var flat := Image.create(32, 32, false, Image.FORMAT_RF)
+	flat.fill(Color(0.5, 0, 0))
+	var ao_flat := GADSProcedural.ao_image(flat, 0.05).get_data().to_float32_array()
+	var pit := Image.create(32, 32, false, Image.FORMAT_RF)
+	for y in 32:
+		for x in 32:
+			var r := Vector2(x - 15.5, y - 15.5).length() / 6.0
+			pit.set_pixel(x, y, Color(clampf(r * r, 0.0, 1.0), 0, 0))
+	var ao_pit := GADSProcedural.ao_image(pit, 0.1, Vector2.ONE, 0.2)
+	var curv_bump := GADSProcedural.curvature_image(GADSProcedural.height_image("craters", 64, {"count": 1, "scale": 1, "roughness": 0.0}), 3.0)
+	check(ao_flat.count(1.0) == ao_flat.size() and ao_pit.get_pixel(16, 16).r < 0.8 and ao_pit.get_pixel(0, 0).r > ao_pit.get_pixel(16, 16).r,
+		"occlusion is 1 on flat ground and lower in a pit (%.2f)" % ao_pit.get_pixel(16, 16).r)
+	var curv := curv_bump.get_data().to_float32_array()
+	var curv_lo := 1.0
+	var curv_hi := 0.0
+	for v in curv:
+		curv_lo = minf(curv_lo, v)
+		curv_hi = maxf(curv_hi, v)
+	check(curv_lo < 0.4 and curv_hi > 0.6, "curvature: below 0.5 in a crater's bowl, above on its rim (%.2f..%.2f)" % [curv_lo, curv_hi])
+	# A material in memory.
+	var mat := GADSProcedural.create_material("bricks", {"size": 64, "mapping": GADSMaterials.Mapping.TRIPLANAR, "tile_m": Vector2(2, 2)})
+	var tex_ok := mat != null and GADSMaterials.is_gads_material(mat)
+	for key in ["height_texture", "normal_texture", "albedo_texture", "orm_texture"]:
+		var t := mat.get_shader_parameter(key) as Texture2D if mat != null else null
+		tex_ok = tex_ok and t != null and t.get_image().has_mipmaps()
+	check(tex_ok and is_equal_approx(float(mat.get_shader_parameter("height_m")), 0.04) and mat.get_shader_parameter("texture_size_m") == Vector2(2, 2),
+		"create_material: a triplanar GADS material with mipmapped maps, depth scaled with the tile (4 cm for 2 m bricks)")
+	# A texture set the texture-set tools recognise.
+	var dir := "user://gads_procedural_test"
+	var written := GADSProcedural.write_texture_set("stones", dir, "pebbles", {"size": 64})
+	var sets := GADSTextureSet.detect(PackedStringArray(written.values()))
+	var roles: Array = (sets[0]["files"] as Dictionary).keys() if sets.size() == 1 else []
+	roles.sort()
+	check(written.size() == 4 and roles == ["albedo", "height", "normal", "orm"] and FileAccess.file_exists(String(written["height"]) + ".import"),
+		"write_texture_set writes a set the texture-set tools read (%s)" % [roles])
+	var exr := Image.load_from_file(ProjectSettings.globalize_path(written.get("height", "")))
+	check(exr != null and exr.get_format() in [Image.FORMAT_RH, Image.FORMAT_RF], "the height is a float EXR")
+	for f in DirAccess.get_files_at(dir):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(dir.path_join(f)))
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(dir))

@@ -106,6 +106,14 @@ All notable changes to this project are documented here. The format follows
   Project > Tools > **Make Selected Meshes GADSMeshInstance3D** and **Bake Selected
   GADSMeshInstance3D** (undoable); Validate Setup reports stale bakes, unbakeable meshes, a
   missing native library and bakes the budget cut short.
+- **Procedural materials**: `GADSProcedural` (native `GADSHeightGenerator`) makes tileable
+  height maps of eleven kinds (noise, ridged, billow, rock, stones, cracks, bricks, tiles,
+  waves, ripples, craters; seed, scale, octaves, warp, gaps, bevel, variation and more) and the
+  maps a material needs from any height map (normal, horizon-based ambient occlusion, curvature,
+  a two-colour albedo, ORM), as images, a material in memory or a texture set on disk. Editor:
+  Project > Tools > **Generate Procedural Material...** writes, imports and saves the set and
+  its material. Imports by the editor tools wait for the editor's own imports and scans, so
+  creating materials right after one another no longer collides with them.
 - **Vector displacement in the bake**: UV-mapped materials take an optional
   `vector_displacement_texture` (XYZ offsets per texel, tangent or object space, signed or
   0..1 around 0.5) times `vector_displacement_m`. A `GADSMeshInstance3D` bake moves its vertices

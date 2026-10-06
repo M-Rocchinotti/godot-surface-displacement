@@ -203,6 +203,22 @@ func _run() -> void:
 		_check(is_equal_approx(cliff.get_shader_parameter("height_m"), 0.09) and cliff.get_shader_parameter("texture_size_m") == Vector2(3, 3)
 			and h != null and h.get_image().has_mipmaps(), "and the chosen depth and size; the height has mipmaps")
 
+	# 11. A procedural material (Generate Procedural Material): maps written, imported, saved. (Right
+	# after the texture set, whose own albedo the editor re-imports once a preview draws it in 3D:
+	# the import has to wait for that one.)
+	var generated: String = await _sd_plugin.generate_procedural_material("bricks", "res://procedural", "wall",
+		{"size": 64, "tile_m": Vector2(2, 2), "mapping": GADSMaterials.Mapping.TRIPLANAR})
+	var wall := load(generated) as ShaderMaterial if not generated.is_empty() else null
+	_check(generated == "res://procedural/wall_gads.tres" and wall != null and GADSMaterials.parse(wall.shader).get("mapping", -1) == GADSMaterials.Mapping.TRIPLANAR,
+		"a procedural brick material is generated and saved (%s)" % generated)
+	if wall != null:
+		var ok := true
+		for role in ["height", "normal", "albedo", "orm"]:
+			var t := wall.get_shader_parameter(role + "_texture") as Texture2D
+			ok = ok and t != null and t.resource_path.begins_with("res://procedural/wall_") and t.get_image() != null and t.get_image().has_mipmaps()
+		_check(ok and is_equal_approx(wall.get_shader_parameter("height_m"), 0.04) and wall.get_shader_parameter("texture_size_m") == Vector2(2, 2),
+			"with its four maps imported (mipmaps) and the brick depth for a 2 m tile")
+
 	# 9. What a save writes.
 	EditorInterface.save_scene()
 	await _frames_wait(5)

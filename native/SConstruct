@@ -45,7 +45,7 @@ with open(os.path.join(gen, "build_hash.gen.h"), "w", encoding="utf-8", newline=
     f.write('#pragma once\n#define GADS_BUILD_HASH "%s"\n' % source_hash())
 
 env.Append(CPPPATH=["src/", "gen/", "thirdparty/mikktspace/"])
-sources = Glob("src/*.cpp") + Glob("src/tess/*.cpp") + ["thirdparty/mikktspace/mikktspace.c"]
+sources = Glob("src/*.cpp") + Glob("src/tess/*.cpp") + Glob("src/proc/*.cpp") + ["thirdparty/mikktspace/mikktspace.c"]
 library = env.SharedLibrary(
     "../addons/gads/native/bin/libgads{}{}".format(env["suffix"], env["SHLIBSUFFIX"]),
     source=sources,

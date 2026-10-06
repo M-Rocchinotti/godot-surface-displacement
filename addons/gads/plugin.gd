@@ -5,7 +5,7 @@ extends EditorPlugin
 ## the selected ground, convert materials (undoable), turn selected meshes into
 ## GADSMeshInstance3D and bake them (undoable), bake the ground of the selected field, prepare
 ## height maps selected in the FileSystem dock, create materials from texture sets selected
-## there, and validate the setup. GADSMeshInstance3D gets
+## there, generate procedural materials, and validate the setup. GADSMeshInstance3D gets
 ## Bake / Rebuild / Clear buttons in the inspector; the GADS bottom panel profiles the scene; the
 ## scene import options get a GADS section (GADSImportTools).
 
@@ -18,8 +18,9 @@ const MENU_MESH_BAKE := "GADS: Bake Selected GADSMeshInstance3D"
 const MENU_HEIGHT := "GADS: Prepare Height Maps (FileSystem Selection)"
 const MENU_VALIDATE := "GADS: Validate Setup"
 const MENU_TEXTURE_SET := "GADS: Create Material from Selected Textures"
+const MENU_PROCEDURAL := "GADS: Generate Procedural Material..."
 const MENUS: Array[String] = [MENU_ADD_NODE, MENU_ADD_FIELD, MENU_CONVERT, MENU_MESH_CONVERT, MENU_MESH_BAKE, MENU_BAKE,
-	MENU_HEIGHT, MENU_TEXTURE_SET, MENU_VALIDATE]
+	MENU_HEIGHT, MENU_TEXTURE_SET, MENU_PROCEDURAL, MENU_VALIDATE]
 const MeshInspector := preload("res://addons/gads/editor/gads_mesh_inspector.gd")
 const ProfilerPanel := preload("res://addons/gads/editor/gads_profiler_panel.gd")
 const ImportPlugin := preload("res://addons/gads/editor/gads_import_plugin.gd")
@@ -43,6 +44,7 @@ func _enter_tree() -> void:
 	add_tool_menu_item(MENU_BAKE, bake_selected_field)
 	add_tool_menu_item(MENU_HEIGHT, prepare_selected_height_maps)
 	add_tool_menu_item(MENU_TEXTURE_SET, create_materials_from_selection)
+	add_tool_menu_item(MENU_PROCEDURAL, generate_procedural_dialog)
 	add_tool_menu_item(MENU_VALIDATE, validate)
 	_mesh_inspector = MeshInspector.new()
 	_mesh_inspector.undo_redo = get_undo_redo()
@@ -351,33 +353,20 @@ func create_materials(sets: Array, options: Array) -> PackedStringArray:
 	var fs := EditorInterface.get_resource_filesystem()
 	var created := PackedStringArray()
 	var uses := []
-	var unknown_dir := false
 	for s: Dictionary in sets:
 		uses.append(GADSTextureSet.prepare(s))
-		unknown_dir = unknown_dir or fs.get_filesystem_path(String(s["dir"])) == null
-	# Files in a folder the editor has not scanned yet cannot be imported one by one: scan it (that
-	# imports them too).
-	if unknown_dir:
-		while fs.is_scanning():
-			await fs.filesystem_changed
-		fs.scan()
-		await fs.filesystem_changed
-		while fs.is_scanning():
-			await get_tree().process_frame
+	# Import what is new: the written files (*_gads_*, afresh even when an older version was
+	# imported) and source files the editor has not imported yet.
+	var pending := PackedStringArray()
+	for use: Dictionary in uses:
+		for path: String in use.values():
+			if (path.get_file().contains("_gads_") or not is_imported(path)) and not pending.has(path):
+				pending.append(path)
+	await import_files(pending)
 	for i in sets.size():
 		var s: Dictionary = sets[i]
 		var o: Dictionary = options[i] if i < options.size() else {}
 		var use: Dictionary = uses[i]
-		# Import what is new: the written files and source files the editor has not imported yet.
-		var pending := PackedStringArray()
-		for path: String in use.values():
-			# The written files (*_gads_*) import afresh even when an older version was imported
-			# (a scan has just imported them all).
-			if (path.get_file().contains("_gads_") and not unknown_dir) or not ResourceLoader.exists(path):
-				fs.update_file(path)
-				pending.append(path)
-		if not pending.is_empty():
-			fs.reimport_files(pending)
 		var size := float(o.get("texture_size_m", 2.0))
 		var params := {"texture_size_m": Vector2(size, size), "height_m": float(o.get("height_m", GADSTextureSet.DEPTH_PER_METRE * size))}
 		var path := String(s["dir"]).path_join("%s_gads.tres" % s["name"])
@@ -389,6 +378,167 @@ func create_materials(sets: Array, options: Array) -> PackedStringArray:
 	if not created.is_empty():
 		EditorInterface.select_file(created[0])
 	return created
+
+
+## Asks for a procedural kind, its size, seed, scale, tile, depth, mapping, name and folder, then
+## runs [method generate_procedural_material].
+func generate_procedural_dialog() -> void:
+	if not GADSProcedural.is_available():
+		push_warning("GADS: procedural materials need the GADS native library, which is not loaded on this platform.")
+		return
+	var dialog := ConfirmationDialog.new()
+	dialog.title = "Generate Procedural GADS Material"
+	dialog.ok_button_text = "Generate"
+	var grid := GridContainer.new()
+	grid.columns = 2
+	dialog.add_child(grid)
+	var add_row := func(text: String, control: Control) -> void:
+		var label := Label.new()
+		label.text = text
+		grid.add_child(label)
+		grid.add_child(control)
+	var kinds := GADSProcedural.get_kinds()
+	var kind := OptionButton.new()
+	for k in kinds:
+		kind.add_item(k.capitalize())
+	add_row.call("Kind", kind)
+	var size := OptionButton.new()
+	for px in [256, 512, 1024, 2048]:
+		size.add_item("%d px" % px)
+	size.select(1)
+	add_row.call("Size", size)
+	var make_spin := func(lo: float, hi: float, step: float, value: float) -> SpinBox:
+		var spin := SpinBox.new()
+		spin.min_value = lo
+		spin.max_value = hi
+		spin.step = step
+		spin.value = value
+		return spin
+	var seed_spin: SpinBox = make_spin.call(0, 99999, 1, 1)
+	add_row.call("Seed", seed_spin)
+	var scale: SpinBox = make_spin.call(1, 64, 1, 4)
+	add_row.call("Features per tile", scale)
+	var tile: SpinBox = make_spin.call(0.1, 50.0, 0.1, 1.0)
+	add_row.call("Tile size (m)", tile)
+	var depth: SpinBox = make_spin.call(0.1, 100.0, 0.1, 3.0)
+	add_row.call("Relief depth (cm)", depth)
+	var mapping := OptionButton.new()
+	for m in ["UV", "World-planar (ground)", "Triplanar"]:
+		mapping.add_item(m)
+	add_row.call("Mapping", mapping)
+	var name_edit := LineEdit.new()
+	add_row.call("Name", name_edit)
+	var dir_edit := LineEdit.new()
+	var selected := EditorInterface.get_selected_paths()
+	dir_edit.text = "res://gads_procedural"
+	if not selected.is_empty():
+		dir_edit.text = selected[0] if DirAccess.dir_exists_absolute(selected[0]) else selected[0].get_base_dir()
+	add_row.call("Folder", dir_edit)
+	# The kind's defaults; the depth follows the tile size.
+	var apply_kind := func(index: int) -> void:
+		var preset: Dictionary = GADSProcedural.PRESETS[kinds[index]]
+		scale.value = float((preset["params"] as Dictionary).get("scale", 4))
+		depth.value = snappedf(float(preset["depth_m"]) * tile.value * 100.0, 0.1)
+		name_edit.text = kinds[index]
+	kind.item_selected.connect(apply_kind)
+	tile.value_changed.connect(func(_v: float) -> void: apply_kind.call(kind.selected))
+	apply_kind.call(0)
+	dialog.confirmed.connect(func() -> void:
+		var options := {
+			"size": [256, 512, 1024, 2048][size.selected],
+			"params": {"seed": int(seed_spin.value), "scale": scale.value},
+			"tile_m": Vector2(tile.value, tile.value),
+			"depth_m": depth.value / 100.0,
+			"mapping": mapping.selected,
+		}
+		var file_name := name_edit.text.strip_edges().validate_filename()
+		generate_procedural_material(kinds[kind.selected], dir_edit.text.strip_edges(), file_name if not file_name.is_empty() else kinds[kind.selected], options)
+		dialog.queue_free())
+	dialog.canceled.connect(dialog.queue_free)
+	EditorInterface.get_base_control().add_child(dialog)
+	dialog.popup_centered(Vector2i(420, 0))
+
+
+## Writes the maps of a procedural [param kind] into [param dir] as "<name>_height.exr",
+## "_normal.png", "_albedo.png" and "_orm.png" (GADSProcedural.write_texture_set with
+## [param options]), imports them and saves the GADS material "<name>_gads.tres" there. Returns
+## its path ("" on failure).
+func generate_procedural_material(kind: String, dir: String, name: String, options := {}) -> String:
+	var fs := EditorInterface.get_resource_filesystem()
+	var written := GADSProcedural.write_texture_set(kind, dir, name, options)
+	if written.is_empty():
+		return ""
+	await import_files(PackedStringArray(written.values()))
+	var tile: Vector2 = options.get("tile_m", Vector2.ONE)
+	var mapping: int = options.get("mapping", GADSMaterials.Mapping.UV)
+	var path := dir.path_join("%s_gads.tres" % name)
+	var material := GADSTextureSet.create_material(written, {"height_m": GADSProcedural.depth_of(kind, options), "texture_size_m": tile}, mapping,
+		GADSMaterials.Quality.POM_SELF_SHADOW, path)
+	if material == null or not FileAccess.file_exists(path):
+		return ""
+	fs.update_file(path)
+	print("GADS: generated %s (%s, %d px)" % [path, kind, int(options.get("size", 512))])
+	EditorInterface.select_file(path)
+	return path
+
+
+## Imports [param paths] (files just written or changed) and returns once each one is imported:
+## registered and re-imported at once in folders the editor knows, found by a scan (which imports
+## them) in folders it does not. First waits for any scan or import the editor is running (an
+## import cannot start inside another), and never starts one from inside a signal.
+func import_files(paths: PackedStringArray) -> void:
+	if paths.is_empty():
+		return
+	var fs := EditorInterface.get_resource_filesystem()
+	var tree := Engine.get_main_loop() as SceneTree
+	await tree.process_frame
+	for i in 1200:
+		if not fs.is_scanning() and not fs.is_importing():
+			break
+		await tree.process_frame
+	var known := PackedStringArray()
+	var unknown := PackedStringArray()
+	for path in paths:
+		if fs.get_filesystem_path(path.get_base_dir()) != null:
+			known.append(path)
+		else:
+			unknown.append(path)
+	if not known.is_empty():
+		# Registered and imported in the same frame (the editor would otherwise start importing
+		# the new files itself in between).
+		for path in known:
+			fs.update_file(path)
+		fs.reimport_files(known)
+	if not unknown.is_empty():
+		# A scan registers the folders and imports their files; one that finds the editor busy
+		# importing something else may leave them, so scan again (up to three times) until all are.
+		var scans := 0
+		var next_scan := 0
+		for i in 1800:
+			if not fs.is_scanning() and not fs.is_importing():
+				var left := 0
+				for path in unknown:
+					left += 0 if is_imported(path) else 1
+				if left == 0:
+					break
+				if i >= next_scan and scans < 3:
+					fs.scan()
+					scans += 1
+					next_scan = i + 120
+			await tree.process_frame
+
+
+## Whether the editor has imported [param path] (its .import file lists the imported files and
+## they exist).
+static func is_imported(path: String) -> bool:
+	var cfg := ConfigFile.new()
+	if cfg.load(path + ".import") != OK:
+		return false
+	var dest: Array = cfg.get_value("deps", "dest_files", [])
+	for d: String in dest:
+		if not FileAccess.file_exists(d):
+			return false
+	return not dest.is_empty()
 
 
 func validate() -> void:

@@ -414,3 +414,20 @@ renderer writes through an approximate sRGB encode / decode that does not return
 height code, so a field there needs a bake saved from the editor and stays off without one.
 `tests/renderer_tests.gd` checks every variant, the depth write, deformation and the demo scenes
 on both renderers.
+
+## 13. Procedural height maps (`GADSProcedural`)
+
+`native/src/proc/height_gen.cpp` makes every pattern periodic on the unit tile, so the maps tile
+by construction: gradient noise hashes its lattice corners modulo the octave's period (each
+octave a whole multiple of the first, octaves beyond half the resolution dropped); Voronoi cells
+(stones, cracks) jitter points on a wrapped grid and measure the exact distance to the nearest
+cell border (the bisector with each neighbour of the nearest point); bricks use an even number
+of rows and a whole number of bricks per row, waves integer wave vectors, ripples and craters
+distances on the torus, faded out before half a tile. Domain warp offsets the coordinates by
+periodic noise, so warped patterns tile too. Each field is normalised to 0..1. The derived maps
+wrap at the borders as well: normals by central differences in metres (OpenGL convention, as the
+shaders read them), occlusion as 1 - sin of the horizon elevation averaged over 8 directions
+(12 samples each, denser near the texel), curvature as the height minus two box blurs. Rows run
+in parallel; the results do not depend on the thread count. `tests/run_logic_tests.gd` checks
+the range, the seams (the wrap-around boundary against its neighbours), determinism and the
+derived maps on known shapes.
