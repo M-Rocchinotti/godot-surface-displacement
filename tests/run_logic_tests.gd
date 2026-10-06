@@ -35,6 +35,7 @@ func _run() -> void:
 	await test_adaptive_quality()
 	await test_platform_caps()
 	test_sculpt_brush()
+	test_erosion()
 	await test_scatter_parameter_sync()
 	print("\nlogic tests: %d passed, %d failed" % [_passed, _failed])
 	quit(1 if _failed > 0 else 0)
@@ -1071,6 +1072,64 @@ func test_platform_caps() -> void:
 
 ## GADSSculpt brush dabs: raise and lower by the strength at the centre, nothing at the radius;
 ## smooth lowers a spike; flatten levels towards a height.
+func test_erosion() -> void:
+	print("\n== erosion")
+	if not GADSProcedural.is_available():
+		check(false, "the native library is loaded")
+		return
+	# A cone 1 unit high over 50 texels: at 60 m a unit its flanks are 50 degrees, at 20 m 22.
+	var n := 101
+	var cone := Image.create(n, n, false, Image.FORMAT_RF)
+	for y in n:
+		for x in n:
+			cone.set_pixel(x, y, Color(maxf(0.0, 1.0 - Vector2(x - 50, y - 50).length() / 50.0), 0, 0))
+	var thermal := {"thermal_iterations": 2000, "talus_deg": 30.0, "thermal_rate": 0.5, "cell_m": 1.0}
+	var steep := GADSProcedural.erode_image(cone, thermal.merged({"height_m": 60.0}))
+	var gentle := GADSProcedural.erode_image(cone, thermal.merged({"height_m": 20.0}))
+	var sum := func(img: Image) -> float:
+		var s := 0.0
+		for v in img.get_data().to_float32_array():
+			s += v
+		return s
+	var max_slope := func(img: Image, height_m: float) -> float:
+		var d := img.get_data().to_float32_array()
+		var worst := 0.0
+		for y in range(1, n - 1):
+			for x in range(1, n - 1):
+				var gx := (d[y * n + x + 1] - d[y * n + x - 1]) * 0.5 * height_m
+				var gy := (d[(y + 1) * n + x] - d[(y - 1) * n + x]) * 0.5 * height_m
+				worst = maxf(worst, Vector2(gx, gy).length())
+		return rad_to_deg(atan(worst))
+	var before_sum: float = sum.call(cone)
+	print("  thermal: steepest flank %.1f -> %.1f degrees at 60 m a unit; %.1f at 20 m" % [max_slope.call(cone, 60.0), max_slope.call(steep, 60.0), max_slope.call(gentle, 20.0)])
+	check(max_slope.call(steep, 60.0) < 34.0 and absf(float(sum.call(steep)) - before_sum) < 1e-3 * before_sum,
+		"thermal erosion slides slopes steeper than the talus angle down to it, keeping the material")
+	check(gentle.get_data() == cone.get_data(), "slopes under the talus angle stay (the scale makes the slope)")
+	# Hydraulic: noise hills; ridges come down, valleys fill, the same seed gives the same field.
+	var hills := GADSProcedural.height_image("noise", 128, {"seed": 4, "scale": 4.0})
+	var water := {"droplets": 30000, "seed": 3, "cell_m": 1.0, "height_m": 20.0}
+	var a := GADSProcedural.erode_image(hills, water)
+	var b := GADSProcedural.erode_image(hills, water)
+	var c := GADSProcedural.erode_image(hills, water.merged({"seed": 4}, true))
+	var hd := hills.get_data().to_float32_array()
+	var ad := a.get_data().to_float32_array()
+	var order := range(hd.size())
+	order.sort_custom(func(i: int, j: int) -> bool: return hd[i] < hd[j])
+	var tenth := hd.size() / 10
+	var low_before := 0.0
+	var low_after := 0.0
+	var high_before := 0.0
+	var high_after := 0.0
+	for k in tenth:
+		low_before += hd[order[k]]
+		low_after += ad[order[k]]
+		high_before += hd[order[hd.size() - 1 - k]]
+		high_after += ad[order[hd.size() - 1 - k]]
+	print("  hydraulic: lowest tenth %+.4f, highest tenth %+.4f (mean change in units)" % [(low_after - low_before) / tenth, (high_after - high_before) / tenth])
+	check(low_after > low_before and high_after < high_before, "water erosion takes the high ground down and fills the low")
+	check(a.get_data() == b.get_data() and a.get_data() != c.get_data(), "the same seed erodes the same way, another seed differently")
+
+
 func test_sculpt_brush() -> void:
 	print("\n== sculpt brush")
 	var img := GADSSculpt.new_image(64)

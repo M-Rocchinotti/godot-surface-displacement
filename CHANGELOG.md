@@ -157,6 +157,11 @@ All notable changes to this project are documented here. The format follows
   collision and the detail field's ground data. Edited maps are one texel per vertex, saved into
   `data_directory`. Runtime API: `sculpt()`, `paint_splatmap()`, `set_height_region()` /
   `set_splat_region()`, `intersect_ray()` (no physics needed), the `edited` signal.
+- **Erosion and generated terrains**: native hydraulic (droplet) and thermal (talus) erosion
+  of height fields at their physical scale, deterministic (`GADSHeightGenerator.erode`,
+  `GADSProcedural.erode_image`); `GADSTerrain3D.erode()`, `generate_heights()` and
+  `export_heightmap()` (float EXR), with Generate, Erode and Export Heightmap in the terrain's
+  inspector (undoable).
 - **Clean Bake Cache** (Project > Tools): bakes, collision shapes and sculpt maps nothing refers
   to or holds any more, moved to the trash (`GADSBakeCache`).
 - **Export baked meshes**: `GADSMeshInstance3D.export_baked()` and an Export button in the

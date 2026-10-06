@@ -5,6 +5,10 @@ extends EditorInspectorPlugin
 ## Each stroke is one undoable step; the edited maps are saved into the terrain's data directory.
 
 const MODES := ["Raise", "Lower", "Smooth", "Flatten", "Paint layer 2", "Paint layer 3", "Erase layers"]
+const KINDS := ["ridged", "noise", "billow", "craters"]
+
+## The plugin's edit_terrain_heights(terrain, action name, callable): one undoable action.
+var edit_heights: Callable
 
 
 func _can_handle(object: Object) -> bool:
@@ -14,13 +18,18 @@ func _can_handle(object: Object) -> bool:
 func _parse_begin(object: Object) -> void:
 	var panel := ToolPanel.new()
 	panel.terrain = object as GADSTerrain3D
+	panel.edit_heights = edit_heights
 	add_custom_control(panel)
 
 
 class ToolPanel extends VBoxContainer:
 	var terrain: GADSTerrain3D
+	var edit_heights: Callable
 	var _toggle: Button
 	var _row: HBoxContainer
+	var _kind: OptionButton
+	var _seed: SpinBox
+	var _features: SpinBox
 
 	func _ready() -> void:
 		_toggle = Button.new()
@@ -42,6 +51,34 @@ class ToolPanel extends VBoxContainer:
 		_row.add_child(_spin("Strength (cm)", 0.5, 1000.0, 0.5, GADSSculpt.terrain_strength * 100.0,
 			func(v: float) -> void: GADSSculpt.terrain_strength = v / 100.0))
 		_row.visible = _toggle.button_pressed
+		if GADSProcedural.is_available():
+			var gen := HBoxContainer.new()
+			add_child(gen)
+			_kind = OptionButton.new()
+			for k in KINDS:
+				_kind.add_item(k.capitalize())
+			gen.add_child(_kind)
+			var seed_box := _spin("Seed", 0, 99999, 1, 1, func(_v: float) -> void: pass)
+			_seed = seed_box.get_child(1) as SpinBox
+			gen.add_child(seed_box)
+			var features_box := _spin("Features", 1, 64, 1, 4, func(_v: float) -> void: pass)
+			_features = features_box.get_child(1) as SpinBox
+			gen.add_child(features_box)
+			var generate := Button.new()
+			generate.text = "Generate"
+			generate.tooltip_text = "Replace the heights by a generated landscape (undoable)."
+			generate.pressed.connect(_on_generate)
+			gen.add_child(generate)
+			var erode := Button.new()
+			erode.text = "Erode"
+			erode.tooltip_text = "Erode the heights: water carves gullies and fills valleys, steep slopes slide into scree (undoable)."
+			erode.pressed.connect(_on_erode)
+			gen.add_child(erode)
+		var export_button := Button.new()
+		export_button.text = "Export Heightmap"
+		export_button.tooltip_text = "Write the heights (one texel per vertex, 0..1 over the height scale) to a float EXR for other tools."
+		export_button.pressed.connect(_on_export)
+		add_child(export_button)
 
 	func _spin(text: String, lo: float, hi: float, step: float, value: float, changed: Callable) -> Control:
 		var box := HBoxContainer.new()
@@ -73,6 +110,36 @@ class ToolPanel extends VBoxContainer:
 			GADSSculpt.tool_paint = -1
 		else:
 			GADSSculpt.tool_paint = [1, 2, 0][index - 4]
+
+	func _on_generate() -> void:
+		var kind: String = KINDS[_kind.selected]
+		var params := {"seed": int(_seed.value), "scale": _features.value}
+		_edit("Generate GADS Terrain", func() -> void: terrain.generate_heights(kind, params))
+
+	func _on_erode() -> void:
+		_edit("Erode GADS Terrain", func() -> void: terrain.erode({"seed": int(_seed.value)}))
+
+	func _on_export() -> void:
+		var dialog := EditorFileDialog.new()
+		dialog.file_mode = EditorFileDialog.FILE_MODE_SAVE_FILE
+		dialog.access = EditorFileDialog.ACCESS_FILESYSTEM
+		dialog.title = "Export Terrain Heightmap"
+		dialog.filters = PackedStringArray(["*.exr ; OpenEXR"])
+		dialog.current_file = String(terrain.name).to_snake_case() + "_height.exr"
+		dialog.file_selected.connect(func(path: String) -> void:
+			var err := terrain.export_heightmap(path)
+			if err != OK:
+				push_warning("GADS: cannot export the heightmap to %s (%s)." % [path, error_string(err)])
+			dialog.queue_free())
+		dialog.canceled.connect(dialog.queue_free)
+		EditorInterface.get_base_control().add_child(dialog)
+		dialog.popup_file_dialog()
+
+	func _edit(action: String, edit: Callable) -> void:
+		if edit_heights.is_valid():
+			edit_heights.call(terrain, action, edit)
+		else:
+			edit.call()
 
 	func _on_toggled(on: bool) -> void:
 		GADSSculpt.tool_active = on

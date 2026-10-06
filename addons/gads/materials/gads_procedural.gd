@@ -79,6 +79,19 @@ static func height_texture(kind: String, size := 512, params := {}) -> ImageText
 
 ## Tangent-space normals (OpenGL convention, as GADS materials read them; RGB8, no mipmaps) of a
 ## height map whose 0..1 range spans [param depth_m] metres over a tile of [param tile_m].
+## [param height] eroded (FORMAT_RF): water droplets that pick sediment up where they speed up and
+## drop it where they slow down (gullies, filled valleys), then material sliding off slopes steeper
+## than a talus angle. [param params]: "droplets" (0: no water), "seed", "max_steps", "inertia",
+## "capacity", "erosion", "deposition", "evaporation", "gravity", "radius" (texels),
+## "thermal_iterations" (0: no sliding), "talus_deg", "thermal_rate", and the scale: "cell_m"
+## (metres between texels) and "height_m" (metres per height unit), which make the slopes
+## physical; "wrap" for tileable maps. Deterministic.
+static func erode_image(height: Image, params := {}) -> Image:
+	if not _native_ok():
+		return null
+	return ClassDB.class_call_static(NATIVE, &"erode", height, params)
+
+
 static func normal_image(height: Image, depth_m: float, tile_m := Vector2.ONE) -> Image:
 	if not _native_ok() or height == null:
 		return null

@@ -423,6 +423,18 @@ the stroke that converted a map also swaps the property back, and a region writt
 swap first re-reads the maps. `intersect_ray()` clips the ray to the terrain's rectangle, steps
 at half the spacing until it passes below the triangles and bisects.
 
+**Erosion** (`native/src/proc/erosion.cpp`). Heights are converted to texel units (times
+`height_m / cell_m`), so slopes are rise over run and the parameters mean the same on any
+terrain. Hydraulic: droplets start at random texels (own xorshift generator, single thread, so
+results are the same everywhere), follow the bilinear gradient with some inertia, speed up going
+down, carry sediment up to capacity x speed x water x drop, take it from a disc around them where
+they can carry more (never more than the drop to the next step) and drop it where they carry too
+much or climb (filling the pit behind them); a droplet that stops leaves its load there, one that
+runs off the field takes it along. Thermal: per iteration every texel moves half of its steepest
+excess over the talus slope to the lower neighbours (eight, diagonals at their distance), shared by
+excess, Jacobi style (mass conserving). The terrain runs both on its editable map and sets it as
+one region.
+
 **Layers.** Weights for the second and third layer per vertex (splat map, or smoothstep rules
 on slope and height) go to vertex colour R and G, which the layered material reads as its masks;
 `GADSMaterials.combine_layers()` copies the layer materials' textures, depths and texture sizes

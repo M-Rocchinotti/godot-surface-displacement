@@ -318,6 +318,17 @@ func _run() -> void:
 	GADSSculpt.tool_active = false
 	GADSSculpt.tool_node = null
 	GADSSculpt.tool_paint = -1
+	# Generate (the inspector's button): one undoable action.
+	var sculpted_h := terrain.get_height(aim)
+	_sd_plugin.edit_terrain_heights(terrain, "Generate GADS Terrain", func() -> void: terrain.generate_heights("ridged", {"seed": 2}))
+	var generated_h := terrain.get_height(aim)
+	ur.undo()
+	await _frames_wait(2)
+	var undone_h := terrain.get_height(aim)
+	ur.redo()
+	await _frames_wait(2)
+	_check(absf(generated_h - sculpted_h) > 1e-3 and absf(undone_h - sculpted_h) < 1e-4 and absf(terrain.get_height(aim) - generated_h) < 1e-4,
+		"Generate replaces the heights, undo and redo")
 
 	# 9. What a save writes.
 	EditorInterface.save_scene()

@@ -1,5 +1,6 @@
 #include "gads_height_generator.h"
 
+#include "proc/erosion.h"
 #include "proc/height_gen.h"
 
 #include <godot_cpp/core/class_db.hpp>
@@ -21,6 +22,7 @@ void GADSHeightGenerator::_bind_methods() {
 			&GADSHeightGenerator::albedo_map, DEFVAL(Ref<Image>()), DEFVAL(Ref<Image>()), DEFVAL(0.6f), DEFVAL(0.5f));
 	ClassDB::bind_static_method("GADSHeightGenerator", D_METHOD("orm_map", "ao", "curvature", "roughness", "variation"), &GADSHeightGenerator::orm_map,
 			DEFVAL(0.85f), DEFVAL(0.15f));
+	ClassDB::bind_static_method("GADSHeightGenerator", D_METHOD("erode", "height", "params"), &GADSHeightGenerator::erode, DEFVAL(Dictionary()));
 }
 
 static Ref<Image> image_of(int p_w, int p_h, Image::Format p_format, const std::vector<float> &p_values) {
@@ -151,6 +153,35 @@ Ref<Image> GADSHeightGenerator::orm_map(const Ref<Image> &p_ao, const Ref<Image>
 	Ref<Image> img = image_of(w, ht, Image::FORMAT_RGBF, rgb);
 	img->convert(Image::FORMAT_RGB8);
 	return img;
+}
+
+// Hydraulic, then thermal erosion of the red channel (see proc/erosion.h); FORMAT_RF.
+Ref<Image> GADSHeightGenerator::erode(const Ref<Image> &p_height, const Dictionary &p_params) {
+	std::vector<float> h;
+	int w, ht;
+	if (!heights_of(p_height, h, w, ht)) {
+		return Ref<Image>();
+	}
+	gads::ErosionParams p;
+	p.droplets = p_params.get("droplets", p.droplets);
+	p.seed = p_params.get("seed", p.seed);
+	p.max_steps = p_params.get("max_steps", p.max_steps);
+	p.inertia = p_params.get("inertia", p.inertia);
+	p.capacity = p_params.get("capacity", p.capacity);
+	p.min_capacity = p_params.get("min_capacity", p.min_capacity);
+	p.erosion = p_params.get("erosion", p.erosion);
+	p.deposition = p_params.get("deposition", p.deposition);
+	p.evaporation = p_params.get("evaporation", p.evaporation);
+	p.gravity = p_params.get("gravity", p.gravity);
+	p.radius = p_params.get("radius", p.radius);
+	p.thermal_iterations = p_params.get("thermal_iterations", p.thermal_iterations);
+	p.talus_deg = p_params.get("talus_deg", p.talus_deg);
+	p.thermal_rate = p_params.get("thermal_rate", p.thermal_rate);
+	p.cell_m = p_params.get("cell_m", p.cell_m);
+	p.height_m = p_params.get("height_m", p.height_m);
+	p.wrap = p_params.get("wrap", p.wrap);
+	gads::erode(h, w, ht, p);
+	return image_of(w, ht, Image::FORMAT_RF, h);
 }
 
 } // namespace godot

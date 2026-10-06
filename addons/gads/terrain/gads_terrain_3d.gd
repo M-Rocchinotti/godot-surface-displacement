@@ -669,6 +669,51 @@ func paint_splatmap(world_position: Vector3, radius: float, layer: int, strength
 	return rect
 
 
+## Erodes the heights (needs the native library): water droplets that carve gullies and fill
+## valleys, then material sliding off slopes steeper than a talus angle, at the terrain's own
+## scale (the vertex spacing and [member height_scale] make the slopes physical).
+## [param params] as [method GADSProcedural.erode_image]; by default one droplet per two vertices
+## and 20 iterations of sliding at 38 degrees. Persistent like [method sculpt]. Returns the grid
+## rectangle it changed (empty: nothing).
+func erode(params := {}) -> Rect2i:
+	if _nx < 2 or height_scale <= 0.0 or not GADSProcedural.is_available():
+		return Rect2i()
+	var p := {"droplets": _nx * _nz / 2, "thermal_iterations": 20, "talus_deg": 38.0}
+	p.merge(params, true)
+	p["cell_m"] = _spacing
+	p["height_m"] = height_scale
+	var img := GADSProcedural.erode_image(get_height_image(), p)
+	if img == null:
+		return Rect2i()
+	set_height_region(Vector2i.ZERO, img)
+	return Rect2i(0, 0, _nx, _nz)
+
+
+## Replaces the heights by a generated field: a GADSProcedural kind ("noise", "ridged", "billow",
+## "craters"...) with [param params] as [method GADSProcedural.height_image] ("seed", "scale" =
+## features across the terrain, "octaves", "warp"...), 0..1 over [member height_scale]. Needs the
+## native library. Persistent like [method sculpt]. Returns the grid rectangle it changed.
+func generate_heights(kind: String, params := {}) -> Rect2i:
+	if _nx < 2 or not GADSProcedural.is_available():
+		return Rect2i()
+	var n := clampi(maxi(_nx, _nz), 4, 8192)
+	var img := GADSProcedural.height_image(kind, n, params)
+	if img == null:
+		return Rect2i()
+	set_height_region(Vector2i.ZERO, img.get_region(Rect2i(0, 0, mini(_nx, n), mini(_nz, n))))
+	return Rect2i(0, 0, _nx, _nz)
+
+
+## Writes the heights (one texel per vertex, 0..1 over [member height_scale], as
+## [method get_height_image] has them) to [param path] as a one-channel float EXR, for other
+## tools. Returns the error.
+func export_heightmap(path: String) -> Error:
+	var img := get_height_image()
+	if img == null:
+		return ERR_UNCONFIGURED
+	return img.save_exr(path if path.get_extension() == "exr" else path + ".exr", true)
+
+
 ## Whether [member heightmap] is an editable map (an ImageTexture of one float texel per vertex).
 func is_height_editable() -> bool:
 	var tex := heightmap as ImageTexture
@@ -760,7 +805,12 @@ func set_height_region(position: Vector2i, region: Image) -> void:
 	_wait_tasks()
 	var img := region.duplicate() as Image
 	img.convert(Image.FORMAT_RF)
-	var rect := _blit(_src["data"], 1, img.get_data().to_float32_array(), img.get_size(), position)
+	var rect: Rect2i
+	if position == Vector2i.ZERO and img.get_size() == Vector2i(_nx, _nz):
+		_src["data"] = img.get_data().to_float32_array()
+		rect = Rect2i(0, 0, _nx, _nz)
+	else:
+		rect = _blit(_src["data"], 1, img.get_data().to_float32_array(), img.get_size(), position)
 	_heights_changed(rect)
 	flush_edits()
 

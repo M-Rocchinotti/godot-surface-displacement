@@ -1,6 +1,6 @@
-// GADSHeightGenerator: procedural, tileable height fields and the maps derived from height
-// fields (normal, ambient occlusion, curvature) for GDScript (see proc/height_gen.h). Static
-// methods; safe to call from any thread.
+// GADSHeightGenerator: procedural, tileable height fields, the maps derived from height fields
+// (normal, ambient occlusion, curvature) and erosion, for GDScript (see proc/height_gen.h and
+// proc/erosion.h). Static methods; safe to call from any thread.
 #pragma once
 
 #include <godot_cpp/classes/image.hpp>
@@ -28,6 +28,7 @@ public:
 	static Ref<Image> albedo_map(const Ref<Image> &p_height, const Color &p_low, const Color &p_high, const Ref<Image> &p_ao, const Ref<Image> &p_curvature,
 			float p_ao_strength, float p_cavity_strength);
 	static Ref<Image> orm_map(const Ref<Image> &p_ao, const Ref<Image> &p_curvature, float p_roughness, float p_variation);
+	static Ref<Image> erode(const Ref<Image> &p_height, const Dictionary &p_params);
 };
 
 } // namespace godot

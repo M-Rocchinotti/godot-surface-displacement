@@ -34,6 +34,7 @@ func _run() -> void:
 	await _test("navigation_mesh_follows_the_terrain", test_navigation)
 	await _test("occluders_stay_below_the_surface", test_occluders)
 	await _test("sculpts_and_paints", test_editing)
+	await _test("erodes_and_generates", test_erosion)
 	if DisplayServer.get_name() != "headless":
 		await _test("renders_front_faces_and_coarser_far_away", test_render)
 	print("\nterrain tests: %d passed, %d failed" % [_passed, _failed])
@@ -650,6 +651,46 @@ func test_editing() -> void:
 				found_far = v.y
 	check(absf(found_far - st.get_height(far)) < 1e-4, "a chunk built after the edit has it")
 	holder.queue_free()
+	await process_frame
+
+
+## Erosion and generated heights on a terrain: the heights change and everything follows; a
+## generated landscape spans 0..height_scale.
+func test_erosion() -> void:
+	if not GADSProcedural.is_available():
+		check(false, "the native library is loaded")
+		return
+	var t := make_terrain({"height_scale": 20.0})
+	root.add_child(t)
+	var p := Vector3(5.3, 0, -7.1)
+	var before := t.get_height(p)
+	var rect := t.generate_heights("ridged", {"seed": 2, "scale": 3.0})
+	var lo := INF
+	var hi := -INF
+	for z in range(0, 129, 4):
+		for x in range(0, 129, 4):
+			var h := t.get_height(Vector3(-32.0 + x * 0.5, 0, -32.0 + z * 0.5))
+			lo = minf(lo, h)
+			hi = maxf(hi, h)
+	print("  generated: %.2f to %.2f m" % [lo, hi])
+	check(rect == Rect2i(Vector2i.ZERO, t.get_grid_size()) and t.get_height(p) != before and lo >= -1e-4 and hi <= 20.0001 and hi - lo > 8.0,
+		"generate_heights() makes a landscape within 0..height_scale")
+	var generated := t.get_height(p)
+	t.erode({"seed": 5})
+	var mesh_ok := true
+	for chunk in t.get_chunks():
+		var v: PackedVector3Array = chunk.mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX]
+		for i in range(0, 33 * 33, 37):
+			mesh_ok = mesh_ok and absf(v[i].y - t.get_height(v[i])) < 1e-4
+	check(t.get_height(p) != generated and mesh_ok, "erode() changes the heights, the chunks follow")
+	var exr := "user://gads_terrain_export.exr"
+	var err := t.export_heightmap(exr)
+	var back := Image.load_from_file(ProjectSettings.globalize_path(exr)) if err == OK else null
+	var g := t.get_grid_size()
+	check(back != null and back.get_size() == g and absf(back.get_pixel(64, 30).r * 20.0 - t.get_height(Vector3(-32.0 + 64 * 0.5, 0, -32.0 + 30 * 0.5))) < 0.02,
+		"export_heightmap() writes the heights as an EXR of one texel per vertex")
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(exr))
+	t.queue_free()
 	await process_frame
 
 
