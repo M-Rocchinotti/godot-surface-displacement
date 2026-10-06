@@ -329,6 +329,26 @@ func _run() -> void:
 	await _frames_wait(2)
 	_check(absf(generated_h - sculpted_h) > 1e-3 and absf(undone_h - sculpted_h) < 1e-4 and absf(terrain.get_height(aim) - generated_h) < 1e-4,
 		"Generate replaces the heights, undo and redo")
+	# A road (GADSTerrainPath3D's Apply to Terrain, the editor's undo).
+	var road := GADSTerrainPath3D.new()
+	road.name = "Road"
+	road.curve = Curve3D.new()
+	road.curve.add_point(Vector3(-6, 0, -1))
+	road.curve.add_point(Vector3(6, 0, 1))
+	road.layer = 1
+	terrain.add_child(road)
+	road.owner = root
+	var on_road := Vector3(40, 0, 0)
+	var before_road := terrain.get_height(on_road)
+	var road_rect := road.apply()
+	var road_h := terrain.get_height(on_road)
+	ur.undo()
+	await _frames_wait(2)
+	var undone_road := terrain.get_height(on_road)
+	ur.redo()
+	await _frames_wait(2)
+	_check(road_rect.has_area() and absf(undone_road - before_road) < 1e-4 and absf(terrain.get_height(on_road) - road_h) < 1e-4
+		and terrain.get_layer_weights(on_road).x > 0.9, "Apply to Terrain flattens and paints a road, undo and redo")
 
 	# 9. What a save writes.
 	EditorInterface.save_scene()

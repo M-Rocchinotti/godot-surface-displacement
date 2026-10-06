@@ -799,24 +799,7 @@ func _end_terrain_stroke(terrain: GADSTerrain3D) -> void:
 ## Runs [param edit] (a callable that changes [param terrain]'s heights at once: Generate, Erode)
 ## as one undoable action named [param action_name]; the heightmap is saved after it.
 func edit_terrain_heights(terrain: GADSTerrain3D, action_name: String, edit: Callable) -> void:
-	var was_editable := terrain.is_height_editable()
-	var original := terrain.heightmap
-	var before := terrain.get_height_image()
-	edit.call()
-	terrain.flush_edits()
-	var after := terrain.get_height_image()
-	var undo := get_undo_redo()
-	undo.create_action(action_name, UndoRedo.MERGE_DISABLE, terrain)
-	if not was_editable:
-		undo.add_do_property(terrain, "heightmap", terrain.heightmap)
-	undo.add_do_method(terrain, "set_height_region", Vector2i.ZERO, after)
-	undo.add_do_method(terrain, "save_edited_maps")
-	undo.add_undo_method(terrain, "set_height_region", Vector2i.ZERO, before)
-	if not was_editable:
-		undo.add_undo_property(terrain, "heightmap", original)
-	undo.add_undo_method(terrain, "save_edited_maps")
-	undo.commit_action(false)
-	terrain.save_edited_maps()
+	GADSTerrainEdit.run(terrain, action_name, edit, true, false, get_undo_redo())
 
 
 func _reset_stroke() -> void:

@@ -669,6 +669,82 @@ func paint_splatmap(world_position: Vector3, radius: float, layer: int, strength
 	return rect
 
 
+## Flattens a road along [param points] (world positions, in order): within [param width] / 2 of
+## the line (in XZ) the ground takes the line's height there (interpolated along it), fading back
+## to its own over [param falloff] metres beyond; [param layer] >= 0 also paints that layer (1, 2;
+## 0: the first) under the road, fading the same way. [param strength] (0..1): how far the heights
+## move. Persistent like [method sculpt]. Returns the grid vertices it changed.
+## [GADSTerrainPath3D] makes the points from a curve.
+func flatten_path(points: PackedVector3Array, width: float, falloff := 2.0, layer := -1, strength := 1.0) -> Rect2i:
+	if _nx < 2 or points.size() < 2 or height_scale <= 0.0 or width <= 0.0:
+		return Rect2i()
+	make_heights_editable()
+	if layer >= 0:
+		make_splat_editable()
+	_wait_tasks()
+	# The line in grid units, its heights as the map stores them.
+	var line := PackedVector2Array()
+	var ys := PackedFloat32Array()
+	for p in points:
+		var l := to_local(p)
+		line.append((Vector2(l.x, l.z) - _origin) / _spacing)
+		ys.append((l.y - height_offset) / height_scale)
+	var half := width * 0.5 / _spacing
+	var reach := half + maxf(falloff, 0.0) / _spacing
+	var lo := Vector2(INF, INF)
+	var hi := -lo
+	for q in line:
+		lo = lo.min(q)
+		hi = hi.max(q)
+	var g0 := Vector2i((lo - Vector2.ONE * reach).floor()).clamp(Vector2i.ZERO, Vector2i(_nx - 1, _nz - 1))
+	var g1 := Vector2i((hi + Vector2.ONE * reach).ceil()).clamp(Vector2i.ZERO, Vector2i(_nx - 1, _nz - 1))
+	var box := Rect2i(g0, g1 - g0 + Vector2i.ONE)
+	if not box.has_area():
+		return Rect2i()
+	# Per vertex of the box: the distance to the nearest point of the line and the line's height
+	# there, segment by segment over each segment's own neighbourhood.
+	var best := PackedFloat32Array()
+	best.resize(box.size.x * box.size.y)
+	best.fill(INF)
+	var target := PackedFloat32Array()
+	target.resize(best.size())
+	for i in line.size() - 1:
+		var a := line[i]
+		var ab := line[i + 1] - a
+		var len2 := ab.length_squared()
+		var s0 := Vector2i((a.min(line[i + 1]) - Vector2.ONE * reach).floor()).clamp(g0, g1)
+		var s1 := Vector2i((a.max(line[i + 1]) + Vector2.ONE * reach).ceil()).clamp(g0, g1)
+		for gz in range(s0.y, s1.y + 1):
+			for gx in range(s0.x, s1.x + 1):
+				var q := Vector2(gx, gz)
+				var t := clampf((q - a).dot(ab) / len2, 0.0, 1.0) if len2 > 0.0 else 0.0
+				var d := q.distance_to(a + ab * t)
+				var k := (gz - g0.y) * box.size.x + (gx - g0.x)
+				if d < best[k]:
+					best[k] = d
+					target[k] = lerpf(ys[i], ys[i + 1], t)
+	var data: PackedFloat32Array = _src["data"]
+	var splat: PackedFloat32Array = _splat["data"] if layer >= 0 else PackedFloat32Array()
+	var paint := Vector2(1.0 if layer == 1 else 0.0, 1.0 if layer == 2 else 0.0)
+	var amount := clampf(strength, 0.0, 1.0)
+	for gz in range(g0.y, g1.y + 1):
+		for gx in range(g0.x, g1.x + 1):
+			var k := (gz - g0.y) * box.size.x + (gx - g0.x)
+			if best[k] >= reach:
+				continue
+			var w := 1.0 if best[k] <= half else 1.0 - smoothstep(half, reach, best[k])
+			var i := gz * _nx + gx
+			data[i] = lerpf(data[i], target[k], w * amount)
+			if layer >= 0:
+				var c := Vector2(splat[i * 4], splat[i * 4 + 1]).lerp(paint, w)
+				splat[i * 4] = roundf(clampf(c.x, 0.0, 1.0) * 255.0) / 255.0
+				splat[i * 4 + 1] = roundf(clampf(c.y, 0.0, 1.0) * 255.0) / 255.0
+	_heights_changed(box)
+	if layer >= 0:
+		_weights_changed(box)
+	return box
+
+
 ## Erodes the heights (needs the native library): water droplets that carve gullies and fill
 ## valleys, then material sliding off slopes steeper than a talus angle, at the terrain's own
 ## scale (the vertex spacing and [member height_scale] make the slopes physical).

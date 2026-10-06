@@ -442,6 +442,24 @@ static func build_hills() -> Node3D:
 	terrain.slope_range = Vector2(22.0, 32.0)
 	terrain.height_band = Vector2(5.0, 6.5)
 	root.add_child(terrain)
+	# A gravel road winding from the viewpoint up towards the ridge (flattened when the scene starts).
+	var road := GADSTerrainPath3D.new()
+	road.name = "Road"
+	road.curve = Curve3D.new()
+	for p: Vector3 in [Vector3(-14, 0, 30), Vector3(-6, 0, 18), Vector3(-12, 0, 4), Vector3(-6, 0, -12), Vector3(4, 0, -24), Vector3(2, 0, -40)]:
+		road.curve.add_point(p, Vector3.ZERO, Vector3.ZERO)
+	for i in road.curve.point_count:
+		# Smooth handles along the line through the neighbours.
+		var prev := road.curve.get_point_position(maxi(i - 1, 0))
+		var next := road.curve.get_point_position(mini(i + 1, road.curve.point_count - 1))
+		road.curve.set_point_in(i, (prev - next) * 0.2)
+		road.curve.set_point_out(i, (next - prev) * 0.2)
+	road.width = 2.6
+	road.falloff = 2.5
+	road.layer = 2
+	road.smoothing = 14.0
+	road.apply_on_ready = true
+	terrain.add_child(road)
 	var tracks := GADSDeformationField.new()
 	tracks.name = "Tracks"
 	# A fixed window over the rover's whole loop (no follow): 32 m at 6 cm texels.

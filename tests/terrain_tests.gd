@@ -35,6 +35,7 @@ func _run() -> void:
 	await _test("occluders_stay_below_the_surface", test_occluders)
 	await _test("sculpts_and_paints", test_editing)
 	await _test("erodes_and_generates", test_erosion)
+	await _test("roads_along_paths", test_roads)
 	if DisplayServer.get_name() != "headless":
 		await _test("renders_front_faces_and_coarser_far_away", test_render)
 	print("\nterrain tests: %d passed, %d failed" % [_passed, _failed])
@@ -691,6 +692,59 @@ func test_erosion() -> void:
 		"export_heightmap() writes the heights as an EXR of one texel per vertex")
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(exr))
 	t.queue_free()
+	await process_frame
+
+
+## Roads: flatten_path() puts the line's height on the band, fades back over the falloff and
+## leaves the rest; it paints the layer under it; GADSTerrainPath3D conforms to the ground smoothly.
+func test_roads() -> void:
+	var grass := layer_material(2.0, Color(0.2, 0.6, 0.2))
+	var gravel := layer_material(1.0, Color(0.5, 0.45, 0.4))
+	var t := make_terrain({"layers": [grass, gravel] as Array[ShaderMaterial], "slope_layer": 0, "height_layer": 0, "height_scale": 10.0})
+	root.add_child(t)
+	var far := Vector3(0.0, 0, 6.0) # 6 m from the line: beyond width / 2 + falloff
+	var fading := Vector3(4.0, 0, -6.5) # 3.5 m from the line: in the falloff
+	var h_far := t.get_height(far)
+	var h_fading := t.get_height(fading)
+	var line := PackedVector3Array([Vector3(-20, 3, -10), Vector3(20, 5, -10)])
+	var rect := t.flatten_path(line, 4.0, 3.0, 1)
+	var on := [Vector3(0, 0, -10), Vector3(-10, 0, -10), Vector3(5, 0, -11.5), Vector3(-15, 0, -8.5)]
+	var worst := 0.0
+	for p: Vector3 in on:
+		worst = maxf(worst, absf(t.get_height(p) - (4.0 + p.x / 20.0)))
+	print("  on the band: largest difference from the line's height %.4f mm" % (worst * 1000.0))
+	check(rect.has_area() and worst < 1e-4, "on the band the ground takes the line's height, interpolated along it")
+	var line_h := 4.0 + fading.x / 20.0
+	var f := t.get_height(fading)
+	check(t.get_height(far) == h_far and ((f > minf(h_fading, line_h) and f < maxf(h_fading, line_h)) or absf(h_fading - line_h) < 1e-3),
+		"in the falloff between the ground and the line (%.2f between %.2f and %.2f), beyond it untouched" % [f, h_fading, line_h])
+	check(t.get_layer_weights(Vector3(0, 0, -10)).x > 0.99 and t.get_layer_weights(far).x < 0.01, "the layer is painted under the road, not beyond")
+	t.queue_free()
+	await process_frame
+	# A path node that follows the hills.
+	var hills := make_terrain({"height_scale": 10.0})
+	root.add_child(hills)
+	var path := GADSTerrainPath3D.new()
+	path.curve = Curve3D.new()
+	for p in [Vector3(-25, 0, -20), Vector3(0, 0, 0), Vector3(20, 0, 22)]:
+		path.curve.add_point(p)
+	path.width = 3.0
+	path.falloff = 2.0
+	path.smoothing = 10.0
+	hills.add_child(path)
+	var points := path.road_points()
+	var ground_bump := 0.0
+	var road_bump := 0.0
+	for i in range(1, points.size() - 1):
+		road_bump = maxf(road_bump, absf(points[i - 1].y - 2.0 * points[i].y + points[i + 1].y))
+		ground_bump = maxf(ground_bump, absf(hills.get_height(points[i - 1]) - 2.0 * hills.get_height(points[i]) + hills.get_height(points[i + 1])))
+	path.apply()
+	var off := 0.0
+	for i in range(0, points.size(), 7):
+		off = maxf(off, absf(hills.get_height(points[i]) - points[i].y))
+	print("  %d road points; bumpiness %.4f m (ground %.4f m); terrain within %.4f mm of the road" % [points.size(), road_bump, ground_bump, off * 1000.0])
+	check(points.size() > 50 and road_bump < ground_bump * 0.5 and off < 0.005, "a conforming path smooths the ground's heights and the terrain takes them (between vertices within the grid's interpolation)")
+	hills.queue_free()
 	await process_frame
 
 

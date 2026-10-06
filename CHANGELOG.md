@@ -157,6 +157,10 @@ All notable changes to this project are documented here. The format follows
   collision and the detail field's ground data. Edited maps are one texel per vertex, saved into
   `data_directory`. Runtime API: `sculpt()`, `paint_splatmap()`, `set_height_region()` /
   `set_splat_region()`, `intersect_ray()` (no physics needed), the `edited` signal.
+- **Terrain roads**: `GADSTerrainPath3D` (a Path3D) flattens a band along its curve with a soft
+  falloff, conforming to the ground (smoothed) or following the curve, and paints a layer under
+  it; Apply to Terrain is one undoable action (`GADSTerrainEdit`, which Generate and Erode use
+  too). `GADSTerrain3D.flatten_path()` for scripts.
 - **Erosion and generated terrains**: native hydraulic (droplet) and thermal (talus) erosion
   of height fields at their physical scale, deterministic (`GADSHeightGenerator.erode`,
   `GADSProcedural.erode_image`); `GADSTerrain3D.erode()`, `generate_heights()` and

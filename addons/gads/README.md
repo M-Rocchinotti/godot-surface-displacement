@@ -22,8 +22,8 @@ scattered stones, cobblestones as real stones, brick walls with deep joints.
 - **GADSTerrain3D**: a heightmap terrain with chunk LODs by screen-space error, up to three
   height-blended GADS layers (splat map or slope / height rules), HeightMapShape3D collision and
   the near-camera displacement field on its own ground data; sculpt and paint it in the viewport
-  (undoable) or from scripts at runtime; generate landscapes, erode them (native hydraulic and
-  thermal erosion) and export the heights as EXR.
+  (undoable) or from scripts at runtime; roads along curves (GADSTerrainPath3D); generate
+  landscapes, erode them (native hydraulic and thermal erosion) and export the heights as EXR.
 - **GADSManager** node: Low / Medium / High / Ultra presets (measured on a GTX 1080 at
   1080p: 0.47 / 1.15 / 1.58 / 2.86 ms added; near-camera geometry and pebbles only at Ultra),
   feature switches, adaptive quality against a frame-time target, a shared runtime triangle
