@@ -365,6 +365,21 @@ func _run() -> void:
 	_check(text.contains("check_scene_ground.res") and not text.contains("gads_ground_bake.gd"), "the field keeps its bake as a reference to the file (nothing embedded)")
 	_check(text.contains("check_scene_terrain_height.res") and text.contains("check_scene_terrain_splat.res") and not text.contains("Chunk_"),
 		"the edited terrain refers to its saved heightmap and splat map (its chunks are not saved)")
+
+	# 15. A streamed bake: the saved scene keeps the bake's path instead of referring to the mesh,
+	# the editor still shows it, Clean Bake Cache and the export plugin find the file.
+	baked_box.geometry_range = 10.0
+	baked_box.stream_bake = true
+	EditorInterface.save_scene()
+	await _frames_wait(5)
+	text = FileAccess.get_file_as_string("res://check_scene.tscn")
+	_check(not text.contains('path="%s"' % baked_path) and text.contains('"%s"' % baked_path) and baked_box.mesh != null
+		and baked_box.mesh.resource_path == baked_path, "a streamed bake: the scene stores its path, not the mesh; the editor still shows it")
+	_check(baked_path in GADSBakeCache.paths_in_file("res://check_scene.tscn"), "Clean Bake Cache finds the streamed bake in the scene")
+	var exporter: EditorExportPlugin = load("res://addons/gads/editor/gads_export_plugin.gd").new()
+	exporter.call("_export_begin", PackedStringArray(), false, "", 0)
+	exporter.call("_export_file", "res://check_scene.tscn", "PackedScene", PackedStringArray())
+	_check(baked_path in exporter.call("get_exported_bakes"), "the export plugin adds it to an export")
 	_finish()
 
 

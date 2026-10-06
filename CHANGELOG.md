@@ -157,6 +157,14 @@ All notable changes to this project are documented here. The format follows
   collision and the detail field's ground data. Edited maps are one texel per vertex, saved into
   `data_directory`. Runtime API: `sculpt()`, `paint_splatmap()`, `set_height_region()` /
   `set_splat_region()`, `intersect_ray()` (no physics needed), the `edited` signal.
+- **Streaming bakes**: `GADSMeshInstance3D.stream_bake` (with a `geometry_range`) keeps the
+  bake out of the saved scene (its path stays in `bake_stats`); while the game runs the bake
+  loads on a background thread when the camera comes within `get_stream_distance()` and is let
+  go `stream_margin` further out, the source mesh drawing with parallax meanwhile.
+  `update_stream()`, `is_bake_loaded()`, `get_baked_mesh()`, the `bake_streamed` signal. The
+  profiler reports streamed-out bakes and recommends streaming large ones; Clean Bake Cache
+  finds paths stored in scenes (`GADSBakeCache.paths_in_file()`); an export plugin adds streamed
+  bakes to exports.
 - **Linux ARM64 native library** (`libgads.linux.template_release.arm64.so`, cross-built with
   `python tools/build_native.py linux_arm64` and the GNU aarch64 toolchain): baking, procedural
   maps and the native terrain passes on ARM64 Linux. A bake test checks that every shipped

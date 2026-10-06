@@ -62,6 +62,7 @@ func _run() -> void:
 	await _test("export", test_export)
 	await _test("sculpt", test_sculpt)
 	await _test("bake_cache", test_bake_cache)
+	await _test("streamed_bake", test_stream)
 	await _test("skinned", test_skinned)
 	await _test("blend_shapes", test_blend_shapes)
 	await _test("import_options", test_import)
@@ -1663,6 +1664,81 @@ func test_bake_cache() -> void:
 		"only files named like bakes, collision shapes and sculpt maps count")
 	check(GADSBakeCache.dependency_path("uid://abc::ArrayMesh::res://a/b.mesh") == "res://a/b.mesh"
 		and GADSBakeCache.dependency_path("res://a/b.mesh::ArrayMesh") == "res://a/b.mesh", "dependency entries give their path")
+
+
+## stream_bake: the scene keeps the bake's path, the bake loads near the camera and goes far away.
+func test_stream() -> void:
+	var s := h.new_debug_scene()
+	var node := _make_node(uv_material(bump_field(64, 0.08), 0.05))
+	node.name = "Streamed"
+	node.geometry_range = 5.0
+	node.geometry_range_margin = 1.0
+	node.stream_margin = 4.0
+	s.add_child(node)
+	check(node.bake(true) == OK, "a saved bake")
+	var path: String = node.bake_stats.get("path", "")
+	var triangles := GADSProfiler.mesh_triangles(node.mesh)
+	var cam := h.add_camera(Vector3(0, 2, 40), Vector3.ZERO)
+	var events := []
+	node.bake_streamed.connect(func(loaded: bool) -> void: events.append(loaded))
+	node.stream_bake = true
+	check(node.is_streaming() and is_equal_approx(node.get_stream_distance(), 10.0), "it streams, loading within 10 m")
+	check(events == [false] and node.mesh == null and not node.is_bake_loaded() and node.baked,
+		"40 m away the bake is let go (still baked)")
+	check(node.get_fallback() != null and node.get_fallback().visibility_range_begin == 0.0,
+		"meanwhile the source mesh draws with parallax at every distance")
+	check(not ResourceLoader.has_cached(path), "its memory is freed")
+	var report := GADSProfiler.collect(s)
+	var o: Dictionary = report["objects"][0]
+	check(o["streamed"] and o["streamed_out"] and o["memory_bytes"] == 0 and report["totals"]["streamed_out"] == 1,
+		"the profiler counts it as streamed out, using no memory")
+	cam.global_position = Vector3(0, 2, 8)
+	node.update_stream(true)
+	check(events == [false, true] and node.is_bake_loaded() and GADSProfiler.mesh_triangles(node.mesh) == triangles,
+		"8 m away it loads again (the same %d triangles)" % triangles)
+	check(node.get_fallback().visibility_range_begin == 5.0, "and shows within the geometry range")
+	cam.global_position = Vector3(0, 2, 12)
+	node.update_stream()
+	check(node.is_bake_loaded(), "12 m away it stays (within the stream margin beyond 10 m)")
+	cam.global_position = Vector3(0, 2, 40)
+	node.update_stream()
+	check(not node.is_bake_loaded() and events.size() == 3, "40 m away it goes again")
+	cam.global_position = Vector3(0, 2, 6)
+	var waited := 0
+	while not node.is_bake_loaded() and waited < 300:
+		await process_frame
+		waited += 1
+	check(node.is_bake_loaded(), "the node loads it in the background by itself (%d frames)" % waited)
+	var packed := PackedScene.new()
+	packed.pack(node)
+	var scene_path := CACHE_DIR.path_join("streamed.tscn")
+	var binary_path := CACHE_DIR.path_join("streamed.scn")
+	ResourceSaver.save(packed, scene_path)
+	ResourceSaver.save(packed, binary_path)
+	var text := FileAccess.get_file_as_string(scene_path)
+	check(not text.contains('path="%s"' % path) and text.contains('"%s"' % path), "the scene stores the bake's path, not the mesh")
+	check(path in GADSBakeCache.paths_in_file(scene_path) and path in GADSBakeCache.paths_in_file(binary_path),
+		"the cache tools find the path in text and binary scenes")
+	check(node.get_bake_summary().contains("Streamed: loads within 10.0 m"), "the summary says it streams")
+	node.queue_free()
+	await process_frame
+	cam.global_position = Vector3(0, 2, 40)
+	var copy := (ResourceLoader.load(scene_path, "", ResourceLoader.CACHE_MODE_IGNORE) as PackedScene).instantiate() as GADSMeshInstance3D
+	s.add_child(copy)
+	check(copy.baked and copy.mesh == null and copy.is_streaming() and copy.get_fallback() != null,
+		"loaded 40 m away, the scene's node holds no baked mesh")
+	check(copy.get_baked_mesh() != null and copy.mesh == null, "get_baked_mesh() loads it without showing it")
+	cam.global_position = Vector3(0, 2, 6)
+	copy.update_stream(true)
+	check(copy.is_bake_loaded() and not copy.is_bake_stale(), "near, it loads its bake (still current)")
+	cam.global_position = Vector3(0, 2, 40)
+	copy.update_stream()
+	copy.stream_bake = false
+	check(copy.is_bake_loaded() and not copy.is_streaming(), "turning streaming off loads the bake for good")
+	check(copy.get_fallback().visibility_range_begin == 5.0, "and the geometry range works as without streaming")
+	copy.queue_free()
+	h.clear_scene()
+	await process_frame
 
 
 func test_sculpt() -> void:

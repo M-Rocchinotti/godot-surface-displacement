@@ -15,7 +15,8 @@ scattered stones, cobblestones as real stones, brick walls with deep joints.
 - **GADSMeshInstance3D**: the relief of any mesh baked into real triangles in the editor by a
   native adaptive tessellator (dense only where the height map needs it, crack-free across seams
   and hard edges, rebuilt normals and tangents, LODs, optional collision). Non-destructive and
-  cached; Bake / Rebuild / Clear in the inspector. The native library ships for Linux and
+  cached; Bake / Rebuild / Clear in the inspector; bakes can stream in near the camera
+  (`stream_bake`). The native library ships for Linux and
   Windows x86_64 and Linux ARM64 (`native/`).
 - **GADSDeformationField** / **GADSDeformer3D**: footprints, tracks and craters written at runtime,
   pressing the field's geometry and the ground's parallax down; persistent, recovering.

@@ -5,9 +5,10 @@ extends RefCounted
 ## saved as [code]<cache_directory>/<name>_<key>.mesh[/code] (and [code]_collision.res[/code]),
 ## named after its inputs, so changing a material, the quality or the mesh leaves the earlier bake
 ## behind. A cache file is in use when a scene or resource of the project refers to it (its
-## dependencies, as the editor's own Owners dialog finds them) or something holds it in memory
-## (an open scene, the undo history). Only files named like GADS cache files are ever listed; a
-## bake that only a script loads by its path counts as unused.
+## dependencies, as the editor's own Owners dialog finds them, or a path a scene stores, as a
+## streamed bake's) or something holds it in memory (an open scene, the undo history). Only files
+## named like GADS cache files are ever listed; a bake that only a script loads by its path counts
+## as unused.
 ## [codeblock]
 ## var unused := GADSBakeCache.find_unused()
 ## GADSBakeCache.remove(unused)     # to the system trash where there is one
@@ -16,6 +17,8 @@ extends RefCounted
 const DEFAULT_DIRECTORY := "res://gads_baked"
 ## Files that can refer to a bake.
 const REFERRING_EXTENSIONS := ["tscn", "scn", "tres", "res"]
+## Files whose stored paths are read too (see [method paths_in_file]).
+const SCENE_EXTENSIONS := ["tscn", "scn"]
 
 static var _name_pattern: RegEx
 
@@ -40,13 +43,9 @@ static func find_unused(directories: PackedStringArray = PackedStringArray()) ->
 	for file in _project_files("res://"):
 		if not file.get_extension() in REFERRING_EXTENSIONS or is_cache_file(file):
 			continue
-		for dep in ResourceLoader.get_dependencies(file):
-			var path := dependency_path(dep)
-			if path.is_empty():
-				continue
+		for path in paths_in_file(file):
 			referenced[path] = true
-			if is_cache_file(path):
-				cache_dirs[path.get_base_dir()] = true
+			cache_dirs[path.get_base_dir()] = true
 	var unused := PackedStringArray()
 	for dir: String in cache_dirs:
 		if not DirAccess.dir_exists_absolute(dir):
@@ -57,6 +56,45 @@ static func find_unused(directories: PackedStringArray = PackedStringArray()) ->
 				unused.append(path)
 	unused.sort()
 	return unused
+
+
+## The cache files [param file] (a scene or resource) refers to: its dependencies and, for a
+## scene, the cache file paths its nodes store, such as a streamed bake's
+## ([member GADSMeshInstance3D.stream_bake]), which the scene loads by path and so does not list
+## among its dependencies.
+static func paths_in_file(file: String) -> PackedStringArray:
+	var found := {}
+	for dep in ResourceLoader.get_dependencies(file):
+		var path := dependency_path(dep)
+		if is_cache_file(path):
+			found[path] = true
+	if file.get_extension() in SCENE_EXTENSIONS:
+		for path in stored_paths(FileAccess.get_file_as_bytes(file)):
+			if is_cache_file(path):
+				found[path] = true
+	return PackedStringArray(found.keys())
+
+
+## The [code]res://[/code] and [code]user://[/code] paths in a saved resource's bytes (text or
+## binary format: a path is stored as its UTF-8 text in both, ending at a quote or a control
+## character).
+static func stored_paths(bytes: PackedByteArray) -> PackedStringArray:
+	var out := PackedStringArray()
+	var hex := bytes.hex_encode()
+	for prefix in ["res://", "user://"]:
+		var needle: String = prefix.to_ascii_buffer().hex_encode()
+		var at := hex.find(needle)
+		while at >= 0:
+			if at % 2 != 0: # not on a byte boundary
+				at = hex.find(needle, at + 1)
+				continue
+			var start := at / 2
+			var end := start
+			while end < bytes.size() and bytes[end] > 0x20 and bytes[end] != 0x22 and bytes[end] != 0x7f:
+				end += 1
+			out.append(bytes.slice(start, end).get_string_from_utf8())
+			at = hex.find(needle, end * 2)
+	return out
 
 
 ## The path in one entry of [method ResourceLoader.get_dependencies] ("uid::type::path", or a

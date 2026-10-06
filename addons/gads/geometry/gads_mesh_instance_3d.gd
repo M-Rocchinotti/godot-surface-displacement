@@ -17,6 +17,10 @@ extends MeshInstance3D
 ## each vertex was before it moved, and take only the normal-map detail finer than the triangles
 ## (the [code]gads_baked[/code] instance parameter). Debug view Tessellation shows the refinement.
 ##
+## With a [member geometry_range] and [member stream_bake], the bake is not part of the scene: it
+## loads in the background when the camera comes near and is let go when it leaves, so a level
+## with many baked props holds only the near ones' geometry.
+##
 ## Needs the GADS native library (addons/gads/native/, Linux and Windows x86_64).
 
 signal bake_started
@@ -25,6 +29,9 @@ signal bake_progress(progress: float, triangles: int)
 signal bake_finished(ok: bool)
 ## A runtime (view-dependent) tessellation replaced the mesh; [param stats] as [member view_stats].
 signal view_tessellated(stats: Dictionary)
+## A streamed bake (see [member stream_bake]) was loaded and shows ([param loaded] true), or was
+## let go and the source mesh draws with parallax (false).
+signal bake_streamed(loaded: bool)
 
 enum Quality { DRAFT, LOW, MEDIUM, HIGH, ULTRA, CUSTOM }
 ## How each vertex moves: AUTO along world +Y when every displaced surface is world-planar (the
@@ -42,6 +49,8 @@ const QUALITY_PRESETS := {
 	Quality.ULTRA: [0.003, 1500000],
 }
 const BAKED_PARAMETER := &"gads_baked"
+## Seconds between a streamed bake's distance checks.
+const STREAM_INTERVAL := 0.1
 
 ## Whether [member MeshInstance3D.mesh] is the bake (else it is the source mesh). Declared before
 ## source_mesh so a scene sets it first when it loads.
@@ -94,10 +103,28 @@ const BAKED_PARAMETER := &"gads_baked"
 	set(value):
 		geometry_range = value
 		_update_fallback()
+		_update_stream()
 @export_range(0.0, 50.0, 0.1, "or_greater", "suffix:m") var geometry_range_margin := 2.0:
 	set(value):
 		geometry_range_margin = value
 		_update_fallback()
+## Keep the bake out of the scene and load it only while the camera is near: the scene stores the
+## bake's file path instead of the mesh, and while the game runs the node loads it in the
+## background once the camera comes within [method get_stream_distance] of the mesh's centre
+## (geometry_range + geometry_range_margin + [member stream_margin]) and lets it go (its memory
+## is freed when nothing else holds it) once the camera is stream_margin beyond that. Until it is
+## loaded the source mesh draws with parallax, as beyond geometry_range. For levels with many or
+## large baked meshes. Needs a geometry_range and a bake saved in the cache; the collision shape
+## stays loaded. In the editor the bake is always loaded.
+@export var stream_bake := false:
+	set(value):
+		stream_bake = value
+		_update_stream()
+		update_configuration_warnings()
+		notify_property_list_changed()
+## How far before the geometry range a streamed bake starts loading, and how much further the
+## camera goes before it is let go (m).
+@export_range(0.0, 100.0, 0.5, "or_greater", "suffix:m") var stream_margin := 10.0
 
 @export_group("Collision")
 ## A static body with this shape, made by a coarser pass of its own.
@@ -129,6 +156,7 @@ const BAKED_PARAMETER := &"gads_baked"
 	set(value):
 		view_dependent = value
 		_update_view_processing()
+		_update_stream()
 ## The error on screen the runtime tessellation keeps (pixels).
 @export_range(0.1, 16.0, 0.1, "suffix:px") var pixel_error := 1.0
 ## Tessellate again once the camera moved this fraction of its distance to the mesh.
@@ -182,24 +210,33 @@ var _limit_scale := 1.0 # pixel error factor from GADSManager's adaptive quality
 var _cluster_nodes: Array[MeshInstance3D] = []
 var _cluster_snapshot := []
 var _hlod := false # the node and its clusters show while the fallback is hidden
+var _stream_request := "" # the bake file loading in the background (empty: none)
+var _stream_failed := "" # a bake file that did not load (not tried again)
+var _stream_wait := 0.0 # seconds to the next distance check
 
 
 func _ready() -> void:
 	# _process polls a background bake (which may have started before the node was ready) and
 	# follows the camera for the runtime tessellation.
 	set_process(is_baking() or _view_running())
-	_sync_clusters()
 	# A MeshInstance3D converted to this type keeps its mesh as the source.
 	if source_mesh == null and not baked and mesh != null:
 		source_mesh = mesh
 	elif not baked and source_mesh != null:
 		mesh = source_mesh
-	if baked and mesh == null:
+	if baked and mesh == null and not is_streaming():
+		# A streamed bake is not in the scene: it loads here when it does not stream.
+		var path: String = bake_stats.get("path", "")
+		if stream_bake and not path.is_empty() and ResourceLoader.exists(path):
+			mesh = ResourceLoader.load(path) as ArrayMesh
+	if baked and mesh == null and not is_streaming():
 		push_warning("GADS: %s lost its baked mesh (%s); showing the source mesh until it is baked again." % [name, bake_stats.get("path", "?")])
 		_apply_state({"baked": false})
 	_apply_parameter()
 	_update_collision()
+	_sync_clusters()
 	_update_fallback()
+	_update_stream()
 
 
 func _validate_property(property: Dictionary) -> void:
@@ -207,6 +244,12 @@ func _validate_property(property: Dictionary) -> void:
 		"mesh":
 			# Set source_mesh instead: mesh is the bake or a mirror of the source.
 			property["usage"] |= PROPERTY_USAGE_READ_ONLY
+			# A streamed bake stays out of the scene: it loads from bake_stats' path.
+			if _stores_bake_path():
+				property["usage"] &= ~PROPERTY_USAGE_STORAGE
+		"stream_margin":
+			if not stream_bake:
+				property["usage"] = PROPERTY_USAGE_STORAGE
 		"custom_max_error", "custom_max_triangles":
 			if quality != Quality.CUSTOM:
 				property["usage"] = PROPERTY_USAGE_STORAGE
@@ -229,6 +272,10 @@ func _get_configuration_warnings() -> PackedStringArray:
 		out.append("No surface uses a GADS material with a height map and a height_m above 0: nothing to bake.")
 	elif baked and is_bake_stale():
 		out.append("The source, the materials, the settings or the placement changed since the bake: bake again.")
+	if stream_bake and geometry_range <= 0.0:
+		out.append("stream_bake needs a geometry_range: without one the bake is loaded with the scene.")
+	elif stream_bake and baked and str(bake_stats.get("path", "")).is_empty():
+		out.append("stream_bake: the bake was not saved to a file (see cache_directory), so it stays in the scene.")
 	return out
 
 
@@ -338,6 +385,8 @@ func get_bake_summary() -> String:
 		lines.append("From the cache: %s" % where)
 	else:
 		lines.append("Baked in %.1f s: %s" % [float(s.get("seconds", 0.0)), where])
+	if _stores_bake_path() and geometry_range > 0.0:
+		lines.append("Streamed: loads within %.1f m of the camera%s." % [get_stream_distance(), "" if mesh != null else " (not loaded now)"])
 	return "\n".join(lines)
 
 
@@ -349,7 +398,7 @@ static func _count(n: int) -> String:
 	return str(n)
 
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
 	if _baker != null:
 		if _baker.is_done():
 			_complete(_baker.finish())
@@ -358,9 +407,14 @@ func _process(_delta: float) -> void:
 	if not _cluster_nodes.is_empty() and _draw_snapshot() != _cluster_snapshot:
 		_sync_clusters()
 		_update_fallback()
+	if is_streaming() or not _stream_request.is_empty():
+		_stream_wait -= delta
+		if _stream_wait <= 0.0 or not _stream_request.is_empty():
+			_stream_wait = STREAM_INTERVAL
+			update_stream()
 	if _view_running():
 		_update_view()
-	elif _baker == null and _cluster_nodes.is_empty():
+	elif _baker == null and _cluster_nodes.is_empty() and not is_streaming() and _stream_request.is_empty():
 		set_process(false)
 
 
@@ -370,6 +424,9 @@ func _notification(what: int) -> void:
 			if b != null:
 				b.cancel()
 				b.finish()
+		if not _stream_request.is_empty():
+			# Every background load request is paired with a get (this one waits for the load).
+			ResourceLoader.load_threaded_get(_stream_request)
 
 
 func _materials() -> Array[Material]:
@@ -411,7 +468,7 @@ func _cache_paths(key: String) -> Array[String]:
 	return [base + ".mesh", collision_path]
 
 
-## Sets up _baker, or applies a cached bake (then _baker stays null and _pending holds the state).
+## Sets up _baker, or applies a cached bake (then _baker stays null).
 func _begin(force: bool) -> Error:
 	if _baker != null:
 		return ERR_BUSY
@@ -431,9 +488,8 @@ func _begin(force: bool) -> Error:
 			var stats: Dictionary = cached.get_meta("gads_bake", {}).duplicate()
 			stats["path"] = paths[0]
 			stats["cached"] = true
-			_pending = {"baked": true, "mesh": cached, "bake_key": key, "bake_stats": stats, "collision_shape": shape}
 			bake_started.emit()
-			_apply_state(_pending)
+			_apply_state({"baked": true, "mesh": cached, "bake_key": key, "bake_stats": stats, "collision_shape": shape})
 			bake_finished.emit(true)
 			return OK
 	_baker = GADSMeshBaker.new()
@@ -495,10 +551,12 @@ func _apply_state(state: Dictionary) -> void:
 	bake_stats = state.get("bake_stats", {}) if baked else {}
 	collision_shape = state.get("collision_shape") if baked else null
 	mesh = state.get("mesh") if baked else source_mesh
+	_stream_failed = ""
 	_apply_parameter()
 	_update_collision()
 	_sync_clusters()
 	_update_fallback()
+	_update_stream()
 	update_configuration_warnings()
 	notify_property_list_changed()
 
@@ -581,7 +639,8 @@ func _update_fallback() -> void:
 			_fallback.set_surface_override_material(s, get_surface_override_material(s))
 	_fallback.cast_shadow = cast_shadow
 	_fallback.layers = layers
-	_fallback.visibility_range_begin = geometry_range
+	# A streamed bake that is not loaded: the source mesh draws at every distance meanwhile.
+	_fallback.visibility_range_begin = geometry_range if mesh != null else 0.0
 	_fallback.visibility_range_begin_margin = geometry_range_margin
 	_fallback.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF
 	_owns_visibility_range = true
@@ -713,12 +772,133 @@ func _sculpt_for_bake() -> Image:
 func export_baked(path: String) -> Error:
 	if not baked and _view_mesh == null:
 		return ERR_UNCONFIGURED
-	var meshes: Array = [mesh]
-	meshes.append_array(cluster_meshes_of(mesh))
+	var shown := get_baked_mesh() if _view_mesh == null else mesh
+	if shown == null:
+		return ERR_FILE_NOT_FOUND
+	var meshes: Array = [shown]
+	meshes.append_array(cluster_meshes_of(shown))
 	var names := PackedStringArray()
 	for i in meshes.size():
 		names.append(String(name) if meshes.size() == 1 else "%s_cluster_%d" % [name, i])
 	return GADSMeshExporter.export_meshes(meshes, path, _materials(), names)
+
+
+# --- Streaming -----------------------------------------------------------------------------------
+
+## Whether the bake streams now (see [member stream_bake]): while the game runs, for a saved bake
+## with a geometry range and no runtime tessellation.
+func is_streaming() -> bool:
+	return stream_bake and baked and geometry_range > 0.0 and not view_dependent and not Engine.is_editor_hint() \
+		and is_inside_tree() and source_mesh != null and not str(bake_stats.get("path", "")).is_empty()
+
+
+## Whether the bake is in memory and shows near the camera (false while a streamed bake is out).
+func is_bake_loaded() -> bool:
+	return baked and mesh != null
+
+
+## The distance (m, from the camera to the centre of the mesh's bounds, as visibility ranges
+## measure) within which a streamed bake loads.
+func get_stream_distance() -> float:
+	return geometry_range + geometry_range_margin + stream_margin
+
+
+## The bake: the mesh that shows, or for a streamed bake that is out, loaded from its file
+## (without showing it). Null when not baked.
+func get_baked_mesh() -> Mesh:
+	if not baked:
+		return null
+	var shown := _static_mesh if _view_mesh != null else mesh
+	if shown != null:
+		return shown
+	var path: String = bake_stats.get("path", "")
+	return ResourceLoader.load(path) as Mesh if not path.is_empty() and ResourceLoader.exists(path) else null
+
+
+## Checks the camera's distance now and loads or lets go of a streamed bake (see [member
+## stream_bake]); runs by itself every [constant STREAM_INTERVAL] s. With [param wait], a load
+## in progress or started here finishes before it returns (e.g. right after a teleport).
+func update_stream(wait := false) -> void:
+	if is_streaming():
+		var distance := _stream_camera_distance()
+		if is_inf(distance):
+			pass # no camera: nothing changes
+		elif mesh == null and distance <= get_stream_distance():
+			_request_stream()
+		elif mesh != null and distance > get_stream_distance() + stream_margin:
+			_show_stream(null)
+	if not _stream_request.is_empty():
+		_poll_stream(wait)
+
+
+## Starts loading the bake in the background (another node may hold it already: then it shows now).
+func _request_stream() -> void:
+	var path: String = bake_stats.get("path", "")
+	if not _stream_request.is_empty() or path == _stream_failed:
+		return
+	if ResourceLoader.has_cached(path):
+		_show_stream(ResourceLoader.load(path) as ArrayMesh)
+		return
+	if ResourceLoader.load_threaded_request(path, "ArrayMesh") != OK:
+		_stream_failed = path
+		push_warning("GADS: %s: cannot load its streamed bake %s; the source mesh draws with parallax." % [name, path])
+		return
+	_stream_request = path
+
+
+func _poll_stream(wait: bool) -> void:
+	var path := _stream_request
+	var status := ResourceLoader.load_threaded_get_status(path)
+	if status == ResourceLoader.THREAD_LOAD_IN_PROGRESS and not wait:
+		return
+	_stream_request = ""
+	var loaded: ArrayMesh = null
+	if status != ResourceLoader.THREAD_LOAD_INVALID_RESOURCE:
+		loaded = ResourceLoader.load_threaded_get(path) as ArrayMesh
+	if loaded == null:
+		_stream_failed = path
+		push_warning("GADS: %s: cannot load its streamed bake %s; the source mesh draws with parallax." % [name, path])
+		return
+	# Shown only while it is still wanted: the same bake, not shown meanwhile, the camera near.
+	var distance := _stream_camera_distance()
+	if is_streaming() and mesh == null and path == bake_stats.get("path", "") 			and (is_inf(distance) or distance <= get_stream_distance() + stream_margin):
+		_show_stream(loaded)
+
+
+## The camera's distance to the centre of the mesh's bounds (INF without a camera).
+func _stream_camera_distance() -> float:
+	var cam := _view_camera_node()
+	if cam == null or source_mesh == null:
+		return INF
+	return cam.global_position.distance_to((global_transform * source_mesh.get_aabb()).get_center())
+
+
+## Shows [param m] (the loaded bake) or, with null, lets the bake go.
+func _show_stream(m: ArrayMesh) -> void:
+	mesh = m
+	_sync_clusters()
+	_update_fallback()
+	bake_streamed.emit(m != null)
+
+
+## Starts or stops the distance checks; a bake that stops streaming while it is out loads now.
+func _update_stream() -> void:
+	if not is_inside_tree():
+		return
+	if is_streaming():
+		set_process(true)
+		update_stream()
+	elif baked and mesh == null and _view_mesh == null:
+		if not _stream_request.is_empty():
+			_poll_stream(true)
+		var loaded := get_baked_mesh()
+		if loaded != null:
+			_show_stream(loaded as ArrayMesh)
+
+
+## Whether the scene keeps the bake's path instead of the mesh (stream_bake on a saved bake).
+func _stores_bake_path() -> bool:
+	return stream_bake and baked and _view_mesh == null and not str(bake_stats.get("path", "")).is_empty()
 
 
 # --- Clusters ------------------------------------------------------------------------------------

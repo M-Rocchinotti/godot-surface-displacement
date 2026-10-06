@@ -398,6 +398,20 @@ each cluster's rendering instance gets the fallback's instance as its visibility
 the RenderingServer: a node's `visibility_parent` would be inherited by its whole subtree, the
 fallback included), and they all show exactly while the fallback is hidden by its range.
 
+**Streaming.** With `stream_bake`, `_validate_property` drops the storage flag of `mesh`, so a
+saved scene holds only the bake's path (`bake_stats.path`) and no dependency on the file. At
+runtime the node compares the camera's distance to its source AABB's centre (the point Godot's
+visibility ranges measure from) against `geometry_range + geometry_range_margin + stream_margin`
+every 0.1 s: inside, `ResourceLoader.load_threaded_request` loads the bake (or takes the cached
+copy another instance holds); `stream_margin` beyond, the node drops its reference and the
+resource cache frees the mesh with its last user. The margin ahead of the range is the time the
+load has; the margin behind keeps a camera on the boundary from reloading. While the mesh is out
+the fallback's `visibility_range_begin` is 0, so the source mesh with parallax shows at every
+distance; every request is paired with a `load_threaded_get` (on deletion too), as Godot counts
+them per path. Because a scene does not list a streamed bake among its dependencies,
+`GADSBakeCache.paths_in_file()` also reads the paths stored in a scene's bytes (text and binary
+formats both store a path as its UTF-8 text), for Clean Bake Cache and the export plugin.
+
 **Runtime (view-dependent) tessellation.** The same tessellator with a view position: a
 triangle's tolerance becomes `max(max_error, pixel_error * distance / focal_px)`, where distance
 is from the eye to the triangle's bounding sphere and `focal_px` the pixels per radian of the

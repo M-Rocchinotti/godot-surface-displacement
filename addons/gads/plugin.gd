@@ -26,6 +26,7 @@ const MeshInspector := preload("res://addons/gads/editor/gads_mesh_inspector.gd"
 const TerrainInspector := preload("res://addons/gads/editor/gads_terrain_inspector.gd")
 const ProfilerPanel := preload("res://addons/gads/editor/gads_profiler_panel.gd")
 const ImportPlugin := preload("res://addons/gads/editor/gads_import_plugin.gd")
+const ExportPlugin := preload("res://addons/gads/editor/gads_export_plugin.gd")
 
 var _mesh_inspector: EditorInspectorPlugin
 var _terrain_inspector: EditorInspectorPlugin
@@ -40,6 +41,7 @@ var _pick_cache := {}
 var _brush := {} # the Sculpt tool's cursor: "camera", "position", "normal", "radius" (world), or empty
 var _profiler_panel: Control
 var _import_plugin: EditorScenePostImportPlugin
+var _export_plugin: EditorExportPlugin
 
 
 func _enable_plugin() -> void:
@@ -70,6 +72,8 @@ func _enter_tree() -> void:
 	add_control_to_bottom_panel(_profiler_panel, "GADS")
 	_import_plugin = ImportPlugin.new()
 	add_scene_post_import_plugin(_import_plugin)
+	_export_plugin = ExportPlugin.new()
+	add_export_plugin(_export_plugin)
 
 
 func _exit_tree() -> void:
@@ -84,6 +88,8 @@ func _exit_tree() -> void:
 	_profiler_panel = null
 	remove_scene_post_import_plugin(_import_plugin)
 	_import_plugin = null
+	remove_export_plugin(_export_plugin)
+	_export_plugin = null
 
 
 ## The GADS bottom panel (profiler, recommendations, Optimize for Target).

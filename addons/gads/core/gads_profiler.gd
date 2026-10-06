@@ -31,6 +31,8 @@ const TARGETS := {
 static var dense_triangles := 200000
 static var small_coverage := 0.05
 static var range_triangles := 50000
+## A baked mesh with a geometry range whose bake takes more than this (bytes) should stream.
+static var stream_bytes := 4 << 20
 
 
 ## Statistics of everything GADS draws under [param root]. With [param camera], screen coverage per
@@ -44,7 +46,8 @@ static var range_triangles := 50000
 ##
 ## Per baked mesh: "node", "name", "baked", "stale", "base_triangles", "triangles",
 ## "max_triangles" (the budget), "collision_triangles", "depth_m", "tolerance_m", "error_left_m",
-## "budget_reached", "coverage", "memory_bytes", "geometry_range".
+## "budget_reached", "coverage", "memory_bytes", "geometry_range", "streamed" (stream_bake on a
+## saved bake), "streamed_out" (it is not loaded now: no memory, the source mesh draws).
 static func collect(root: Node, camera: Camera3D = null) -> Dictionary:
 	var report := {"objects": [], "surfaces": 0, "surface_triangles": 0, "fields": 0, "field_triangles": 0, "height_maps": [],
 		"recommendations": [], "manager": {}}
@@ -80,8 +83,9 @@ static func collect(root: Node, camera: Camera3D = null) -> Dictionary:
 					if tex != null:
 						height_textures[tex] = true
 	var totals := {"objects": report["objects"].size(), "base_triangles": 0, "generated_triangles": 0, "active_triangles": 0,
-		"collision_triangles": 0, "memory_bytes": 0, "cache_bytes": 0}
+		"collision_triangles": 0, "memory_bytes": 0, "cache_bytes": 0, "streamed_out": 0}
 	for o: Dictionary in report["objects"]:
+		totals["streamed_out"] += 1 if o["streamed_out"] else 0
 		totals["base_triangles"] += o["base_triangles"]
 		totals["active_triangles"] += o["triangles"]
 		totals["generated_triangles"] += maxi(0, o["triangles"] - o["base_triangles"]) if o["baked"] else 0
@@ -131,6 +135,9 @@ static func recommend(report: Dictionary) -> Array:
 		elif o["geometry_range"] <= 0.0 and o["triangles"] > range_triangles:
 			out.append(_rec("info", "%s draws its %s baked triangles at every distance; beyond %.1f m its relief is under two pixels (geometry_range)." % [
 				name, format_count(o["triangles"]), suggested], node, {"object": node, "property": "geometry_range", "value": snappedf(suggested, 0.1)}))
+		if o["geometry_range"] > 0.0 and not o["streamed"] and o["memory_bytes"] > stream_bytes:
+			out.append(_rec("info", "%s: its bake takes %s and shows only within %.1f m; stream it (stream_bake) to load it only near the camera." % [
+				name, format_bytes(o["memory_bytes"]), o["geometry_range"]], node, {"object": node, "property": "stream_bake", "value": true}))
 		if o["budget_reached"]:
 			out.append(_rec("warning", "%s: the triangle budget (%s) stopped the bake %.2f mm from the relief (tolerance %.2f mm). Raise the quality and bake again." % [
 				name, format_count(o["max_triangles"]), o["error_left_m"] * 1000.0, o["tolerance_m"] * 1000.0], node,
@@ -266,7 +273,7 @@ static func _object_stats(node: GADSMeshInstance3D, camera: Camera3D) -> Diction
 		"baked": node.baked,
 		"stale": node.baked and node.is_bake_stale(),
 		"base_triangles": base,
-		"triangles": mesh_triangles(node.mesh) if node.baked else base,
+		"triangles": mesh_triangles(node.mesh) if node.is_bake_loaded() else base,
 		"max_triangles": int(settings["max_triangles"]),
 		"collision_triangles": int(s.get("collision_triangles", shape.get_faces().size() / 3 if shape != null else 0)),
 		"depth_m": node.get_relief_depth(),
@@ -274,8 +281,10 @@ static func _object_stats(node: GADSMeshInstance3D, camera: Camera3D) -> Diction
 		"error_left_m": float(s.get("max_error_left", 0.0)),
 		"budget_reached": bool(s.get("budget_reached", false)),
 		"coverage": screen_coverage(node, camera) if camera != null and node.is_inside_tree() and camera.is_inside_tree() else -1.0,
-		"memory_bytes": mesh_bytes(node.mesh) if node.baked else 0,
+		"memory_bytes": mesh_bytes(node.mesh) if node.is_bake_loaded() else 0,
 		"geometry_range": node.geometry_range,
+		"streamed": node.stream_bake and node.baked and not str(s.get("path", "")).is_empty(),
+		"streamed_out": node.baked and not node.is_bake_loaded(),
 	}
 
 

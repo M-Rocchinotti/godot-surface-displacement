@@ -228,6 +228,10 @@ static func _check_baked_mesh(mi: GADSMeshInstance3D) -> Array:
 			issues.append(_issue("warning", "GADSMeshInstance3D %s: %d non-manifold edges in the source mesh; displaced, it can tear there (Diagnose in the inspector shows them)." % [mi.name, report["counts"]["non_manifold"]]))
 		if report["degenerate"] > 0:
 			issues.append(_issue("info", "GADSMeshInstance3D %s: %d degenerate triangles in the source mesh (the bake skips them)." % [mi.name, report["degenerate"]]))
+	if mi.stream_bake and mi.geometry_range <= 0.0:
+		issues.append(_issue("warning", "GADSMeshInstance3D %s: stream_bake needs a geometry_range; without one the bake loads with the scene." % mi.name))
+	elif mi.stream_bake and mi.baked and str(mi.bake_stats.get("path", "")).is_empty():
+		issues.append(_issue("warning", "GADSMeshInstance3D %s: stream_bake, but the bake was not saved to a file (cache_directory), so it stays in the scene." % mi.name))
 	if mi.baked and mi.bake_stats.get("budget_reached", false):
 		issues.append(_issue("info", "GADSMeshInstance3D %s: the triangle budget stopped the bake %.2f mm from the relief (tolerance %.2f mm); raise the quality to follow it closer." % [
 			mi.name, float(mi.bake_stats.get("max_error_left", 0.0)) * 1000.0, float(mi.bake_stats.get("error_m", 0.0)) * 1000.0]))
