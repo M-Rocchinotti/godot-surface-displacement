@@ -102,6 +102,7 @@ var _params_dirty := true
 var _baking := false
 var _no_ground := false # a runtime bake of existing ground meshes failed
 var _ground_texture: ImageTexture
+var _height_images := {} # layer height texture -> Image (FORMAT_RF, mip 0), for get_surface_height()
 var _flat_height := NAN
 var _height_range := Vector2(-1.0, 1.0)
 var _origin := Vector3.ZERO
@@ -238,6 +239,164 @@ func snapped_origin(p: Vector3) -> Vector3:
 	return Vector3(floorf(p.x / snap + 0.5) * snap, 0.0, floorf(p.z / snap + 0.5) * snap)
 
 
+## The height (world y, m) of the relief this field draws at [param world_position]'s x and z,
+## as close to the camera (no distance fade): the ground, plus its layers' relief (the height
+## maps' full resolution, bilinear like the GPU), minus the runtime deformation; the ground alone
+## where the field does not displace. NAN outside the ground data. For gameplay on the relief:
+## feet, decals, projectiles, picking.
+func get_surface_height(world_position: Vector3) -> float:
+	var xz := Vector2(world_position.x, world_position.z)
+	if ground_bake == null or not ground_bake.get_rect().has_point(xz):
+		return NAN
+	var s := ground_bake.sample(xz)
+	var ground: float = s["height"]
+	var w: Color = s["weights"]
+	var count := mini(layers.size(), MAX_LAYERS)
+	var sum := 0.0
+	for i in MAX_LAYERS:
+		if i >= count:
+			w[i] = 0.0
+		sum += w[i]
+	var displaceable := smoothstep(0.35, 0.65, sum)
+	if displaceable <= 0.0:
+		return ground
+	w = w / sum if sum > 1e-4 else Color(1, 0, 0, 0)
+	var relief := 0.0
+	for i in count:
+		if w[i] > 0.001 and layers[i] != null:
+			relief += w[i] * _layer_relief(layers[i], xz)
+	var deformation := GADSDeformationField.find_active(get_tree()) if is_inside_tree() else null
+	if deformation != null:
+		relief -= deformation.get_depth(world_position)
+	# Where the field dives (not displaceable) the ground's own surface shows.
+	return lerpf(ground, ground + relief, displaceable)
+
+
+## The surface normal of [method get_surface_height]'s relief at [param world_position] (central
+## differences over [param step] metres; default a quarter of the finest layer texel, at least
+## 1 mm). Vector3.ZERO outside the ground data.
+func get_surface_normal(world_position: Vector3, step := -1.0) -> Vector3:
+	if step <= 0.0:
+		step = maxf(_finest_texel() * 0.25, 0.001)
+	var hx0 := get_surface_height(world_position - Vector3(step, 0, 0))
+	var hx1 := get_surface_height(world_position + Vector3(step, 0, 0))
+	var hz0 := get_surface_height(world_position - Vector3(0, 0, step))
+	var hz1 := get_surface_height(world_position + Vector3(0, 0, step))
+	if is_nan(hx0) or is_nan(hx1) or is_nan(hz0) or is_nan(hz1):
+		return Vector3.ZERO
+	return Vector3(hx0 - hx1, 2.0 * step, hz0 - hz1).normalized()
+
+
+## Where the segment [param from] - [param to] first meets the relief of
+## [method get_surface_height]: {"position": Vector3, "normal": Vector3}, or {} when it does not
+## (or leaves the ground data first). Marches in steps of half the finest layer texel (at most
+## 2048 of them) and refines the crossing by bisection.
+func raycast_surface(from: Vector3, to: Vector3) -> Dictionary:
+	var length := from.distance_to(to)
+	if length <= 0.0:
+		return {}
+	var steps := clampi(ceili(length / maxf(_finest_texel() * 0.5, 1e-4)), 1, 2048)
+	var above := func(p: Vector3) -> float:
+		var hgt := get_surface_height(p)
+		return p.y - hgt if not is_nan(hgt) else NAN
+	var t0 := 0.0
+	var g0: float = above.call(from)
+	for k in range(1, steps + 1):
+		var t1 := float(k) / steps
+		var g1: float = above.call(from.lerp(to, t1))
+		if is_nan(g0) or is_nan(g1):
+			t0 = t1
+			g0 = g1
+			continue
+		if g0 > 0.0 and g1 <= 0.0:
+			var lo := t0
+			var hi := t1
+			for i in 24:
+				var mid := (lo + hi) * 0.5
+				if float(above.call(from.lerp(to, mid))) > 0.0:
+					lo = mid
+				else:
+					hi = mid
+			var p := from.lerp(to, hi)
+			return {"position": p, "normal": get_surface_normal(p)}
+		t0 = t1
+		g0 = g1
+	return {}
+
+
+## How far below the ground the field hides where it does not displace (m).
+func _push_down() -> float:
+	return maxf(0.05, 2.0 * _max_amp() + 0.02)
+
+
+## The deepest layer relief (m).
+func _max_amp() -> float:
+	var max_amp := 0.0
+	for layer in layers:
+		if layer != null:
+			max_amp = maxf(max_amp, float(_param(layer, "height_m")))
+	return max_amp
+
+
+func _finest_texel() -> float:
+	var finest := INF
+	for m: ShaderMaterial in layers:
+		if m == null:
+			continue
+		var tex := m.get_shader_parameter("height_texture") as Texture2D
+		var size: Vector2 = _param(m, "texture_size_m")
+		if tex != null:
+			finest = minf(finest, size.x / tex.get_width())
+	return finest if finest < INF else 0.01
+
+
+## A layer material's relief (m) at world xz: height_m x its remapped height map there (mip 0,
+## bilinear, repeating; world-planar mapping with its size, offset and rotation).
+func _layer_relief(m: ShaderMaterial, xz: Vector2) -> float:
+	var tex := m.get_shader_parameter("height_texture") as Texture2D
+	if tex == null:
+		return 0.0
+	var img: Image = _height_images.get(tex)
+	if img == null:
+		img = tex.get_image()
+		if img == null:
+			return 0.0
+		img = img.duplicate()
+		if img.is_compressed():
+			img.decompress()
+		img.clear_mipmaps()
+		img.convert(Image.FORMAT_RF)
+		_height_images[tex] = img
+	var size: Vector2 = _param(m, "texture_size_m")
+	var offset: Vector2 = _param(m, "planar_offset_m")
+	var rot := deg_to_rad(float(_param(m, "planar_rotation_deg")))
+	var q := xz - offset
+	var uv := Vector2(cos(rot) * q.x - sin(rot) * q.y, sin(rot) * q.x + cos(rot) * q.y) / size
+	var remap: Vector2 = _param(m, "height_remap")
+	var h := GADSDisplacementField3D.sample_repeat(img, uv)
+	var span := remap.y - remap.x
+	span = span if absf(span) >= 1e-5 else 1e-5
+	return float(_param(m, "height_m")) * clampf((h - remap.x) / span, 0.0, 1.0)
+
+
+## Bilinear sample with repeat wrap of [param img]'s red channel at [param uv] (texel centres at
+## (i + 0.5) / size), as the GPU samples mip 0.
+static func sample_repeat(img: Image, uv: Vector2) -> float:
+	var w := img.get_width()
+	var hh := img.get_height()
+	var x := uv.x * w - 0.5
+	var y := uv.y * hh - 0.5
+	var x0 := floori(x)
+	var y0 := floori(y)
+	var fx := x - x0
+	var fy := y - y0
+	var a := img.get_pixel(posmod(x0, w), posmod(y0, hh)).r
+	var b := img.get_pixel(posmod(x0 + 1, w), posmod(y0, hh)).r
+	var c := img.get_pixel(posmod(x0, w), posmod(y0 + 1, hh)).r
+	var d := img.get_pixel(posmod(x0 + 1, w), posmod(y0 + 1, hh)).r
+	return lerpf(lerpf(a, b, fx), lerpf(c, d, fx), fy)
+
+
 func get_mesh_instance() -> MeshInstance3D:
 	return _mesh_instance
 
@@ -319,15 +478,11 @@ func _apply_params() -> void:
 		morph.append(Vector4(r.x, r.y, 0.0, 0.0))
 	_set_param("level_morph", morph)
 	_set_param("amp_fade", get_fade_range())
-	var max_amp := 0.0
-	for layer in layers:
-		if layer != null:
-			max_amp = maxf(max_amp, float(_param(layer, "height_m")))
-	var push := maxf(0.05, 2.0 * max_amp + 0.02)
+	var push := _push_down()
 	_set_param("push_down", push)
 	var reach := get_reach()
 	_mesh_instance.custom_aabb = AABB(Vector3(-reach, _height_range.x - push - 0.1, -reach),
-			Vector3(2.0 * reach, _height_range.y - _height_range.x + push + max_amp + 0.2, 2.0 * reach))
+			Vector3(2.0 * reach, _height_range.y - _height_range.x + push + _max_amp() + 0.2, 2.0 * reach))
 
 
 func _apply_ground() -> void:
@@ -452,7 +607,11 @@ static func build_mesh(levels: int, n: int) -> ArrayMesh:
 				elif k > 0 and ring == hole:
 					flag = 2.0
 				ids[(j + half) * (n + 1) + i + half] = positions.size()
-				positions.append(Vector3(i * step, 0.0, j * step))
+				# The shader places every vertex from its lattice coordinates (UV); the positions
+				# stay at the origin, so the mesh is nothing but degenerate triangles to anything
+				# that reads it on the CPU (a navigation mesh bake would otherwise take the flat
+				# lattice for ground). The node sets a custom AABB for culling.
+				positions.append(Vector3.ZERO)
 				lattice.append(Vector2(i * step, j * step))
 				info.append(Vector2(k, flag))
 		for j in range(-half, half):

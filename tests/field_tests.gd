@@ -33,6 +33,7 @@ func _run() -> void:
 	await _test("geometry_does_not_swim", test_no_swimming)
 	await _test("edge_blends_into_pom", test_edge_seam)
 	await _test("edge_blends_into_pom_in_weather", test_edge_seam_weather)
+	await _test("surface_queries", test_surface_queries)
 	await _test("ground_bake_precision", test_ground_bake)
 	await _test("pebbles_stay_put", test_pebbles)
 	await _test("lifetime_resize_viewports", test_lifetime)
@@ -850,3 +851,71 @@ func test_demo_camera() -> void:
 			await field.baked
 	demo.queue_free()
 	await h.frames(3)
+
+## Relief queries for gameplay: get_surface_height() is the ground plus the layers' relief at full
+## resolution (what the march draws near the camera) minus the runtime deformation, NAN off the
+## ground data; get_surface_normal() follows its slope; raycast_surface() meets it where the height
+## says.
+func test_surface_queries() -> void:
+	var tile := 1.28
+	var amp := 0.04
+	var field := Harness.make_wave_field(256)
+	h.new_debug_scene()
+	var tracked := add_tracked_camera(Vector3(0.37, 1.7, -0.23))
+	var f := add_field(field, tile, amp, tracked)
+	var texel := 0.1
+	var cells := Vector2i(100, 100)
+	var bake_origin := Vector2(-5.0, -5.0)
+	var heights := PackedFloat32Array()
+	var ids := PackedInt32Array()
+	for y in cells.y:
+		for x in cells.x:
+			var p := bake_origin + (Vector2(x, y) + Vector2(0.5, 0.5)) * texel
+			heights.append(0.02 * p.x - 0.01 * p.y)
+			ids.append(0)
+	f.ground_bake = GADSGroundBake.from_arrays(cells, heights, ids, bake_origin, texel)
+	await h.frames(2)
+	var want := func(xz: Vector2) -> float:
+		return f.ground_bake.sample_height(xz) + amp * Harness.sample_field(field, xz / tile)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 7
+	var worst := 0.0
+	for i in 400:
+		var xz := Vector2(rng.randf_range(-4.0, 4.0), rng.randf_range(-4.0, 4.0))
+		worst = maxf(worst, absf(f.get_surface_height(Vector3(xz.x, 0.0, xz.y)) - want.call(xz)))
+	print("  surface height at 400 points: largest difference from ground + relief %.4f mm" % (worst * 1000.0))
+	check(worst < 1e-4, "get_surface_height() is the ground plus the layer's relief at full resolution")
+	check(is_nan(f.get_surface_height(Vector3(50, 0, 50))), "and NAN off the ground data")
+	var p := Vector3(0.61, 0.0, -0.37)
+	var n := f.get_surface_normal(p, 0.002)
+	var dx := (float(want.call(Vector2(p.x + 0.002, p.z))) - float(want.call(Vector2(p.x - 0.002, p.z)))) / 0.004
+	var dz := (float(want.call(Vector2(p.x, p.z + 0.002))) - float(want.call(Vector2(p.x, p.z - 0.002)))) / 0.004
+	check(n.dot(Vector3(-dx, 1.0, -dz).normalized()) > 0.9999, "get_surface_normal() follows its slope")
+	var from := Vector3(-0.8, 1.5, 0.4)
+	var to := Vector3(0.9, -0.5, -0.2)
+	var hit := f.raycast_surface(from, to)
+	var on_ray := false
+	var gap := INF
+	var before_above := false
+	if not hit.is_empty():
+		var hp: Vector3 = hit["position"]
+		var t := from.distance_to(hp) / from.distance_to(to)
+		on_ray = from.lerp(to, t).distance_to(hp) < 1e-5
+		gap = absf(hp.y - f.get_surface_height(hp))
+		var earlier := from.lerp(to, maxf(t - 0.01, 0.0))
+		before_above = earlier.y > f.get_surface_height(earlier)
+	print("  ray hit %s, %.5f mm from the surface" % [hit.get("position", "none"), gap * 1000.0])
+	check(on_ray and gap < 1e-4 and before_above, "raycast_surface() meets the relief on the ray, coming from above")
+	check(f.raycast_surface(Vector3(0, 2, 0), Vector3(1, 1, 0)).is_empty(), "a ray that stays above it meets nothing")
+	var deform := GADSDeformationField.new()
+	deform.size_m = 8.0
+	deform.resolution = 256
+	h.scene.add_child(deform)
+	var c := Vector3(0.5, 0.0, 0.5)
+	var plain := f.get_surface_height(c)
+	deform.stamp(c, 0.3, 0.05)
+	var pressed := f.get_surface_height(c)
+	print("  deformation: %.4f m pressed %.4f m" % [plain - pressed, deform.get_depth(c)])
+	check(absf(plain - pressed - deform.get_depth(c)) < 1e-6 and deform.get_depth(c) > 0.04, "the runtime deformation presses it down")
+	deform.queue_free()
+	await process_frame

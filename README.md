@@ -70,6 +70,8 @@ what the engine allows:
 - Adaptive quality: the preset and the runtime tessellation step down while frames miss a
   target time and come back when there is room; one triangle budget shared by all runtime
   tessellated meshes by screen coverage and priority.
+- Relief queries for gameplay (surface height, normal, raycast on the displaced ground) and
+  navigation meshes that follow terrains and baked meshes.
 - Custom shader hooks (height, surface, layer masks) and six visual shader nodes (parallax UV,
   height blend, slope mask, triplanar weights, detail normal, cavity).
 - Surface effects on every material (snow / dust / sand cover, wetness, puddles in the relief's
@@ -429,6 +431,21 @@ everything beyond the fade distance is plain normal mapping.
 
 The field is drawn on top of the original ground and replaces its look where a layer is
 displaceable. Collision stays on the original ground.
+
+**Gameplay on the relief.** Physics collides with the ground mesh, so feet and props would sink
+into the relief by up to its depth. The field answers where the drawn surface is:
+`get_surface_height(position)` (ground plus the layers' relief at full resolution, minus the
+runtime deformation; the CPU twin of what it draws near the camera, NAN off its ground data),
+`get_surface_normal(position)` and `raycast_surface(from, to)` (`{"position", "normal"}` of the
+first hit on the relief, for picking and projectiles). `GADSTerrain3D.get_surface_height()` uses
+its detail field where it displaces and the triangles elsewhere. Use them for foot IK, decals,
+particles and footstep placement.
+
+**Navigation.** A NavigationRegion3D bakes from what is really there: GADSTerrain3D chunks (meshes
+or, with parsed geometry "static colliders", their HeightMapShape3D) and GADSMeshInstance3D bakes
+(their mesh, or their collision shape); the field adds nothing (its mesh is placed by its
+shader). A GADSMeshInstance3D with a `geometry_range` also has its parallax fallback (the source
+mesh) as a child: bake navigation from static colliders there, or with the range at 0.
 
 ### GADSPebbleScatter3D
 

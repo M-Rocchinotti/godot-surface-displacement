@@ -52,6 +52,7 @@ var _cell := Vector2i(1 << 30, 1 << 30) # world texel of the window's corner
 
 
 func _enter_tree() -> void:
+	add_to_group(&"gads_deformation")
 	_ensure_ready()
 	_update_window()
 	_upload()
@@ -69,6 +70,16 @@ func _process(delta: float) -> void:
 	if _dirty:
 		_upload()
 	_publish()
+
+
+## The deformation field whose marks the GADS shaders draw (the last one that entered the tree),
+## or null.
+static func find_active(tree: SceneTree) -> GADSDeformationField:
+	for node in tree.get_nodes_in_group(&"gads_deformation"):
+		var f := node as GADSDeformationField
+		if f._owns_globals():
+			return f
+	return null
 
 
 ## Metres per texel.

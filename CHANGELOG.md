@@ -106,6 +106,13 @@ All notable changes to this project are documented here. The format follows
   Project > Tools > **Make Selected Meshes GADSMeshInstance3D** and **Bake Selected
   GADSMeshInstance3D** (undoable); Validate Setup reports stale bakes, unbakeable meshes, a
   missing native library and bakes the budget cut short.
+- **Relief queries**: `GADSDisplacementField3D.get_surface_height()`, `get_surface_normal()` and
+  `raycast_surface()` give gameplay the surface the field draws (ground plus the layers' relief
+  at full resolution, minus the runtime deformation); `GADSTerrain3D.get_surface_height()` uses
+  its detail field.
+- **Navigation**: the field's lattice mesh no longer has CPU positions (its shader places every
+  vertex), so a navigation mesh baked in a scene with a field follows the real ground instead of
+  a flat lattice; terrains bake from their chunks or collision shapes (tested).
 - **Custom shader hooks and visual shader nodes**: `GADS_CUSTOM_HEIGHT`
   (`gads_custom_height(uv, h)`, applied wherever the main height is read), `GADS_CUSTOM_SURFACE`
   (`gads_custom_surface(...)` after textures and effects) and `GADS_CUSTOM_LAYER_MASKS` change a

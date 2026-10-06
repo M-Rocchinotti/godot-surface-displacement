@@ -292,6 +292,19 @@ func get_height(world_position: Vector3) -> float:
 	return to_global(Vector3(local.x, h, local.z)).y
 
 
+## World height of the surface the terrain draws under [param world_position], with its relief:
+## where the detail field displaces it, the field's relief there
+## ([method GADSDisplacementField3D.get_surface_height]), elsewhere [method get_height]. For feet,
+## decals and projectiles on the relief rather than on the triangles. NAN outside the terrain.
+func get_surface_height(world_position: Vector3) -> float:
+	var field := get_detail_field()
+	if field != null and field.visible:
+		var h := field.get_surface_height(world_position)
+		if not is_nan(h):
+			return h
+	return get_height(world_position)
+
+
 ## World normal of the surface under [param world_position] (UP outside the terrain).
 func get_normal(world_position: Vector3) -> Vector3:
 	var local := to_local(world_position)

@@ -31,6 +31,7 @@ func _run() -> void:
 	await _test("rebuilds_once_per_change", test_rebuild)
 	await _test("streams_chunks_around_the_camera", test_streaming)
 	await _test("paints_layers_at_runtime", test_painting)
+	await _test("navigation_mesh_follows_the_terrain", test_navigation)
 	if DisplayServer.get_name() != "headless":
 		await _test("renders_front_faces_and_coarser_far_away", test_render)
 	print("\nterrain tests: %d passed, %d failed" % [_passed, _failed])
@@ -330,6 +331,20 @@ func test_ground_data() -> void:
 	print("  %d points: largest height difference %.1f mm; dominant layer right at %d" % [n, worst * 1000.0, layer_ok])
 	check(n > 100 and worst < field.lift, "the field's ground is the drawn surface within its lift (%.1f mm)" % (field.lift * 1000.0))
 	check(layer_ok == n, "the field shows the dominant layer")
+	# The surface with its relief: the field's, above the triangles by at most a layer's depth.
+	var lo := INF
+	var hi := -INF
+	var same := true
+	for i in 200:
+		var p := Vector3(rng.randf_range(-31, 31), 0, rng.randf_range(-31, 31))
+		var surface := t.get_surface_height(p)
+		var from_field := field.get_surface_height(p)
+		same = same and (is_nan(from_field) or is_equal_approx(surface, from_field))
+		var above := surface - t.get_height(p)
+		lo = minf(lo, above)
+		hi = maxf(hi, above)
+	print("  surface with relief: %.1f to %.1f mm above the triangles" % [lo * 1000.0, hi * 1000.0])
+	check(same and lo > -field.lift and hi > 0.005 and hi <= 0.06, "get_surface_height() is the detail field's relief on the terrain, the ground where it does not displace")
 	t.queue_free()
 	await process_frame
 
@@ -539,5 +554,38 @@ func test_painting() -> void:
 			if Vector2(v[i].x, v[i].z).is_equal_approx(Vector2(far.x, far.z)):
 				found = (arrays[Mesh.ARRAY_COLOR] as PackedColorArray)[i]
 	check(found.r > 0.99, "a streamed chunk built later carries what was painted there")
+	holder.queue_free()
+	await process_frame
+
+
+## A navigation mesh baked from a scene with a terrain (and its detail field) follows the
+## terrain, from its chunk meshes or its collision shapes; the field's lattice mesh (placed by its
+## shader) adds nothing.
+func test_navigation() -> void:
+	var grass := layer_material(2.0, Color(0.2, 0.6, 0.2))
+	var holder := Node3D.new()
+	root.add_child(holder)
+	var t := make_terrain({"layers": [grass] as Array[ShaderMaterial], "detail_field": true, "height_scale": 6.0})
+	holder.add_child(t)
+	await process_frame
+	for geometry in [NavigationMesh.PARSED_GEOMETRY_MESH_INSTANCES, NavigationMesh.PARSED_GEOMETRY_STATIC_COLLIDERS]:
+		var nav := NavigationMesh.new()
+		nav.geometry_parsed_geometry_type = geometry
+		nav.cell_size = 0.25
+		nav.cell_height = 0.05
+		nav.agent_max_slope = 50.0
+		nav.agent_max_climb = 0.5
+		nav.detail_sample_distance = 1.0
+		nav.detail_sample_max_error = 0.05
+		var source := NavigationMeshSourceGeometryData3D.new()
+		NavigationServer3D.parse_source_geometry_data(nav, source, holder)
+		NavigationServer3D.bake_from_source_geometry_data(nav, source)
+		var vertices := nav.get_vertices()
+		var worst := 0.0
+		for v in vertices:
+			worst = maxf(worst, absf(v.y - t.get_height(v)))
+		var label := "meshes" if geometry == NavigationMesh.PARSED_GEOMETRY_MESH_INSTANCES else "collision"
+		print("  from %s: %d vertices, %d polygons, largest height difference %.2f m" % [label, vertices.size(), nav.get_polygon_count(), worst])
+		check(nav.get_polygon_count() > 50 and worst < 0.4, "a navigation mesh baked from the terrain's %s follows it" % label)
 	holder.queue_free()
 	await process_frame
