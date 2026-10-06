@@ -26,6 +26,8 @@ class BakePanel extends VBoxContainer:
 	var _cancel: Button
 	var _diagnose: Button
 	var _export: Button
+	var _sculpt: Button
+	var _sculpt_row: HBoxContainer
 	var _diagnosis: Label
 	var _progress: ProgressBar
 	var _status: Label
@@ -42,6 +44,26 @@ class BakePanel extends VBoxContainer:
 		_diagnose.toggle_mode = true
 		_diagnose.button_pressed = node.is_diagnostics_visible()
 		_export = _button(row, "Export", "Write the baked mesh to a .glb, .gltf or .obj file for other tools.", _on_export)
+		_sculpt = _button(row, "Sculpt", "Paint the surface in the 3D viewport (left-drag): raise, lower, smooth or flatten; each stroke bakes again.", _on_sculpt)
+		_sculpt.toggle_mode = true
+		_sculpt.button_pressed = GADSSculpt.tool_active and GADSSculpt.tool_node == node
+		_sculpt_row = HBoxContainer.new()
+		add_child(_sculpt_row)
+		var mode := OptionButton.new()
+		for m in GADSSculpt.MODE_NAMES:
+			mode.add_item(m)
+		mode.selected = GADSSculpt.tool_mode
+		mode.item_selected.connect(func(i: int) -> void: GADSSculpt.tool_mode = i as GADSSculpt.Mode)
+		_sculpt_row.add_child(mode)
+		_sculpt_row.add_child(_labeled_spin("Radius (m)", 0.005, 10.0, 0.005, GADSSculpt.tool_radius, func(v: float) -> void: GADSSculpt.tool_radius = v))
+		_sculpt_row.add_child(_labeled_spin("Strength (mm)", 0.1, 100.0, 0.1, GADSSculpt.tool_strength * 1000.0,
+			func(v: float) -> void: GADSSculpt.tool_strength = v / 1000.0))
+		var clear := Button.new()
+		clear.text = "Clear Sculpt"
+		clear.tooltip_text = "Remove the sculpt map (undoable)."
+		clear.pressed.connect(_on_sculpt_clear)
+		_sculpt_row.add_child(clear)
+		_sculpt_row.visible = _sculpt.button_pressed
 		_progress = ProgressBar.new()
 		_progress.max_value = 1.0
 		_progress.step = 0.001
@@ -89,6 +111,32 @@ class BakePanel extends VBoxContainer:
 		_diagnosis.visible = _diagnose.button_pressed
 		if _diagnose.button_pressed:
 			_diagnosis.text = GADSMeshDiagnostics.summary(node.diagnose()) + "\nOverlay: open red, non-manifold magenta, UV seams yellow, hard edges cyan, surface borders green."
+
+	func _labeled_spin(text: String, lo: float, hi: float, step: float, value: float, changed: Callable) -> Control:
+		var box := HBoxContainer.new()
+		var label := Label.new()
+		label.text = text
+		box.add_child(label)
+		var spin := SpinBox.new()
+		spin.min_value = lo
+		spin.max_value = hi
+		spin.step = step
+		spin.value = value
+		spin.value_changed.connect(changed)
+		box.add_child(spin)
+		return box
+
+	func _on_sculpt() -> void:
+		GADSSculpt.tool_active = _sculpt.button_pressed
+		GADSSculpt.tool_node = node if _sculpt.button_pressed else null
+		_sculpt_row.visible = _sculpt.button_pressed
+
+	func _on_sculpt_clear() -> void:
+		var before := node.get_sculpt_image().duplicate() if node.sculpt_map != null else null
+		undo_redo.create_action("Clear GADS sculpt", UndoRedo.MERGE_DISABLE, node)
+		undo_redo.add_do_method(node, "set_sculpt_image", null)
+		undo_redo.add_undo_method(node, "set_sculpt_image", before)
+		undo_redo.commit_action()
 
 	func _on_export() -> void:
 		var dialog := EditorFileDialog.new()

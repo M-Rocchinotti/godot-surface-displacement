@@ -525,18 +525,19 @@ double Tessellator::relief_at(const Displacement &d, const V2 &uv, double lod, c
 }
 
 double Tessellator::sample_displacement(int surface, const V3 &world, const V3 &dir, const V2 &uv, double lod, const float color[4]) const {
+	double offset = has_offset() ? offset_at(uv) : 0.0;
 	int di = inputs_[surface].displacement;
 	if (di < 0) {
-		return 0.0;
+		return offset;
 	}
 	const Displacement &d = displacements_[di];
 	double masks[2];
 	layer_masks(d, color, dir, masks);
 	if (d.mapping == MAPPING_UV) {
-		return relief_at(d, uv_transform(d, uv), lod, masks);
+		return offset + relief_at(d, uv_transform(d, uv), lod, masks);
 	}
 	if (d.mapping == MAPPING_WORLD) {
-		return relief_at(d, planar_uv(d, -1, world, dir), lod, masks);
+		return offset + relief_at(d, planar_uv(d, -1, world, dir), lod, masks);
 	}
 	double w[3];
 	triplanar_weights(dir, d.triplanar_sharpness, w);
@@ -546,7 +547,42 @@ double Tessellator::sample_displacement(int surface, const V3 &world, const V3 &
 			relief += w[a] * relief_at(d, planar_uv(d, a, world, dir), lod, masks);
 		}
 	}
-	return relief;
+	return offset + relief;
+}
+
+// The sculpt offset (m) at the source mesh's own uv (bilinear, mip 0, clamped to the map).
+double Tessellator::offset_at(const V2 &uv) const {
+	const HeightMap &m = *maps_[offset_map_];
+	V2 c(std::clamp(uv.x, 0.5 / m.width(), 1.0 - 0.5 / m.width()), std::clamp(uv.y, 0.5 / m.height(), 1.0 - 0.5 / m.height()));
+	return m.sample(c, 0);
+}
+
+// How far the sculpt offsets can leave their interpolation over a triangle with source uvs `uv`
+// (their range over the uv rectangle), and the longest edge in offset-map texels.
+double Tessellator::offset_bound(const V2 uv[3], const V3 world[3], double &r_longest_texels) const {
+	(void)world;
+	const HeightMap &m = *maps_[offset_map_];
+	V2 lo(std::min({ uv[0].x, uv[1].x, uv[2].x }), std::min({ uv[0].y, uv[1].y, uv[2].y }));
+	V2 hi(std::max({ uv[0].x, uv[1].x, uv[2].x }), std::max({ uv[0].y, uv[1].y, uv[2].y }));
+	V2 a(std::clamp(lo.x, 0.0, 1.0), std::clamp(lo.y, 0.0, 1.0)), b(std::clamp(hi.x, 0.0, 1.0), std::clamp(hi.y, 0.0, 1.0));
+	double r_lo, r_hi;
+	m.range(a, b, r_lo, r_hi);
+	for (int k = 0; k < 3; k++) {
+		V2 e = uv[(k + 1) % 3] - uv[k];
+		r_longest_texels = std::max(r_longest_texels, std::hypot(e.x * m.width(), e.y * m.height()));
+	}
+	return std::max(0.0, r_hi - r_lo);
+}
+
+// Metres per offset-map texel on triangle t (from its world and source-uv areas).
+double Tessellator::offset_texel_size_m(int t) const {
+	const Tri &tr = tris_[t];
+	const HeightMap &m = *maps_[offset_map_];
+	const V3 &a = groups_[corners_[tr.c[0]].group].world, &b = groups_[corners_[tr.c[1]].group].world, &c = groups_[corners_[tr.c[2]].group].world;
+	const V2 &ta = corners_[tr.c[0]].uv, &tb = corners_[tr.c[1]].uv, &tc = corners_[tr.c[2]].uv;
+	double area_w = (b - a).cross(c - a).length();
+	double area_t = std::fabs((tb.x - ta.x) * (tc.y - ta.y) - (tb.y - ta.y) * (tc.x - ta.x)) * m.width() * m.height();
+	return area_t > 1e-12 ? std::sqrt(area_w / area_t) : 1e30;
 }
 
 double Tessellator::corner_h(const Corner &c) const {
@@ -600,8 +636,9 @@ V3 Tessellator::corner_vec(const Corner &c) const {
 double Tessellator::texel_size_m(int t) const {
 	const Tri &tr = tris_[t];
 	int di = inputs_[tr.surface].displacement;
+	double offset = has_offset() ? offset_texel_size_m(t) : 1e30;
 	if (di < 0) {
-		return 1e30;
+		return offset;
 	}
 	const Displacement &d = displacements_[di];
 	const HeightMap &map = *maps_[d.height_map];
@@ -609,13 +646,13 @@ double Tessellator::texel_size_m(int t) const {
 	// size shrinks.
 	double finer = finest_texels(d);
 	if (d.mapping != MAPPING_UV) {
-		return d.texture_size_m.x / map.width() / finer;
+		return std::min(offset, d.texture_size_m.x / map.width() / finer);
 	}
 	const V3 &a = groups_[corners_[tr.c[0]].group].world, &b = groups_[corners_[tr.c[1]].group].world, &c = groups_[corners_[tr.c[2]].group].world;
 	V2 ta = uv_transform(d, corners_[tr.c[0]].uv), tb = uv_transform(d, corners_[tr.c[1]].uv), tc = uv_transform(d, corners_[tr.c[2]].uv);
 	double area_w = (b - a).cross(c - a).length();
 	double area_t = std::fabs((tb.x - ta.x) * (tc.y - ta.y) - (tb.y - ta.y) * (tc.x - ta.x)) * map.width() * map.height();
-	return area_t > 1e-12 ? std::sqrt(area_w / area_t) / finer : 1e30;
+	return std::min(offset, area_t > 1e-12 ? std::sqrt(area_w / area_t) / finer : 1e30);
 }
 
 // The nearest a triangle's bounding sphere comes to the view (m; 0 inside it).
@@ -640,13 +677,22 @@ double Tessellator::tri_tolerance(int t) const {
 float Tessellator::tri_error(int t, double tol) const {
 	const Tri &tr = tris_[t];
 	int di = inputs_[tr.surface].displacement;
+	const Corner *c[3] = { &corners_[tr.c[0]], &corners_[tr.c[1]], &corners_[tr.c[2]] };
+	const Group *g[3] = { &groups_[c[0]->group], &groups_[c[1]->group], &groups_[c[2]->group] };
+	double offset_term = 0.0, offset_texels = 0.0;
+	if (has_offset()) {
+		V2 ouv[3] = { c[0]->uv, c[1]->uv, c[2]->uv };
+		V3 ow[3] = { g[0]->world, g[1]->world, g[2]->world };
+		offset_term = offset_bound(ouv, ow, offset_texels);
+	}
 	if (di < 0) {
-		return 0.0f;
+		if (offset_term <= tol || offset_texels > SCAN_LIMIT_TEXELS) {
+			return float(offset_term);
+		}
+		return scan_error(t, offset_texels, false);
 	}
 	const Displacement &d = displacements_[di];
 	const HeightMap &map = *maps_[d.height_map];
-	const Corner *c[3] = { &corners_[tr.c[0]], &corners_[tr.c[1]], &corners_[tr.c[2]] };
-	const Group *g[3] = { &groups_[c[0]->group], &groups_[c[1]->group], &groups_[c[2]->group] };
 	// The projections this triangle samples, their corner uvs (in repeats).
 	int planes[3];
 	int plane_count = 0;
@@ -760,10 +806,20 @@ float Tessellator::tri_error(int t, double tol) const {
 			longest_texels = std::max(longest_texels, std::hypot(e.x * vm.width(), e.y * vm.height()));
 		}
 	}
+	bound += offset_term;
+	longest_texels = std::max(longest_texels, offset_texels);
 	if (bound <= tol || longest_texels > SCAN_LIMIT_TEXELS) {
 		return float(bound);
 	}
-	// Scan at about 1.5 samples per texel along the longest edge.
+	return scan_error(t, longest_texels, vector);
+}
+
+// The triangle's largest deviation from the plane through its displaced corners (height and
+// vector displacement), scanned at about 1.5 samples per texel along its longest edge.
+float Tessellator::scan_error(int t, double longest_texels, bool vector) const {
+	const Tri &tr = tris_[t];
+	const Corner *c[3] = { &corners_[tr.c[0]], &corners_[tr.c[1]], &corners_[tr.c[2]] };
+	const Group *g[3] = { &groups_[c[0]->group], &groups_[c[1]->group], &groups_[c[2]->group] };
 	int n = std::max(2, int(std::ceil(longest_texels * 1.5)));
 	double err = 0.0;
 	for (int i = 0; i <= n; i++) {

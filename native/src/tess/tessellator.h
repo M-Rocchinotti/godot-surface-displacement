@@ -137,6 +137,10 @@ struct Stats {
 class Tessellator {
 public:
 	int add_height_map(int width, int height, std::vector<float> data);
+	// Optional sculpt offsets (m, along the displacement direction) added on every surface: map
+	// `map` (from add_height_map) in the source mesh's own first UVs (0..1, clamped at the edges;
+	// no material transform), raw values in metres. -1 = none.
+	void set_offset_map(int map) { offset_map_ = map; }
 	int add_displacement(const Displacement &d);
 	void add_surface(SurfaceInput s);
 	void set_transform(const Xform &x) { xform_ = x; }
@@ -211,6 +215,11 @@ private:
 	bool has_layer(const Displacement &d, int k) const { return d.layers[k].map >= 0 && d.layers[k].amount > 0.0; }
 	bool has_vector(const Displacement &d) const { return d.vector_map[0] >= 0 && d.vector_m != 0.0 && d.mapping == MAPPING_UV; }
 	double vector_texels(const Displacement &d) const;
+	bool has_offset() const { return offset_map_ >= 0 && size_t(offset_map_) < maps_.size(); }
+	double offset_at(const V2 &uv) const;
+	double offset_bound(const V2 uv[3], const V3 world[3], double &r_longest_texels) const;
+	double offset_texel_size_m(int t) const;
+	float scan_error(int t, double longest_texels, bool vector) const;
 	V3 vector_displacement(int surface, const V2 &uv, const V3 &dir, const V3 &tu, const V3 &tv, double lod) const;
 	V3 corner_vec(const Corner &c) const;
 	double detail_texels(const Displacement &d) const;
@@ -236,6 +245,7 @@ private:
 	M3 world_to_object_;
 	Settings settings_;
 	std::vector<std::unique_ptr<HeightMap>> maps_;
+	int offset_map_ = -1;
 	std::vector<Displacement> displacements_;
 	std::vector<SurfaceInput> inputs_;
 	std::vector<Group> groups_;

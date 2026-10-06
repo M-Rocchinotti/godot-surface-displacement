@@ -26,6 +26,9 @@ const ProfilerPanel := preload("res://addons/gads/editor/gads_profiler_panel.gd"
 const ImportPlugin := preload("res://addons/gads/editor/gads_import_plugin.gd")
 
 var _mesh_inspector: EditorInspectorPlugin
+var _stroke_node: GADSMeshInstance3D # the node of the stroke in progress (null: none)
+var _stroke_before: Image # its sculpt map before the stroke (null: it had none)
+var _pick_cache := {}
 var _profiler_panel: Control
 var _import_plugin: EditorScenePostImportPlugin
 
@@ -539,6 +542,69 @@ static func is_imported(path: String) -> bool:
 		if not FileAccess.file_exists(d):
 			return false
 	return not dest.is_empty()
+
+
+func _handles(object: Object) -> bool:
+	return object is GADSMeshInstance3D
+
+
+## The Sculpt tool (switched on in a GADSMeshInstance3D's inspector): left-drag in the 3D viewport
+## paints the node's sculpt map; the stroke is one undoable action and bakes again when it ends.
+func _forward_3d_gui_input(camera: Camera3D, event: InputEvent) -> int:
+	var node := GADSSculpt.tool_node
+	if node == null or not is_instance_valid(node) or not node.is_inside_tree() or not GADSSculpt.tool_active:
+		return EditorPlugin.AFTER_GUI_INPUT_PASS
+	var button := event as InputEventMouseButton
+	if button != null and button.button_index == MOUSE_BUTTON_LEFT:
+		if button.pressed:
+			if sculpt_at(node, camera.project_ray_origin(button.position), camera.project_ray_normal(button.position)):
+				return EditorPlugin.AFTER_GUI_INPUT_STOP
+			return EditorPlugin.AFTER_GUI_INPUT_PASS
+		if _stroke_node != null:
+			end_sculpt_stroke()
+			return EditorPlugin.AFTER_GUI_INPUT_STOP
+	var motion := event as InputEventMouseMotion
+	if motion != null and _stroke_node != null and (motion.button_mask & MOUSE_BUTTON_MASK_LEFT) != 0:
+		sculpt_at(node, camera.project_ray_origin(motion.position), camera.project_ray_normal(motion.position))
+		return EditorPlugin.AFTER_GUI_INPUT_STOP
+	return EditorPlugin.AFTER_GUI_INPUT_PASS
+
+
+## One dab of the Sculpt tool's brush where the world ray from [param origin] along
+## [param direction] meets [param node]'s mesh (starting a stroke if none is in progress). Returns
+## whether it hit.
+func sculpt_at(node: GADSMeshInstance3D, origin: Vector3, direction: Vector3) -> bool:
+	var to_local := node.global_transform.affine_inverse()
+	var hit := GADSSculpt.pick(node.mesh, to_local * origin, (to_local.basis * direction).normalized(), _pick_cache)
+	if hit.is_empty():
+		return false
+	if _stroke_node == null:
+		_stroke_node = node
+		_stroke_before = node.get_sculpt_image().duplicate() if node.sculpt_map != null else null
+	# The brush radius is in metres: in uv units through the hit triangle's texel density (and the
+	# node's scale).
+	var scale := node.global_transform.basis.get_scale()
+	var radius_uv := GADSSculpt.tool_radius / maxf((scale.x + scale.y + scale.z) / 3.0, 1e-6) * float(hit["uv_per_m"])
+	var amount := GADSSculpt.tool_strength if GADSSculpt.tool_mode in [GADSSculpt.Mode.RAISE, GADSSculpt.Mode.LOWER] else 0.25
+	GADSSculpt.dab(node.get_sculpt_image(), hit["uv"], radius_uv, GADSSculpt.tool_mode, amount)
+	return true
+
+
+## Ends the stroke in progress: one undoable action, and the node bakes again.
+func end_sculpt_stroke() -> void:
+	if _stroke_node == null or not is_instance_valid(_stroke_node):
+		_stroke_node = null
+		_stroke_before = null
+		return
+	var node := _stroke_node
+	var after := node.get_sculpt_image().duplicate() as Image
+	var undo := get_undo_redo()
+	undo.create_action("GADS Sculpt", UndoRedo.MERGE_DISABLE, node)
+	undo.add_do_method(node, "set_sculpt_image", after)
+	undo.add_undo_method(node, "set_sculpt_image", _stroke_before)
+	_stroke_before = null
+	_stroke_node = null
+	undo.commit_action()
 
 
 func validate() -> void:

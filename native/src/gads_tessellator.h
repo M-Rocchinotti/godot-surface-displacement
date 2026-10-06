@@ -33,6 +33,7 @@ protected:
 public:
 	int add_height_map(const Ref<Image> &p_image);
 	PackedInt32Array add_vector_map(const Ref<Image> &p_image);
+	void set_offset_map(const Ref<Image> &p_image);
 	void add_surface(const Array &p_arrays, const Dictionary &p_displacement);
 	void set_transform(const Transform3D &p_transform);
 	void set_settings(const Dictionary &p_settings);

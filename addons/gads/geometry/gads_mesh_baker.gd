@@ -34,6 +34,9 @@ var error := ""
 ## Optional: the height maps' images by texture, filled and reused across bakes that share it (the
 ## runtime tessellation of a GADSMeshInstance3D re-reads the same maps every time).
 var image_cache: Dictionary
+## Sculpt offsets (FORMAT_RF, metres along the displacement direction) in the source mesh's own
+## first UVs, added on every surface (GADSMeshInstance3D.sculpt_map). Set before start().
+var sculpt_image: Image
 
 var _source: Mesh
 var _materials: Array[Material] = []
@@ -422,6 +425,8 @@ func _make_tessellator(settings: Dictionary) -> RefCounted:
 			d["layers"] = layers
 		tess.call("add_surface", _source.surface_get_arrays(s), d)
 	tess.call("set_transform", _transform)
+	if sculpt_image != null:
+		tess.call("set_offset_map", sculpt_image)
 	var native_settings := {}
 	for k: String in ["max_error", "min_edge_texels", "max_triangles", "max_level", "lock_borders", "weld_distance",
 			"direction_mode", "direction", "geometry_normals", "hard_angle_deg", "filter_heights", "threads",

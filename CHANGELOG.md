@@ -144,6 +144,13 @@ All notable changes to this project are documented here. The format follows
   also soften the relief's normal map and self-shadow. Demo: R cycles the weather.
 - The field's layer colours (albedo tint) are converted to linear like the materials' own
   `source_color` uniforms (a tinted layer drew lighter on the field than around it).
+- **Sculpting baked meshes**: a Sculpt tool in the GADSMeshInstance3D inspector paints the
+  surface in the 3D viewport (raise, lower, smooth, flatten; radius in metres, strength in
+  millimetres; each stroke one undoable step that bakes again). The strokes are the node's
+  `sculpt_map` (float, metres, in the source mesh's first UVs, saved next to the bakes), added to
+  the materials' relief by the native tessellator (and refined where they change) and part of
+  the bake key. `GADSSculpt` (`dab()`, `pick()`) and `get_sculpt_image()` / `sculpt_changed()` /
+  `set_sculpt_image()` for scripts.
 - **Export baked meshes**: `GADSMeshInstance3D.export_baked()` and an Export button in the
   inspector write the bake (every cluster) as glTF binary, glTF or OBJ with a material library,
   GADS materials as plain PBR materials; `GADSMeshExporter` for any meshes.

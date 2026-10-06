@@ -31,7 +31,9 @@ scattered stones, cobblestones as real stones, brick walls with deep joints.
   materials from downloaded texture sets or **procedural** ones (eleven tileable patterns with
   normal, occlusion, albedo and ORM maps, generated natively).
 - **Baked meshes** (GADSMeshInstance3D) also re-tessellate for the camera at runtime, split into
-  clusters for culling and LOD, show their topology problems (Diagnose) and export to glTF / OBJ.
+  clusters for culling and LOD, show their topology problems (Diagnose), can be **sculpted** by
+  hand in the viewport (raise, lower, smooth, flatten; undoable, baked again per stroke) and
+  export to glTF / OBJ.
 - **Custom shaders**: the `.gdshaderinc` library with hooks (height, surface, layer masks) and
   six visual shader nodes in a GADS category.
 

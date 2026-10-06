@@ -15,7 +15,7 @@ namespace godot {
 
 // Bumped whenever the tessellator's output for the same input changes: it is part of the bake
 // cache key, so stale bakes are rebuilt.
-static constexpr int ALGORITHM_VERSION = 4; // 2: detail layer, heights filtered only where refinement stopped early; 3: layered materials; 4: vector displacement
+static constexpr int ALGORITHM_VERSION = 5; // 2: detail layer, heights filtered only where refinement stopped early; 3: layered materials; 4: vector displacement; 5: sculpt offsets
 
 // Mesh.ArrayType
 enum {
@@ -34,6 +34,7 @@ enum {
 void GADSTessellator::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("add_height_map", "image"), &GADSTessellator::add_height_map);
 	ClassDB::bind_method(D_METHOD("add_vector_map", "image"), &GADSTessellator::add_vector_map);
+	ClassDB::bind_method(D_METHOD("set_offset_map", "image"), &GADSTessellator::set_offset_map);
 	ClassDB::bind_method(D_METHOD("add_surface", "arrays", "displacement"), &GADSTessellator::add_surface);
 	ClassDB::bind_method(D_METHOD("set_transform", "transform"), &GADSTessellator::set_transform);
 	ClassDB::bind_method(D_METHOD("set_settings", "settings"), &GADSTessellator::set_settings);
@@ -88,6 +89,15 @@ PackedInt32Array GADSTessellator::add_vector_map(const Ref<Image> &p_image) {
 		out.push_back(core_.add_height_map(img->get_width(), img->get_height(), std::move(data)));
 	}
 	return out;
+}
+
+// Sculpt offsets (m, red channel) in the source mesh's own first UVs, added on every surface.
+void GADSTessellator::set_offset_map(const Ref<Image> &p_image) {
+	if (p_image.is_null() || p_image->is_empty()) {
+		core_.set_offset_map(-1);
+		return;
+	}
+	core_.set_offset_map(add_height_map(p_image));
 }
 
 static gads::V2 v2(const Variant &v, gads::V2 fallback) {

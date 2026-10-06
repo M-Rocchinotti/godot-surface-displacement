@@ -60,6 +60,7 @@ func _run() -> void:
 	await _test("profiler", test_profiler)
 	await _test("diagnostics_overlay", test_diagnostics)
 	await _test("export", test_export)
+	await _test("sculpt", test_sculpt)
 	await _test("import_options", test_import)
 	if DisplayServer.get_name() != "headless":
 		await _test("renders_like_parallax", test_render)
@@ -1444,4 +1445,81 @@ func test_runtime_budget() -> void:
 	check(done.size() > before and coarse < free_triangles, "and it tessellates again, coarser")
 	gads.adaptive_quality = false
 	h.clear_scene()
+	await process_frame
+
+
+## Sculpting: picking finds the uv under a ray; a sculpt map raises the baked surface by its
+## offsets at the source uvs, on a mesh without any relief and on top of a relief; the bake key
+## follows it; removing it bakes flat again.
+func test_sculpt() -> void:
+	var node := GADSMeshInstance3D.new()
+	node.name = "Sculpted"
+	node.source_mesh = plane()
+	node.material_override = StandardMaterial3D.new()
+	node.cache_directory = CACHE_DIR
+	node.quality = GADSMeshInstance3D.Quality.HIGH
+	node.sculpt_resolution = 128
+	root.add_child(node)
+	var hit := GADSSculpt.pick(node.source_mesh, Vector3(0.3, 1.0, -0.4), Vector3.DOWN)
+	var want_uv := Vector2((0.3 + 1.0) / 2.0, (-0.4 + 1.0) / 2.0)
+	check(not hit.is_empty() and (hit["uv"] as Vector2).distance_to(want_uv) < 1e-4 and absf(float(hit["uv_per_m"]) - 0.5) < 1e-4,
+		"pick() finds the uv under a ray (%s) and the uv units per metre" % [hit.get("uv")])
+	var flat_key := node.compute_bake_key()
+	check(node.get_relief_depth() == 0.0, "no relief and no sculpt: nothing to bake")
+	var img := node.get_sculpt_image()
+	GADSSculpt.dab(img, Vector2(0.5, 0.5), 0.25, GADSSculpt.Mode.RAISE, 0.05)
+	var done := []
+	node.bake_finished.connect(func(ok: bool) -> void: done.append(ok))
+	node.sculpt_changed()
+	for i in 600:
+		if not done.is_empty():
+			break
+		await process_frame
+	check(done == [true] and node.baked and node.sculpt_map != null, "sculpt_changed() bakes the sculpted surface")
+	if node.baked:
+		var arrays := node.mesh.surface_get_arrays(0)
+		var v: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+		var uv: PackedVector2Array = arrays[Mesh.ARRAY_TEX_UV]
+		var worst := 0.0
+		var top := 0.0
+		for i in v.size():
+			worst = maxf(worst, absf(v[i].y - GADSDisplacementField3D.sample_repeat(img, uv[i])))
+			top = maxf(top, v[i].y)
+		print("  %d triangles, top %.1f mm (5 cm raised), vertices within %.3f mm of the map" % [triangle_count(node.mesh), top * 1000.0, worst * 1000.0])
+		check(worst < 0.001 and top > 0.045 and triangle_count(node.mesh) > 50, "vertices rise by the sculpt map at their uvs, refined where it changes")
+	check(node.compute_bake_key() != flat_key and absf(node.get_relief_depth() - 0.05) < 0.002, "the bake key and the relief depth follow the sculpt")
+	# Another stroke that leaves the depth as it is still changes the key (a stale bake must not load).
+	var sculpted_key := node.compute_bake_key()
+	var other := img.duplicate() as Image
+	GADSSculpt.dab(other, Vector2(0.15, 0.15), 0.05, GADSSculpt.Mode.RAISE, 0.01)
+	node.set_sculpt_image(other)
+	var other_key := node.compute_bake_key()
+	node.set_sculpt_image(img)
+	check(other_key != sculpted_key and node.compute_bake_key() == sculpted_key, "a stroke elsewhere changes the bake key, the same map gives the same key")
+	for i in 600:
+		if not node.is_baking():
+			break
+		await process_frame
+	# On top of a material's relief.
+	var field := bump_field(128, 0.1)
+	node.material_override = uv_material(field, 0.03)
+	done.clear()
+	node.bake_async(false)
+	for i in 600:
+		if not done.is_empty():
+			break
+		await process_frame
+	if node.baked:
+		var arrays := node.mesh.surface_get_arrays(0)
+		var v: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+		var uv: PackedVector2Array = arrays[Mesh.ARRAY_TEX_UV]
+		var worst := 0.0
+		for i in v.size():
+			worst = maxf(worst, absf(v[i].y - GADSDisplacementField3D.sample_repeat(img, uv[i]) - 0.03 * Harness.sample_field(field, uv[i])))
+		check(worst < 0.001, "on top of a material's relief they add up (%.3f mm)" % (worst * 1000.0))
+	done.clear()
+	node.material_override = StandardMaterial3D.new()
+	node.set_sculpt_image(null)
+	check(node.sculpt_map == null and node.compute_bake_key() == flat_key, "removing the sculpt map restores the original bake key")
+	node.queue_free()
 	await process_frame

@@ -37,6 +37,7 @@ MESH_NODE = "addons/gads/geometry/gads_mesh_instance_3d.gd"
 MESH_BAKER = "addons/gads/geometry/gads_mesh_baker.gd"
 HEIGHT_IMPORT = "demo/textures/clean_pebbles/clean_pebbles_height.exr.import"
 TERRAIN = "addons/gads/terrain/gads_terrain_3d.gd"
+SCULPT = "addons/gads/geometry/gads_sculpt.gd"
 
 # (name, what it breaks, [(file, old, new)], [(suite, name filter)]); suite is "logic",
 # "render" (tests/render_tests.gd), "field" (tests/field_tests.gd), "bake" (tests/bake_tests.gd),
@@ -198,6 +199,15 @@ MUTATIONS = [
     ("vector map off without height", "a material with a vector map and no height map is not displaced",
      [(MESH_BAKER, "	if not has_height and vector_m <= 0.0:", "	if not has_height:")],
      [("bake", "vector_displacement")]),
+    ("sculpt not in the bake key", "painting the sculpt map leaves the bake key as it was, so the old bake is loaded again",
+     [(MESH_NODE, '		settings["sculpt"] = _sculpt_stats().get("hash", "")', '		pass')],
+     [("bake", "sculpt")]),
+    ("sculpt not baked", "the bake runs without the sculpt map",
+     [(MESH_NODE, "	_baker.sculpt_image = _sculpt_for_bake()", "	_baker.sculpt_image = null")],
+     [("bake", "sculpt")]),
+    ("sculpt brush without falloff", "a dab raises its whole disc by the full strength, leaving a step at the rim",
+     [(SCULPT, "			f = f * f # smooth to 0 at the rim", "			f = 1.0")],
+     [("logic", "")]),
     ("bake cache ignored", "every bake runs again although a bake of the same inputs is saved",
      [(MESH_NODE, "	if not force and ResourceLoader.exists(paths[0])", "	if false and ResourceLoader.exists(paths[0])")],
      [("bake", "node_bake")]),

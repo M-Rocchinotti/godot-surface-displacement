@@ -219,6 +219,36 @@ func _run() -> void:
 		_check(ok and is_equal_approx(wall.get_shader_parameter("height_m"), 0.04) and wall.get_shader_parameter("texture_size_m") == Vector2(2, 2),
 			"with its four maps imported (mipmaps) and the brick depth for a 2 m tile")
 
+	# 12. The Sculpt tool: a stroke on the baked box (as the viewport's left-drag sends it) stores a
+	# sculpt map next to the bakes and bakes again; undo and redo.
+	var sculpted := root.get_node("HeightBox") as GADSMeshInstance3D
+	if sculpted != null and sculpted.baked:
+		var key_before := sculpted.bake_key
+		GADSSculpt.tool_active = true
+		GADSSculpt.tool_node = sculpted
+		GADSSculpt.tool_mode = GADSSculpt.Mode.RAISE
+		GADSSculpt.tool_radius = 0.3
+		GADSSculpt.tool_strength = 0.02
+		var top := sculpted.global_transform * sculpted.source_mesh.get_aabb().get_center() + Vector3(0, 3, 0)
+		var hits := 0
+		for i in 6:
+			hits += 1 if _sd_plugin.sculpt_at(sculpted, top + Vector3(0.04 * i, 0, 0.02 * i), Vector3.DOWN) else 0
+		_sd_plugin.end_sculpt_stroke()
+		await _until_baked(sculpted)
+		var map_path := sculpted.sculpt_map.resource_path if sculpted.sculpt_map != null else ""
+		_check(hits == 6 and map_path.begins_with(sculpted.cache_directory) and FileAccess.file_exists(map_path) and sculpted.bake_key != key_before,
+			"a Sculpt stroke saves the sculpt map next to the bakes (%s) and bakes again" % map_path)
+		ur.undo()
+		await _until_baked(sculpted)
+		_check(sculpted.sculpt_map == null and sculpted.bake_key == key_before, "undo removes the stroke and its bake")
+		ur.redo()
+		await _until_baked(sculpted)
+		_check(sculpted.sculpt_map != null and sculpted.bake_key != key_before, "redo brings it back")
+		ur.undo()
+		await _until_baked(sculpted)
+		GADSSculpt.tool_active = false
+		GADSSculpt.tool_node = null
+
 	# 9. What a save writes.
 	EditorInterface.save_scene()
 	await _frames_wait(5)
@@ -233,6 +263,13 @@ func _run() -> void:
 			"the GADSManager node leaves the field's saved properties alone in the editor")
 	_check(text.contains("check_scene_ground.res") and not text.contains("gads_ground_bake.gd"), "the field keeps its bake as a reference to the file (nothing embedded)")
 	_finish()
+
+
+func _until_baked(node: GADSMeshInstance3D) -> void:
+	for i in 600:
+		await get_tree().process_frame
+		if not node.is_baking() and i > 2:
+			return
 
 
 func _finish() -> void:

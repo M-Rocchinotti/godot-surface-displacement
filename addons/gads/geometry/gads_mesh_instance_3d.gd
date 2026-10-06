@@ -141,6 +141,20 @@ const BAKED_PARAMETER := &"gads_baked"
 ## view-dependent meshes (0-100; twice the priority, twice the share at the same size on screen).
 @export_range(0, 100) var displacement_priority := 50
 
+@export_group("Sculpt")
+## Hand-sculpted offsets (FORMAT_RF, metres along the displacement direction) on top of the
+## materials' relief, in the source mesh's own first UVs: painted with the inspector's Sculpt tool
+## (or [GADSSculpt] from scripts) and added by the bake. In the editor it is saved next to the bake.
+## Shapes the bake only: the parallax fallback does not show it.
+@export var sculpt_map: Texture2D:
+	set(value):
+		sculpt_map = value
+		_sculpt_info = {}
+		_sculpt_image = null
+		update_configuration_warnings()
+## Texels per side of a new sculpt map.
+@export_range(64, 4096, 64) var sculpt_resolution := 512
+
 @export_storage var bake_key := ""
 ## The bake's statistics: source_triangles, triangles, vertices, max_level, budget_reached,
 ## max_error_left (m), error_m (the tolerance), seconds, collision_triangles, path.
@@ -161,6 +175,8 @@ var _view_eye := Vector3.INF
 var _view_focal := 0.0
 var _view_xform := Transform3D()
 var _view_images := {}
+var _sculpt_image: Image # the map being painted (FORMAT_RF)
+var _sculpt_info := {} # "hash", "depth" of sculpt_map
 var _limit_triangles := -1 # from GADSManager's shared budget (-1: none)
 var _limit_scale := 1.0 # pixel error factor from GADSManager's adaptive quality
 var _cluster_nodes: Array[MeshInstance3D] = []
@@ -234,6 +250,8 @@ func get_bake_settings() -> Dictionary:
 	}
 	if cluster_triangles > 0:
 		settings["cluster_triangles"] = cluster_triangles
+	if sculpt_map != null:
+		settings["sculpt"] = _sculpt_stats().get("hash", "")
 	if direction == Direction.AXIS:
 		settings["direction"] = direction_axis.normalized()
 	if collision != GADSMeshBaker.Collision.NONE:
@@ -370,7 +388,7 @@ func get_relief_depth() -> float:
 
 ## The largest relief depth among the surfaces the bake displaces (0: none).
 func _max_depth() -> float:
-	var depth := 0.0
+	var depth: float = _sculpt_stats().get("depth", 0.0)
 	for m in _materials():
 		var d := GADSMeshBaker.displacement_of(m)
 		if not d.is_empty():
@@ -419,6 +437,7 @@ func _begin(force: bool) -> Error:
 			bake_finished.emit(true)
 			return OK
 	_baker = GADSMeshBaker.new()
+	_baker.sculpt_image = _sculpt_for_bake()
 	_baker.setup(source_mesh, _materials(), _bake_transform(), get_bake_settings())
 	_pending = {"bake_key": key, "paths": paths}
 	bake_started.emit()
@@ -600,6 +619,83 @@ func set_diagnostics_visible(on: bool) -> void:
 
 func is_diagnostics_visible() -> bool:
 	return _diagnostics != null
+
+
+## The sculpt map as an image to paint on (FORMAT_RF, metres): [member sculpt_map]'s, or a flat
+## one of [member sculpt_resolution] texels. Edits take effect with [method sculpt_changed].
+func get_sculpt_image() -> Image:
+	if _sculpt_image == null:
+		var img := sculpt_map.get_image() if sculpt_map != null else null
+		if img != null:
+			img = img.duplicate()
+			if img.is_compressed():
+				img.decompress()
+			img.clear_mipmaps()
+			img.convert(Image.FORMAT_RF)
+		_sculpt_image = img if img != null else GADSSculpt.new_image(sculpt_resolution)
+	return _sculpt_image
+
+
+## Stores the image [method get_sculpt_image] returned (after painting on it) as the sculpt map and
+## bakes again in the background.
+func sculpt_changed() -> void:
+	set_sculpt_image(get_sculpt_image())
+
+
+## Sets the sculpt map to [param image] (FORMAT_RF, metres; null removes it) and bakes again in the
+## background. In the editor the map is saved as its own file next to the bakes, so the scene
+## refers to it instead of holding it. The undo of a Sculpt tool stroke.
+func set_sculpt_image(image: Image) -> void:
+	if image == null:
+		sculpt_map = null
+	else:
+		var copy := image.duplicate() as Image
+		copy.convert(Image.FORMAT_RF)
+		var tex := sculpt_map as ImageTexture
+		if tex != null and tex.get_size() == Vector2(copy.get_size()) and tex.get_format() == Image.FORMAT_RF:
+			tex.update(copy)
+			_sculpt_info = {}
+		else:
+			tex = ImageTexture.create_from_image(copy)
+			sculpt_map = tex
+		_sculpt_image = copy.duplicate()
+		if Engine.is_editor_hint() and is_inside_tree():
+			_save_sculpt_map(tex)
+	update_configuration_warnings()
+	if GADSMeshBaker.is_available() and source_mesh != null and is_inside_tree() and _max_depth() > 0.0:
+		bake_async(false)
+
+
+func _save_sculpt_map(tex: ImageTexture) -> void:
+	var stem := source_mesh.resource_path.get_file().get_basename().get_slice("::", 0) if source_mesh != null else ""
+	if stem.is_empty():
+		stem = String(name).to_snake_case()
+	var path := tex.resource_path
+	if path.is_empty() or not path.begins_with(cache_directory):
+		path = cache_directory.path_join("%s_sculpt.res" % stem.validate_filename().replace(" ", "_"))
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(cache_directory))
+	if ResourceSaver.save(tex, path) == OK:
+		tex.take_over_path(path)
+
+
+## The sculpt map's content hash (part of the bake key) and largest offset (m).
+func _sculpt_stats() -> Dictionary:
+	if sculpt_map == null:
+		return {}
+	if _sculpt_info.is_empty():
+		var img := get_sculpt_image()
+		var ctx := HashingContext.new()
+		ctx.start(HashingContext.HASH_SHA256)
+		ctx.update(img.get_data())
+		var depth := 0.0
+		for v in img.get_data().to_float32_array():
+			depth = maxf(depth, absf(v))
+		_sculpt_info = {"hash": ctx.finish().hex_encode().left(16), "depth": depth}
+	return _sculpt_info
+
+
+func _sculpt_for_bake() -> Image:
+	return get_sculpt_image().duplicate() if sculpt_map != null else null
 
 
 ## Writes the bake (every cluster of it; while the game runs, the runtime mesh if one shows) to
@@ -841,6 +937,7 @@ func _start_view(cam: Camera3D, eye: Vector3, focal: float) -> void:
 		settings["pixel_error"] = get_runtime_pixel_error()
 		settings["focal_px"] = focal
 	_view_baker = GADSMeshBaker.new()
+	_view_baker.sculpt_image = _sculpt_for_bake()
 	_view_baker.image_cache = _view_images
 	_view_baker.setup(source_mesh, _materials(), _bake_transform(), settings)
 	if not _view_baker.start():

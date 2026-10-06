@@ -316,6 +316,16 @@ the displaced corners' interpolation, and the mip-pyramid bound adds the vector'
 triangle plus how far its frame turns over it. Every corner of a position group moves by the
 group's average offset, so UV seams, where the frames of the two sides differ, stay closed.
 
+**Sculpt offsets.** A node's sculpt map is one more height map inside the tessellator
+(`set_offset_map`), read at the source mesh's own first UVs (clamped at the edges, no material
+transform, raw metres) and added to every surface's displacement, also on surfaces without a GADS
+material. Its range over a triangle's uv rectangle is added to the error bound and its texel size
+to the scan's resolution, so the refinement follows the strokes as it follows a height map. The
+map's content hash is part of the bake key, so a stroke never loads a stale bake. The brush
+(`geometry/gads_sculpt.gd`) is plain GDScript on an `FORMAT_RF` image; `pick()` maps a ray to a
+uv through `TriangleMesh.intersect_ray`'s face index and the barycentric weights, with the uv
+density there for a brush radius in metres.
+
 **Bake pipeline** (`geometry/gads_mesh_baker.gd`): resolves each surface's material, turns the
 GADS parameters into the tessellator's displacement description, runs a render pass and an
 optional coarser collision pass on a worker thread, builds LODs with `ImporterMesh.generate_lods`

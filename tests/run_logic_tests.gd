@@ -34,6 +34,7 @@ func _run() -> void:
 	test_procedural()
 	await test_adaptive_quality()
 	await test_platform_caps()
+	test_sculpt_brush()
 	await test_scatter_parameter_sync()
 	print("\nlogic tests: %d passed, %d failed" % [_passed, _failed])
 	quit(1 if _failed > 0 else 0)
@@ -1066,3 +1067,27 @@ func test_platform_caps() -> void:
 		"get_capabilities() reports the renderer, the native library, the tags and the cap (%s)" % [info])
 	scene.queue_free()
 	await process_frame
+
+
+## GADSSculpt brush dabs: raise and lower by the strength at the centre, nothing at the radius;
+## smooth lowers a spike; flatten levels towards a height.
+func test_sculpt_brush() -> void:
+	print("\n== sculpt brush")
+	var img := GADSSculpt.new_image(64)
+	GADSSculpt.dab(img, Vector2(0.5, 0.5), 0.1, GADSSculpt.Mode.RAISE, 0.01)
+	var centre := img.get_pixel(32, 32).r
+	var halfway := img.get_pixel(35, 32).r # (3.5, 0.5) texels from the centre (31.5, 31.5), radius 6.4
+	var d := Vector2(3.5, 0.5).length() / 6.4
+	var outside := img.get_pixel(32 + 7, 32).r
+	check(centre > 0.0095 and absf(halfway - 0.01 * pow(1.0 - d * d, 2.0)) < 1e-5 and outside == 0.0,
+		"raise: %.4f m at the centre, %.4f halfway out (a smooth falloff), 0 beyond" % [centre, halfway])
+	GADSSculpt.dab(img, Vector2(0.5, 0.5), 0.1, GADSSculpt.Mode.LOWER, 0.01)
+	check(absf(img.get_pixel(32, 32).r) < 1e-6, "lower takes it back")
+	var spike := GADSSculpt.new_image(64)
+	spike.set_pixel(32, 32, Color(0.05, 0, 0))
+	GADSSculpt.dab(spike, Vector2(32.5 / 64.0, 32.5 / 64.0), 0.1, GADSSculpt.Mode.SMOOTH, 1.0)
+	check(spike.get_pixel(32, 32).r < 0.01 and spike.get_pixel(33, 32).r > 0.0, "smooth spreads a spike (%.4f left)" % spike.get_pixel(32, 32).r)
+	var hill := GADSSculpt.new_image(64)
+	GADSSculpt.dab(hill, Vector2(0.5, 0.5), 0.2, GADSSculpt.Mode.RAISE, 0.02)
+	GADSSculpt.dab(hill, Vector2(0.5, 0.5), 0.2, GADSSculpt.Mode.FLATTEN, 1.0, 0.005)
+	check(absf(hill.get_pixel(32, 32).r - 0.005) < 1e-4, "flatten levels to a height (%.4f)" % hill.get_pixel(32, 32).r)
