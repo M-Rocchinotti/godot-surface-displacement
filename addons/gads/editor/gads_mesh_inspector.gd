@@ -1,9 +1,13 @@
 @tool
 extends EditorInspectorPlugin
-## Bake / Rebuild / Clear / Diagnose / Export buttons, progress and statistics at the top of a
-## GADSMeshInstance3D's inspector. A finished bake and Clear are undoable.
+## Bake / Rebuild / Clear / Diagnose / Export / Sculpt / Paint buttons, progress and statistics at
+## the top of a GADSMeshInstance3D's inspector. A finished bake and Clear are undoable.
+
+const PaintInspector := preload("res://addons/gads/editor/gads_paint_inspector.gd")
 
 var undo_redo: EditorUndoRedoManager
+## The plugin's fill_paint(node, channel, value).
+var fill: Callable
 
 
 func _can_handle(object: Object) -> bool:
@@ -14,6 +18,7 @@ func _parse_begin(object: Object) -> void:
 	var panel := BakePanel.new()
 	panel.node = object as GADSMeshInstance3D
 	panel.undo_redo = undo_redo
+	panel.fill = fill
 	add_custom_control(panel)
 
 
@@ -28,6 +33,9 @@ class BakePanel extends VBoxContainer:
 	var _export: Button
 	var _sculpt: Button
 	var _sculpt_row: HBoxContainer
+	var _paint: Button
+	var _paint_row: HBoxContainer
+	var fill: Callable
 	var _diagnosis: Label
 	var _progress: ProgressBar
 	var _status: Label
@@ -46,7 +54,10 @@ class BakePanel extends VBoxContainer:
 		_export = _button(row, "Export", "Write the baked mesh to a .glb, .gltf or .obj file for other tools.", _on_export)
 		_sculpt = _button(row, "Sculpt", "Paint the surface in the 3D viewport (left-drag): raise, lower, smooth or flatten; each stroke bakes again.", _on_sculpt)
 		_sculpt.toggle_mode = true
-		_sculpt.button_pressed = GADSSculpt.tool_active and GADSSculpt.tool_node == node
+		_sculpt.button_pressed = GADSSculpt.tool_active and GADSSculpt.tool_node == node and not GADSVertexPaint.tool_on
+		_paint = _button(row, "Paint", "Paint vertex colours in the 3D viewport (left-drag): the layered materials' layer masks (layer 1 red, layer 2 green); each stroke bakes again.", _on_paint)
+		_paint.toggle_mode = true
+		_paint.button_pressed = PaintInspector.PaintPanel.is_painting(node)
 		_sculpt_row = HBoxContainer.new()
 		add_child(_sculpt_row)
 		var mode := OptionButton.new()
@@ -64,6 +75,12 @@ class BakePanel extends VBoxContainer:
 		clear.pressed.connect(_on_sculpt_clear)
 		_sculpt_row.add_child(clear)
 		_sculpt_row.visible = _sculpt.button_pressed
+		var paint_row := PaintInspector.PaintPanel.new()
+		paint_row.node = node
+		paint_row.fill = fill
+		_paint_row = paint_row
+		add_child(_paint_row)
+		_paint_row.visible = _paint.button_pressed
 		_progress = ProgressBar.new()
 		_progress.max_value = 1.0
 		_progress.step = 0.001
@@ -126,7 +143,16 @@ class BakePanel extends VBoxContainer:
 		box.add_child(spin)
 		return box
 
+	func _on_paint() -> void:
+		PaintInspector.PaintPanel.activate(node, _paint.button_pressed)
+		_sculpt.set_pressed_no_signal(false)
+		_sculpt_row.visible = false
+		_paint_row.visible = _paint.button_pressed
+
 	func _on_sculpt() -> void:
+		GADSVertexPaint.tool_on = false
+		_paint.set_pressed_no_signal(false)
+		_paint_row.visible = false
 		GADSSculpt.tool_active = _sculpt.button_pressed
 		GADSSculpt.tool_node = node if _sculpt.button_pressed else null
 		_sculpt_row.visible = _sculpt.button_pressed

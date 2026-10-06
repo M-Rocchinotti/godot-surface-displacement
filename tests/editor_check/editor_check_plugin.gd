@@ -380,6 +380,74 @@ func _run() -> void:
 	exporter.call("_export_begin", PackedStringArray(), false, "", 0)
 	exporter.call("_export_file", "res://check_scene.tscn", "PackedScene", PackedStringArray())
 	_check(baked_path in exporter.call("get_exported_bakes"), "the export plugin adds it to an export")
+
+	# 16. Paint Layers on a MeshInstance3D drawing a layered GADS material: a stroke gives it a
+	# painted copy of its mesh saved next to the bakes; undo gives the original back, redo the copy;
+	# Clear is one more undoable step.
+	var paint_tool = load("res://addons/gads/editor/gads_paint_inspector.gd")
+	var painted_node := MeshInstance3D.new()
+	painted_node.name = "PaintedPlane"
+	var paint_plane := PlaneMesh.new()
+	paint_plane.size = Vector2(4, 4)
+	paint_plane.subdivide_width = 15
+	paint_plane.subdivide_depth = 15
+	painted_node.mesh = paint_plane
+	painted_node.material_override = GADSMaterials.create_layered(GADSMaterials.Mapping.UV, {}, {}, [{}], GADSMaterials.Quality.POM)
+	root.add_child(painted_node)
+	painted_node.owner = root
+	painted_node.position = Vector3(30, 0, 0)
+	_check(paint_tool.can_paint(painted_node) and _sd_plugin._handles(painted_node), "a mesh drawing a GADS material gets the Paint tool")
+	paint_tool.PaintPanel.activate(painted_node, true)
+	GADSVertexPaint.tool_mode = GADSVertexPaint.Mode.ERASE
+	GADSVertexPaint.tool_channel = 0
+	GADSVertexPaint.tool_radius = 0.6
+	GADSVertexPaint.tool_strength = 1.0
+	var painted_hit: bool = _sd_plugin.sculpt_at(painted_node, Vector3(30, 5, 0), Vector3.DOWN)
+	_sd_plugin.sculpt_at(painted_node, Vector3(30.1, 5, 0), Vector3.DOWN)
+	_sd_plugin.end_sculpt_stroke()
+	var painted_mesh := painted_node.mesh
+	var painted_path := painted_mesh.resource_path if painted_mesh != null else ""
+	var red_at := func(m: Mesh, p: Vector3) -> float:
+		var arrays := m.surface_get_arrays(0)
+		var vs: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+		var cs = arrays[Mesh.ARRAY_COLOR]
+		for i in vs.size():
+			if vs[i].distance_to(p) < 1e-3:
+				return (cs as PackedColorArray)[i].r if cs != null else 1.0
+		return -1.0
+	_check(painted_hit and painted_mesh != paint_plane and GADSVertexPaint.is_paintable(painted_mesh) and painted_path.ends_with("_painted.mesh")
+		and FileAccess.file_exists(painted_path), "a Paint stroke gives the node a painted copy of its mesh, saved as %s" % painted_path)
+	_check(red_at.call(painted_mesh, Vector3.ZERO) < 0.05 and red_at.call(painted_mesh, Vector3(1.5, 0, 1.5)) == 1.0,
+		"Erase took the red channel (layer 1) away under the brush only")
+	ur.undo()
+	await _frames_wait(2)
+	_check(painted_node.mesh == paint_plane, "undo gives the node its original mesh back")
+	ur.redo()
+	await _frames_wait(2)
+	_check(painted_node.mesh == painted_mesh and red_at.call(painted_mesh, Vector3.ZERO) < 0.05, "redo the painted copy")
+	_sd_plugin.fill_paint(painted_node, 1, 0.0)
+	var green_cleared: bool = Array(painted_mesh.surface_get_arrays(0)[Mesh.ARRAY_COLOR]).all(func(c: Color) -> bool: return c.g == 0.0)
+	ur.undo()
+	await _frames_wait(2)
+	_check(green_cleared and Array(painted_mesh.surface_get_arrays(0)[Mesh.ARRAY_COLOR]).all(func(c: Color) -> bool: return c.g == 1.0),
+		"Clear sets a channel to 0 everywhere, undoable")
+	_check(painted_path in GADSBakeCache.paths_in_file("res://check_scene.tscn") or GADSBakeCache.is_cache_file(painted_path),
+		"the painted copy counts as a cache file (Clean Bake Cache keeps it while the scene uses it)")
+	# On a baked GADSMeshInstance3D the stroke paints its source (a painted copy) and bakes again;
+	# undo bakes the original source again (from the cache).
+	var key_unpainted := baked_box.bake_key
+	paint_tool.PaintPanel.activate(baked_box, true)
+	GADSVertexPaint.tool_mode = GADSVertexPaint.Mode.PAINT
+	var box_top := baked_box.global_transform * baked_box.source_mesh.get_aabb().get_center() + Vector3(0, 3, 0)
+	var box_hit: bool = _sd_plugin.sculpt_at(baked_box, box_top, Vector3.DOWN)
+	_sd_plugin.end_sculpt_stroke()
+	await _until_baked(baked_box)
+	_check(box_hit and baked_box.source_mesh != box_mesh and GADSVertexPaint.is_paintable(baked_box.source_mesh) and baked_box.baked
+		and baked_box.bake_key != key_unpainted and not baked_box.is_bake_stale(), "painting a baked mesh paints a copy of its source and bakes it again")
+	ur.undo()
+	await _until_baked(baked_box)
+	_check(baked_box.source_mesh == box_mesh and baked_box.bake_key == key_unpainted, "undo bakes the original source again")
+	paint_tool.PaintPanel.activate(baked_box, false)
 	_finish()
 
 

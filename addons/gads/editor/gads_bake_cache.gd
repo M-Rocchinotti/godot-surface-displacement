@@ -24,11 +24,12 @@ static var _name_pattern: RegEx
 
 
 ## Whether [param path] is named like a GADS cache file: a bake ([code]<name>_<16 hex>.mesh[/code]),
-## its collision shape ([code]<name>_<16 hex>_collision.res[/code]) or a sculpt map
-## ([code]<name>_sculpt.res[/code]).
+## its collision shape ([code]<name>_<16 hex>_collision.res[/code]), a sculpt map
+## ([code]<name>_sculpt.res[/code]) or a painted mesh ([code]<name>_painted.mesh[/code],
+## [code]_painted_2.mesh[/code], ...).
 static func is_cache_file(path: String) -> bool:
 	if _name_pattern == null:
-		_name_pattern = RegEx.create_from_string("^.+_([0-9a-f]{16}(_collision\\.res|\\.mesh)|sculpt\\.res)$")
+		_name_pattern = RegEx.create_from_string("^.+_([0-9a-f]{16}(_collision\\.res|\\.mesh)|sculpt\\.res|painted(_[0-9]+)?\\.mesh)$")
 	return _name_pattern.search(path.get_file()) != null
 
 

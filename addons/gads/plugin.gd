@@ -24,12 +24,14 @@ const MENUS: Array[String] = [MENU_ADD_NODE, MENU_ADD_FIELD, MENU_CONVERT, MENU_
 	MENU_HEIGHT, MENU_TEXTURE_SET, MENU_PROCEDURAL, MENU_CLEAN_CACHE, MENU_VALIDATE]
 const MeshInspector := preload("res://addons/gads/editor/gads_mesh_inspector.gd")
 const TerrainInspector := preload("res://addons/gads/editor/gads_terrain_inspector.gd")
+const PaintInspector := preload("res://addons/gads/editor/gads_paint_inspector.gd")
 const ProfilerPanel := preload("res://addons/gads/editor/gads_profiler_panel.gd")
 const ImportPlugin := preload("res://addons/gads/editor/gads_import_plugin.gd")
 const ExportPlugin := preload("res://addons/gads/editor/gads_export_plugin.gd")
 
 var _mesh_inspector: EditorInspectorPlugin
 var _terrain_inspector: EditorInspectorPlugin
+var _paint_inspector: EditorInspectorPlugin
 var _stroke_node: Node3D # the node of the stroke in progress (null: none)
 var _stroke_before: Image # its sculpt map (a terrain: its edited map) before the stroke (null: it had none)
 var _stroke_kind := "" # a terrain stroke: "height" or "splat"
@@ -38,6 +40,9 @@ var _stroke_was_editable := true
 var _stroke_rect := Rect2i() # a terrain stroke's grid vertices
 var _stroke_flatten := NAN # the height Flatten levels to during the stroke
 var _pick_cache := {}
+var _painter: GADSVertexPaint # a Paint stroke's painter (null: none)
+var _paint_before: Array # its colours before the stroke
+var _paint_before_mesh: Mesh # the node's mesh before the stroke (the original when it made the copy)
 var _brush := {} # the Sculpt tool's cursor: "camera", "position", "normal", "radius" (world), or empty
 var _profiler_panel: Control
 var _import_plugin: EditorScenePostImportPlugin
@@ -63,7 +68,11 @@ func _enter_tree() -> void:
 	add_tool_menu_item(MENU_VALIDATE, validate)
 	_mesh_inspector = MeshInspector.new()
 	_mesh_inspector.undo_redo = get_undo_redo()
+	_mesh_inspector.fill = fill_paint
 	add_inspector_plugin(_mesh_inspector)
+	_paint_inspector = PaintInspector.new()
+	_paint_inspector.fill = fill_paint
+	add_inspector_plugin(_paint_inspector)
 	_terrain_inspector = TerrainInspector.new()
 	_terrain_inspector.edit_heights = edit_terrain_heights
 	add_inspector_plugin(_terrain_inspector)
@@ -83,6 +92,8 @@ func _exit_tree() -> void:
 	_mesh_inspector = null
 	remove_inspector_plugin(_terrain_inspector)
 	_terrain_inspector = null
+	remove_inspector_plugin(_paint_inspector)
+	_paint_inspector = null
 	remove_control_from_bottom_panel(_profiler_panel)
 	_profiler_panel.queue_free()
 	_profiler_panel = null
@@ -610,12 +621,13 @@ static func is_imported(path: String) -> bool:
 
 
 func _handles(object: Object) -> bool:
-	return object is GADSMeshInstance3D or object is GADSTerrain3D
+	return object is GADSMeshInstance3D or object is GADSTerrain3D or PaintInspector.can_paint(object)
 
 
 ## The Sculpt tool (switched on in a GADSMeshInstance3D's or GADSTerrain3D's inspector): left-drag
 ## in the 3D viewport paints the node's sculpt map (bakes again when the stroke ends) or the
-## terrain's heights or layers; each stroke is one undoable action.
+## terrain's heights or layers; the Paint tool (a mesh's inspector) paints vertex colours. Each
+## stroke is one undoable action.
 func _forward_3d_gui_input(camera: Camera3D, event: InputEvent) -> int:
 	var node := GADSSculpt.tool_node
 	if node == null or not is_instance_valid(node) or not node.is_inside_tree() or not GADSSculpt.tool_active:
@@ -672,6 +684,8 @@ func _forward_3d_draw_over_viewport(overlay: Control) -> void:
 	var color: Color = colors.get(GADSSculpt.tool_mode, Color.WHITE)
 	if terrain != null and GADSSculpt.tool_paint >= 0:
 		color = Color(1.0, 0.45, 0.9)
+	elif terrain == null and GADSVertexPaint.tool_on:
+		color = [Color(1.0, 0.3, 0.3), Color(0.3, 1.0, 0.3), Color(0.4, 0.5, 1.0), Color.WHITE][GADSVertexPaint.tool_channel]
 	overlay.draw_polyline(points, color, 2.0, true)
 	overlay.draw_circle(camera.unproject_position(centre), 2.5, color)
 
@@ -684,6 +698,19 @@ func _update_brush(target: Node3D, camera: Camera3D, screen: Vector2) -> void:
 			_brush = {"camera": camera, "position": at, "normal": Vector3.UP, "radius": GADSSculpt.terrain_radius, "terrain": terrain}
 		else:
 			_brush = {}
+		update_overlays()
+		return
+	if target is MeshInstance3D and GADSVertexPaint.tool_on:
+		var mi := target as MeshInstance3D
+		var local := mi.global_transform.affine_inverse()
+		var at := GADSVertexPaint.pick(paint_target(mi), local * camera.project_ray_origin(screen),
+			(local.basis * camera.project_ray_normal(screen)).normalized(), _pick_cache)
+		if at.is_empty():
+			_brush = {}
+		else:
+			var m := mi.global_transform
+			_brush = {"camera": camera, "position": m * (at["position"] as Vector3),
+				"normal": (m.basis.inverse().transposed() * (at["normal"] as Vector3)).normalized(), "radius": GADSVertexPaint.tool_radius}
 		update_overlays()
 		return
 	var node := target as GADSMeshInstance3D
@@ -709,6 +736,8 @@ func _update_brush(target: Node3D, camera: Camera3D, screen: Vector2) -> void:
 func sculpt_at(target: Node3D, origin: Vector3, direction: Vector3) -> bool:
 	if target is GADSTerrain3D:
 		return _terrain_dab(target as GADSTerrain3D, origin, direction)
+	if target is MeshInstance3D and GADSVertexPaint.tool_on:
+		return _paint_dab(target as MeshInstance3D, origin, direction)
 	var node := target as GADSMeshInstance3D
 	if node == null:
 		return false
@@ -766,6 +795,10 @@ func end_sculpt_stroke() -> void:
 		_end_terrain_stroke(_stroke_node as GADSTerrain3D)
 		_reset_stroke()
 		return
+	if _stroke_kind == "paint":
+		_end_paint_stroke(_stroke_node as MeshInstance3D)
+		_reset_stroke()
+		return
 	var node := _stroke_node as GADSMeshInstance3D
 	var after := node.get_sculpt_image().duplicate() as Image
 	var undo := get_undo_redo()
@@ -808,7 +841,102 @@ func edit_terrain_heights(terrain: GADSTerrain3D, action_name: String, edit: Cal
 	GADSTerrainEdit.run(terrain, action_name, edit, true, false, get_undo_redo())
 
 
+## The mesh the Paint tool paints on [param node]: a GADSMeshInstance3D's source mesh, else its mesh.
+static func paint_target(node: MeshInstance3D) -> Mesh:
+	return (node as GADSMeshInstance3D).source_mesh if node is GADSMeshInstance3D else node.mesh
+
+
+## One dab of the Paint tool where the world ray meets [param node]'s mesh (starting a stroke if
+## none is in progress). Returns whether it hit.
+func _paint_dab(node: MeshInstance3D, origin: Vector3, direction: Vector3) -> bool:
+	var to_local := node.global_transform.affine_inverse()
+	var hit := GADSVertexPaint.pick(paint_target(node), to_local * origin, (to_local.basis * direction).normalized(), _pick_cache)
+	if hit.is_empty() or (_stroke_node == null and not _begin_paint(node)):
+		return false
+	var scale := node.global_transform.basis.get_scale()
+	var radius := GADSVertexPaint.tool_radius / maxf((scale.x + scale.y + scale.z) / 3.0, 1e-6)
+	_painter.dab(hit["position"], radius, GADSVertexPaint.tool_mode, GADSVertexPaint.tool_channel, GADSVertexPaint.tool_strength)
+	return true
+
+
+## Starts painting [param node]: on its painted copy (made now, and given to the node, when its
+## mesh is not one), remembering the colours and the mesh before.
+func _begin_paint(node: MeshInstance3D) -> bool:
+	var target := paint_target(node)
+	if target == null or target.get_surface_count() == 0:
+		return false
+	_stroke_node = node
+	_stroke_kind = "paint"
+	_paint_before_mesh = target
+	if not (target.has_meta(GADSVertexPaint.HASH_META) and GADSVertexPaint.is_paintable(target)):
+		target = GADSVertexPaint.make_paintable(target)
+		node.set("source_mesh" if node is GADSMeshInstance3D else "mesh", target)
+	_painter = GADSVertexPaint.new(target as ArrayMesh)
+	_paint_before = _painter.get_colors()
+	return true
+
+
+## A Paint stroke (or Fill / Clear) as one action: the colours before and after (and, on the stroke
+## that made the painted copy, the node's mesh before); the copy is saved and a baked node bakes
+## again, also on its undo and redo.
+func _end_paint_stroke(node: MeshInstance3D) -> void:
+	var painted := _painter.mesh
+	var after := _painter.get_colors()
+	var property := "source_mesh" if node is GADSMeshInstance3D else "mesh"
+	var undo := get_undo_redo()
+	undo.create_action("GADS Paint", UndoRedo.MERGE_DISABLE, node)
+	if _paint_before_mesh != painted:
+		undo.add_do_property(node, property, painted)
+	undo.add_do_method(self, "apply_paint", node, painted, after)
+	if _paint_before_mesh != painted:
+		undo.add_undo_property(node, property, _paint_before_mesh)
+	undo.add_undo_method(self, "apply_paint", node, painted, _paint_before)
+	undo.commit_action(false)
+	apply_paint(node, painted, after)
+
+
+## Sets [param painted]'s vertex colours to [param colors] (a Paint stroke, its undo and redo),
+## saves it next to the bakes and bakes [param node] again when it is a baked GADSMeshInstance3D.
+func apply_paint(node: MeshInstance3D, painted: ArrayMesh, colors: Array) -> void:
+	GADSVertexPaint.new(painted).set_colors(colors)
+	GADSVertexPaint.update_hash(painted)
+	var path := painted.resource_path
+	if path.is_empty() or path.contains("::"):
+		var dir: String = (node as GADSMeshInstance3D).cache_directory if node is GADSMeshInstance3D else GADSBakeCache.DEFAULT_DIRECTORY
+		var stem := String(painted.get_meta(GADSVertexPaint.SOURCE_META, "")).get_slice("::", 0).get_file().get_basename()
+		if stem.is_empty():
+			stem = String(node.name).to_snake_case()
+		stem = stem.validate_filename().replace(" ", "_")
+		path = dir.path_join("%s_painted.mesh" % stem)
+		var n := 2
+		while FileAccess.file_exists(path):
+			path = dir.path_join("%s_painted_%d.mesh" % [stem, n])
+			n += 1
+		DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(dir))
+	if ResourceSaver.save(painted, path) == OK:
+		painted.take_over_path(path)
+		EditorInterface.get_resource_filesystem().update_file(path)
+	else:
+		push_warning("GADS: cannot save the painted mesh to %s; it stays in the scene." % path)
+	var baked := node as GADSMeshInstance3D
+	if baked != null and baked.baked and baked.is_inside_tree():
+		baked.bake_async(false)
+
+
+## Sets vertex colour [param channel] of [param node]'s painted mesh to [param value] everywhere
+## (the Paint tool's Fill and Clear), as one undoable action.
+func fill_paint(node: MeshInstance3D, channel: int, value: float) -> void:
+	if _stroke_node != null or not _begin_paint(node):
+		return
+	_painter.fill(channel, value)
+	_end_paint_stroke(node)
+	_reset_stroke()
+
+
 func _reset_stroke() -> void:
+	_painter = null
+	_paint_before = []
+	_paint_before_mesh = null
 	_stroke_node = null
 	_stroke_before = null
 	_stroke_kind = ""

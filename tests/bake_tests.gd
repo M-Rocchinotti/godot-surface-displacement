@@ -62,6 +62,7 @@ func _run() -> void:
 	await _test("export", test_export)
 	await _test("sculpt", test_sculpt)
 	await _test("bake_cache", test_bake_cache)
+	await _test("vertex_paint", test_vertex_paint)
 	await _test("streamed_bake", test_stream)
 	await _test("skinned", test_skinned)
 	await _test("blend_shapes", test_blend_shapes)
@@ -1660,8 +1661,10 @@ func test_bake_cache() -> void:
 	check(GADSBakeCache.remove(unused) == unused.size() and not FileAccess.file_exists(first) and not FileAccess.file_exists(second),
 		"remove() takes them away")
 	check(not GADSBakeCache.is_cache_file("res://gads_baked/notes.txt") and GADSBakeCache.is_cache_file("res://x/rock_sculpt.res")
-		and GADSBakeCache.is_cache_file("res://x/rock_0123456789abcdef_collision.res") and not GADSBakeCache.is_cache_file("res://x/rock_ground.res"),
-		"only files named like bakes, collision shapes and sculpt maps count")
+		and GADSBakeCache.is_cache_file("res://x/rock_0123456789abcdef_collision.res") and not GADSBakeCache.is_cache_file("res://x/rock_ground.res")
+		and GADSBakeCache.is_cache_file("res://x/rock_painted.mesh") and GADSBakeCache.is_cache_file("res://x/rock_painted_2.mesh")
+		and not GADSBakeCache.is_cache_file("res://x/rock_painted.tres"),
+		"only files named like bakes, collision shapes, sculpt maps and painted meshes count")
 	check(GADSBakeCache.dependency_path("uid://abc::ArrayMesh::res://a/b.mesh") == "res://a/b.mesh"
 		and GADSBakeCache.dependency_path("res://a/b.mesh::ArrayMesh") == "res://a/b.mesh", "dependency entries give their path")
 
@@ -1738,6 +1741,104 @@ func test_stream() -> void:
 	check(copy.get_fallback().visibility_range_begin == 5.0, "and the geometry range works as without streaming")
 	copy.queue_free()
 	h.clear_scene()
+	await process_frame
+
+
+## GADSVertexPaint: a painted copy, brush dabs on a colour channel (falloff, erase, smooth, fill),
+## colours through undo, the bake key following the paint, and the bake following the painted
+## layer mask.
+func test_vertex_paint() -> void:
+	var plane_mesh := PlaneMesh.new()
+	plane_mesh.size = Vector2(2, 2)
+	plane_mesh.subdivide_width = 15
+	plane_mesh.subdivide_depth = 15
+	var source := ArrayMesh.new()
+	source.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, plane_mesh.get_mesh_arrays())
+	var painted := GADSVertexPaint.make_paintable(source)
+	var colors: PackedColorArray = painted.surface_get_arrays(0)[Mesh.ARRAY_COLOR]
+	var positions: PackedVector3Array = painted.surface_get_arrays(0)[Mesh.ARRAY_VERTEX]
+	check(painted != source and GADSVertexPaint.is_paintable(painted) and not GADSVertexPaint.is_paintable(source)
+		and colors.size() == positions.size() and Array(colors).all(func(c: Color) -> bool: return c == Color.WHITE),
+		"make_paintable() copies the mesh with white vertex colours (the layers look the same)")
+	check(GADSProfiler.mesh_triangles(painted) == GADSProfiler.mesh_triangles(source), "with the same triangles")
+	var painter := GADSVertexPaint.new(painted)
+	painter.fill(0, 0.0)
+	var centre := Vector3(0.5, 0, 0)
+	var changed := painter.dab(centre, 0.4, GADSVertexPaint.Mode.PAINT, 0, 1.0)
+	colors = painted.surface_get_arrays(0)[Mesh.ARRAY_COLOR]
+	var worst := 0.0
+	var outside := 0.0
+	for i in positions.size():
+		var d := positions[i].distance_to(centre) / 0.4
+		var expected := 0.0 if d >= 1.0 else pow(1.0 - d * d, 2.0)
+		if d >= 1.0:
+			outside = maxf(outside, colors[i].r)
+		worst = maxf(worst, absf(colors[i].r - expected))
+	print("  %d vertices painted; red off the falloff by at most %.4f" % [changed, worst])
+	check(changed > 20 and worst < 1.5 / 255.0 and outside == 0.0, "a dab paints red with the brush's falloff, nothing beyond its radius (read back from the mesh)")
+	check(Array(colors).all(func(c: Color) -> bool: return c.g == 1.0 and c.b == 1.0), "and leaves the other channels alone")
+	var at_centre := -1
+	for i in positions.size():
+		if positions[i].distance_to(centre) < 1e-4:
+			at_centre = i
+	var before := painter.get_colors()
+	painter.dab(centre, 0.4, GADSVertexPaint.Mode.ERASE, 0, 0.5)
+	var erased: float = painted.surface_get_arrays(0)[Mesh.ARRAY_COLOR][at_centre].r
+	check(absf(erased - 0.5) < 1.5 / 255.0, "Erase at half strength halves the centre (%.3f)" % erased)
+	var spread := func(cs: PackedColorArray) -> float:
+		var lo := 1.0
+		var hi := 0.0
+		for i in positions.size():
+			if positions[i].distance_to(centre) < 0.3:
+				lo = minf(lo, cs[i].r)
+				hi = maxf(hi, cs[i].r)
+		return hi - lo
+	var spread_before: float = spread.call(painter.get_colors()[0])
+	for k in 4:
+		painter.dab(centre, 0.4, GADSVertexPaint.Mode.SMOOTH, 0, 1.0)
+	var spread_after: float = spread.call(painter.get_colors()[0])
+	check(spread_after < 0.5 * spread_before, "Smooth evens the channel out (spread %.3f -> %.3f)" % [spread_before, spread_after])
+	painter.set_colors(before)
+	var restored: PackedColorArray = painted.surface_get_arrays(0)[Mesh.ARRAY_COLOR]
+	var same := true
+	for i in restored.size():
+		same = same and absf(restored[i].r - before[0][i].r) < 1.5 / 255.0
+	check(same, "set_colors() puts earlier colours back (undo)")
+	# The bake key follows the paint at once (the file's time changes only once a second).
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(CACHE_DIR))
+	var path := CACHE_DIR.path_join("plane_painted.mesh")
+	GADSVertexPaint.update_hash(painted)
+	ResourceSaver.save(painted, path)
+	painted.take_over_path(path)
+	var flat := Image.create(16, 16, false, Image.FORMAT_RF)
+	var ones := Image.create(16, 16, false, Image.FORMAT_RF)
+	ones.fill(Color(1, 0, 0))
+	var mat := GADSMaterials.create_layered(GADSMaterials.Mapping.UV, {"height": ImageTexture.create_from_image(flat)},
+		{"height_m": 0.04, "height_center": 0.0},
+		[{"height": ImageTexture.create_from_image(ones), "height_m": 0.04, "mask": GADSMaterials.LayerMask.VERTEX_R, "amount": 1.0, "blend_width": 0.1}],
+		GADSMaterials.Quality.POM)
+	var node := _make_node(mat)
+	node.source_mesh = painted
+	node.quality = GADSMeshInstance3D.Quality.MEDIUM
+	root.add_child(node)
+	var key := node.compute_bake_key()
+	painter.dab(Vector3(-0.5, 0, 0), 0.3, GADSVertexPaint.Mode.PAINT, 0, 1.0)
+	GADSVertexPaint.update_hash(painted)
+	check(node.compute_bake_key() != key, "painting changes the bake key at once (the colours' hash)")
+	check(node.bake() == OK, "the painted mesh bakes")
+	var out := node.mesh.surface_get_arrays(0)
+	var v: PackedVector3Array = out[Mesh.ARRAY_VERTEX]
+	var top := {}
+	for p: Vector3 in v:
+		for spot: Vector3 in [Vector3(0.5, 0, 0), Vector3(-0.5, 0, 0), Vector3(0, 0, 0.75)]:
+			if Vector2(p.x - spot.x, p.z - spot.z).length() < 0.05:
+				top[spot] = maxf(top.get(spot, -1.0), p.y)
+	print("  baked heights: painted centres %.1f / %.1f mm, unpainted %.1f mm" % [top.get(Vector3(0.5, 0, 0), -1.0) * 1000.0,
+		top.get(Vector3(-0.5, 0, 0), -1.0) * 1000.0, top.get(Vector3(0, 0, 0.75), -1.0) * 1000.0])
+	check(top.get(Vector3(0.5, 0, 0), 0.0) > 0.03 and top.get(Vector3(-0.5, 0, 0), 0.0) > 0.03,
+		"the bake raises the layer where it is painted")
+	check(absf(top.get(Vector3(0, 0, 0.75), 1.0)) < 0.002, "and not where it is not")
+	node.queue_free()
 	await process_frame
 
 

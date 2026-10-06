@@ -220,6 +220,8 @@ static func _resource_id(res: Resource) -> String:
 		return "null"
 	var path := res.resource_path
 	var file := path.get_slice("::", 0)
+	if not path.is_empty() and not path.contains("::") and res.has_meta(GADSVertexPaint.HASH_META):
+		return "%s#%s" % [path, res.get_meta(GADSVertexPaint.HASH_META)]
 	if not file.is_empty() and FileAccess.file_exists(file + ".import"):
 		return "%s@%d/%d" % [path, FileAccess.get_modified_time(file), FileAccess.get_modified_time(file + ".import")]
 	if not path.is_empty() and not path.contains("::"):

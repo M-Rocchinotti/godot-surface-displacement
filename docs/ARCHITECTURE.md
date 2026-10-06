@@ -398,6 +398,19 @@ each cluster's rendering instance gets the fallback's instance as its visibility
 the RenderingServer: a node's `visibility_parent` would be inherited by its whole subtree, the
 fallback included), and they all show exactly while the fallback is hidden by its range.
 
+**Vertex paint.** The layered materials' masks are vertex colour channels, so painting layers is
+painting vertex colours. Godot keeps a mesh's colours only on the GPU (as RGBA8 in the attribute
+buffer, interleaved with the UVs), so a `GADSVertexPaint` reads each surface's attribute buffer
+once, keeps the colours as floats (8-bit steps would swallow light strokes) and, per dab, writes
+the changed vertices' bytes at the colour's offset and stride (`mesh_surface_get_format_offset` /
+`_attribute_stride`) and uploads the buffer with `surface_update_attribute_region`: no surface is
+rebuilt, LODs and blend shapes stay. Vertices are bucketed in a grid of the brush radius. The
+copy is made with an `ImporterMesh` (surfaces, materials, names, blend shapes, bone weights,
+regenerated LODs) and saved next to the bakes; it records its colours' hash in metadata, which
+the bake key reads instead of the file's time (one-second resolution). The tessellator already
+carries vertex colours into the bake by interpolation and evaluates the layer masks from them,
+so the baked relief follows the paint.
+
 **Streaming.** With `stream_bake`, `_validate_property` drops the storage flag of `mesh`, so a
 saved scene holds only the bake's path (`bake_stats.path`) and no dependency on the file. At
 runtime the node compares the camera's distance to its source AABB's centre (the point Godot's

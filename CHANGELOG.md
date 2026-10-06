@@ -157,6 +157,14 @@ All notable changes to this project are documented here. The format follows
   collision and the detail field's ground data. Edited maps are one texel per vertex, saved into
   `data_directory`. Runtime API: `sculpt()`, `paint_splatmap()`, `set_height_region()` /
   `set_splat_region()`, `intersect_ray()` (no physics needed), the `edited` signal.
+- **Painting layers** (vertex colours): **Paint** in the GADSMeshInstance3D inspector and
+  **Paint Layers** in the inspector of any MeshInstance3D drawing a GADS material paint a vertex
+  colour channel in the viewport (Paint, Erase, Smooth; Fill / Clear Channel), the layered
+  materials' layer masks, so a layer and its relief go where they are painted; the bake follows.
+  Strokes are undoable and paint a copy of the mesh (`<name>_painted.mesh` next to the bakes,
+  white where it had no colours), never the asset. `GADSVertexPaint` (`make_paintable()`, `dab()`,
+  `fill()`, `get_colors()` / `set_colors()`) updates the colours on the GPU per dab; a painted
+  mesh's bake key uses its colours' hash. Clean Bake Cache also lists unused painted meshes.
 - **Streaming bakes**: `GADSMeshInstance3D.stream_bake` (with a `geometry_range`) keeps the
   bake out of the saved scene (its path stays in `bake_stats`); while the game runs the bake
   loads on a background thread when the camera comes within `get_stream_distance()` and is let
