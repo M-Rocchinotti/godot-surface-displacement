@@ -389,6 +389,7 @@ thread and are undoable. **Bake Selected GADSMeshInstance3D** in Project > Tools
 | `direction` | Auto | Auto: world +Y when every displaced surface is world-planar (the shaders' relief axis), else the smoothed normal. Normal: always the smoothed normal. Axis: `direction_axis`. |
 | `hard_angle` | 30 degrees | Source normals further apart stay a hard edge in the rebuilt normals. |
 | `generate_lods` | on | Godot's automatic LODs on the baked mesh. |
+| `cluster_triangles` | 0 | Split the bake into spatial clusters of at most this many triangles, each its own instance with its own LODs (below). 0: one mesh. |
 | `cache_directory` | `res://gads_baked` | One `<name>_<key>.mesh` per bake; the scene refers to the file. |
 | `geometry_range`, `geometry_range_margin` | 0, 2 m | Beyond `geometry_range` the source mesh is drawn with the materials' parallax instead of the baked geometry, cross-faded over the margin (0: geometry at every distance). `suggest_geometry_range()` gives the distance where the relief covers about two pixels. |
 | `collision` | None | Trimesh or Convex: a static body with a shape from a coarser pass (`collision_max_triangles` 20 000, tolerance x `collision_error_scale` 4), on `collision_layer` / `collision_mask`. |
@@ -433,6 +434,15 @@ meshes named `*-gads` (the suffix is dropped, like Godot's own `-col` hints), or
 draws a GADS material, into GADSMeshInstance3D, baked during the import at `quality` with the
 bake stored in the imported scene (`bake`). `GADSImportTools.process(scene, options)` does the same
 to any scene from a script.
+
+**Clusters.** A large mesh baked as one piece is culled as one piece and gets one LOD for all of
+it, however close the camera is to one end. With `cluster_triangles` the bake is split into
+compact clusters (median splits along the longest axis: 2 000 to 4 000 triangles each for 4 000)
+that the engine culls and picks LODs for one by one; Godot's LOD generator keeps the clusters'
+borders, so neighbours at different LODs do not crack. The clusters are the same triangles as the
+unsplit bake (tested), saved in the same cache file; the node draws the first, internal children
+the others, and they follow its materials, shadow and visibility settings. With a
+`geometry_range` they all switch to the parallax fallback at once, by the fallback's distance.
 
 **Runtime (view-dependent) tessellation.** With `view_dependent` on, the node tessellates again
 in the background while the game runs, for the camera's position: dense where the camera looks
@@ -716,7 +726,8 @@ pass because two errors cancel.
 
 - Height-based blending between ground layers (stones sitting in sand).
 - Silhouette POM (curvature-aware) for props.
-- Streaming bakes, skinned meshes, macOS and ARM builds of the native library, a cache cleaner.
+- Cluster streaming and GPU-driven culling of clusters (a step towards virtual geometry),
+  streaming bakes, skinned meshes, macOS and ARM builds of the native library, a cache cleaner.
 - A runtime height bake from arbitrary meshes for non-planar surfaces near the camera.
 
 ## AI-usage disclosure

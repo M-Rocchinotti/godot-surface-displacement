@@ -1179,4 +1179,116 @@ void Tessellator::build_outputs() {
 	stats_.vertices = vertices;
 }
 
+// --- Clusters ----------------------------------------------------------------------------------
+
+namespace {
+
+struct ClusterTri {
+	int surface;
+	int first; // index of the triangle's first index in the surface's indices
+	V3 centre;
+};
+
+// Splits tris[begin, end) at the median of the centroids along their bounding box's longest axis
+// until a part has at most target triangles: compact clusters of target / 2 to target triangles.
+void split_clusters(std::vector<ClusterTri> &tris, size_t begin, size_t end, size_t target, std::vector<std::pair<size_t, size_t>> &leaves) {
+	if (end - begin <= target) {
+		leaves.emplace_back(begin, end);
+		return;
+	}
+	V3 lo(1e30, 1e30, 1e30), hi(-1e30, -1e30, -1e30);
+	for (size_t i = begin; i < end; i++) {
+		const V3 &c = tris[i].centre;
+		lo = V3(std::min(lo.x, c.x), std::min(lo.y, c.y), std::min(lo.z, c.z));
+		hi = V3(std::max(hi.x, c.x), std::max(hi.y, c.y), std::max(hi.z, c.z));
+	}
+	V3 ext = hi - lo;
+	int axis = ext.x >= ext.y && ext.x >= ext.z ? 0 : (ext.y >= ext.z ? 1 : 2);
+	auto key = [axis](const ClusterTri &t) { return axis == 0 ? t.centre.x : (axis == 1 ? t.centre.y : t.centre.z); };
+	size_t mid = begin + (end - begin) / 2;
+	// A total order (ties by surface and position in it): the same input always splits the same.
+	std::nth_element(tris.begin() + begin, tris.begin() + mid, tris.begin() + end, [&](const ClusterTri &a, const ClusterTri &b) {
+		double ka = key(a), kb = key(b);
+		if (ka != kb) {
+			return ka < kb;
+		}
+		return a.surface != b.surface ? a.surface < b.surface : a.first < b.first;
+	});
+	split_clusters(tris, begin, mid, target, leaves);
+	split_clusters(tris, mid, end, target, leaves);
+}
+
+void copy_vertex(const std::vector<float> &src, std::vector<float> &dst, int v, int n) {
+	if (!src.empty()) {
+		dst.insert(dst.end(), src.begin() + size_t(v) * n, src.begin() + size_t(v + 1) * n);
+	}
+}
+
+} // namespace
+
+std::vector<std::vector<SurfaceOutput>> Tessellator::clusters(int max_triangles) const {
+	std::vector<ClusterTri> tris;
+	for (size_t s = 0; s < outputs_.size(); s++) {
+		const SurfaceOutput &o = outputs_[s];
+		for (size_t i = 0; i + 2 < o.indices.size(); i += 3) {
+			V3 c;
+			for (int k = 0; k < 3; k++) {
+				size_t v = size_t(o.indices[i + k]) * 3;
+				c = c + V3(o.positions[v], o.positions[v + 1], o.positions[v + 2]);
+			}
+			tris.push_back({ int(s), int(i), c * (1.0 / 3.0) });
+		}
+	}
+	std::vector<std::pair<size_t, size_t>> leaves;
+	if (!tris.empty()) {
+		split_clusters(tris, 0, tris.size(), size_t(std::max(max_triangles, 1)), leaves);
+	}
+	std::vector<std::vector<int>> remap(outputs_.size());
+	for (size_t s = 0; s < outputs_.size(); s++) {
+		remap[s].assign(outputs_[s].positions.size() / 3, -1);
+	}
+	std::vector<std::vector<SurfaceOutput>> out;
+	out.reserve(leaves.size());
+	for (const std::pair<size_t, size_t> &leaf : leaves) {
+		// Each cluster keeps its triangles in surface and source order.
+		std::sort(tris.begin() + leaf.first, tris.begin() + leaf.second, [](const ClusterTri &a, const ClusterTri &b) {
+			return a.surface != b.surface ? a.surface < b.surface : a.first < b.first;
+		});
+		std::vector<SurfaceOutput> cluster(outputs_.size());
+		for (size_t s = 0; s < outputs_.size(); s++) {
+			cluster[s].has_uv = outputs_[s].has_uv;
+			cluster[s].has_uv2 = outputs_[s].has_uv2;
+			cluster[s].has_colors = outputs_[s].has_colors;
+		}
+		std::vector<std::pair<int, int>> touched;
+		for (size_t i = leaf.first; i < leaf.second; i++) {
+			const ClusterTri &t = tris[i];
+			const SurfaceOutput &src = outputs_[t.surface];
+			SurfaceOutput &dst = cluster[t.surface];
+			for (int k = 0; k < 3; k++) {
+				int v = src.indices[t.first + k];
+				int &m = remap[t.surface][v];
+				if (m < 0) {
+					m = int(dst.positions.size() / 3);
+					copy_vertex(src.positions, dst.positions, v, 3);
+					copy_vertex(src.normals, dst.normals, v, 3);
+					copy_vertex(src.tangents, dst.tangents, v, 4);
+					copy_vertex(src.uv, dst.uv, v, 2);
+					copy_vertex(src.uv2, dst.uv2, v, 2);
+					copy_vertex(src.colors, dst.colors, v, 4);
+					copy_vertex(src.custom0, dst.custom0, v, 4);
+					copy_vertex(src.custom1, dst.custom1, v, 4);
+					touched.emplace_back(t.surface, v);
+				}
+				dst.indices.push_back(m);
+			}
+		}
+		for (const std::pair<int, int> &p : touched) {
+			remap[p.first][p.second] = -1;
+		}
+		out.push_back(std::move(cluster));
+	}
+	return out;
+}
+
 } // namespace gads

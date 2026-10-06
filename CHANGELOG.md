@@ -70,6 +70,11 @@ All notable changes to this project are documented here. The format follows
   by what its bilinear heights can miss); `get_height()`, `get_normal()`,
   `get_layer_weights()`. `tests/terrain_tests.gd`, a demo scene (hills with a rover leaving
   tracks) and validator checks.
+- **Clustered bakes** (`GADSMeshInstance3D.cluster_triangles`): the bake split into compact
+  spatial clusters (C++, median splits of the triangles' centroids), each its own instance with its
+  own LODs, so large meshes are culled and LOD-selected per cluster; the same triangles as the
+  unsplit bake, in the same cache file; the clusters follow the node's draw settings and switch to
+  the parallax fallback together. The profiler counts them.
 - **Mobile and Compatibility renderers**: everything compiles and draws there. The field and
   pebble shaders index their layer sampler arrays with constants on Compatibility (GLSL 1.30+
   forbids a loop index there; Vulkan keeps indexing directly), and the depth write maps OpenGL's

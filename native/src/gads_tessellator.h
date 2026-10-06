@@ -40,6 +40,7 @@ public:
 	int get_triangle_count() const;
 	bool is_done() const;
 	Array get_surfaces() const;
+	Array get_cluster_surfaces(int p_max_triangles) const;
 	Dictionary get_stats() const;
 	String get_error() const;
 

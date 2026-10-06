@@ -49,11 +49,13 @@ func _run() -> void:
 	await _test("triangle_shape", test_angles)
 	await _test("normals_tangents_and_rest_data", test_attributes)
 	await _test("lods", test_lods)
+	await _test("clusters", test_clusters)
 	await _test("cancel", test_cancel)
 	await _test("node_bake_cache_and_clear", test_node)
 	await _test("staleness", test_staleness)
 	await _test("collision", test_collision)
 	await _test("save_and_load", test_save_load)
+	await _test("cluster_node", test_cluster_node)
 	await _test("profiler", test_profiler)
 	await _test("import_options", test_import)
 	if DisplayServer.get_name() != "headless":
@@ -984,3 +986,95 @@ func test_import() -> void:
 	check(report["meshes"] == 1 and scene.get_node("Floor") is GADSMeshInstance3D and not (scene.get_node("Floor") as GADSMeshInstance3D).baked,
 		"Every Mesh With a GADS Material picks the rest (unbaked when bake is off)")
 	scene.free()
+
+
+## A clustered bake: the same triangles as the whole bake, split into compact clusters of at most
+## cluster_triangles, each with its own LODs.
+func test_clusters() -> void:
+	var field := Harness.make_stone_field(256, 60, 11)
+	var mat := uv_material(field, 0.05)
+	var m := plane(8.0)
+	var whole := bake_with(m, mat, {"max_error": 0.001})
+	var split := bake_with(m, mat, {"max_error": 0.001, "cluster_triangles": 4000, "lods": true})
+	var meshes: Array = [split.mesh] + GADSMeshInstance3D.cluster_meshes_of(split.mesh)
+	var counts: Array[int] = []
+	var total := 0
+	var area := 0.0
+	var lods := true
+	for cm: Mesh in meshes:
+		var n := triangle_count(cm)
+		counts.append(n)
+		total += n
+		var box := cm.get_aabb()
+		area += box.size.x * box.size.z
+		lods = lods and not (RenderingServer.mesh_get_surface(cm.get_rid(), 0).get("lods", []) as Array).is_empty()
+	print("  %d triangles whole, %d in %d clusters (%d to %d each); cluster boxes cover %.1f m2 of 64" % [
+		triangle_count(whole.mesh), total, meshes.size(), counts.min(), counts.max(), area])
+	check(meshes.size() == split.stats.get("clusters", 0) and meshes.size() >= 8 and counts.max() <= 4000 and counts.min() >= 1500,
+		"clusters of 2 000 to 4 000 triangles")
+	check(total == triangle_count(whole.mesh), "together they hold every triangle")
+	# The same triangles (as position triples, in any order): splitting adds no cracks.
+	var key := func(mesh: Mesh) -> Dictionary:
+		var out := {}
+		for t: Array in triangles_of(mesh):
+			out[str([(t[0] as Vector3).snapped(Vector3.ONE * 1e-5), (t[1] as Vector3).snapped(Vector3.ONE * 1e-5), (t[2] as Vector3).snapped(Vector3.ONE * 1e-5)])] = true
+		return out
+	var a: Dictionary = key.call(whole.mesh)
+	var b := {}
+	for cm: Mesh in meshes:
+		b.merge(key.call(cm))
+	check(a.size() == b.size() and a.keys().all(func(k: String) -> bool: return b.has(k)), "the same triangles as the whole bake")
+	check(area < 64.0 * 1.25, "clusters are compact (their boxes overlap little)")
+	check(lods, "each cluster has its own LODs")
+
+
+## A GADSMeshInstance3D with cluster_triangles draws its clusters as internal instances that follow
+## its settings, and the parallax fallback switches them all at once by one distance.
+func test_cluster_node() -> void:
+	var field := bump_field(128, 0.1)
+	var s := h.new_debug_scene()
+	var node := _make_node(uv_material(field, 0.08))
+	node.quality = GADSMeshInstance3D.Quality.HIGH
+	node.cluster_triangles = 300
+	s.add_child(node)
+	check(node.bake() == OK and node.baked, "a clustered bake")
+	check(GADSProfiler.mesh_triangles(node.mesh) == int(node.bake_stats.get("triangles", -1)), "the profiler counts every cluster's triangles")
+	var children := node.get_cluster_nodes()
+	print("  %d instances" % node.get_cluster_count())
+	check(node.get_cluster_count() >= 4 and children.size() == node.get_cluster_count() - 1 and not node.get_children().has(children[0])
+		and node.get_children(true).has(children[0]), "the other clusters are internal children")
+	check(children.all(func(c: MeshInstance3D) -> bool: return c.get_instance_shader_parameter(&"gads_baked") == 1.0 and c.material_override == node.material_override),
+		"they draw with the node's materials, as baked meshes")
+	var other := uv_material(field, 0.02)
+	node.material_override = other
+	node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	await process_frame
+	check(children.all(func(c: MeshInstance3D) -> bool: return c.material_override == other and c.cast_shadow == GeometryInstance3D.SHADOW_CASTING_SETTING_OFF),
+		"they follow the node's material and shadow settings")
+	node.material_override = uv_material(field, 0.08)
+	node.geometry_range = 12.0
+	node.geometry_range_margin = 1.0
+	await process_frame
+	check(node.get_fallback() != null and node.get_fallback_dependents().size() == node.get_cluster_count() and node.visibility_range_end == 0.0,
+		"with a geometry range all clusters depend on the fallback's distance (one switch for all)")
+	if DisplayServer.get_name() != "headless":
+		GADSGlobals.set_value(GADSGlobals.DEBUG, Vector4(GADSManager.DebugView.TESSELLATION, 0.1, 0, 0))
+		var cam := h.add_camera(Vector3(0, 1, 1), Vector3.ZERO, 6.0)
+		var colors := {}
+		for distance in [6.0, 20.0]:
+			cam.look_at_from_position(Vector3(0, 1, 1).normalized() * distance, Vector3.ZERO)
+			await h.frames(4)
+			var img := await h.capture()
+			colors[distance] = img.get_pixel(SIZE.x / 2, SIZE.y / 2)
+		print("  centre at 6 m %s, at 20 m %s" % [colors[6.0], colors[20.0]])
+		check(colors[6.0].r > colors[6.0].b and colors[20.0].b > 0.9 and colors[20.0].r < 0.2,
+			"near the clustered geometry (refined), far the source mesh with parallax")
+		GADSGlobals.set_value(GADSGlobals.DEBUG, Vector4(0, 0.1, 0, 0))
+	node.geometry_range = 0.0
+	await process_frame
+	check(node.get_fallback_dependents().is_empty(), "range 0 lets them go")
+	node.clear_bake()
+	await process_frame
+	check(node.get_cluster_nodes().is_empty() and node.mesh == node.source_mesh, "Clear removes the clusters")
+	node.queue_free()
+	await process_frame

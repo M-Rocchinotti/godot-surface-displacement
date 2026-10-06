@@ -42,6 +42,7 @@ void GADSTessellator::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_triangle_count"), &GADSTessellator::get_triangle_count);
 	ClassDB::bind_method(D_METHOD("is_done"), &GADSTessellator::is_done);
 	ClassDB::bind_method(D_METHOD("get_surfaces"), &GADSTessellator::get_surfaces);
+	ClassDB::bind_method(D_METHOD("get_cluster_surfaces", "max_triangles"), &GADSTessellator::get_cluster_surfaces);
 	ClassDB::bind_method(D_METHOD("get_stats"), &GADSTessellator::get_stats);
 	ClassDB::bind_method(D_METHOD("get_error"), &GADSTessellator::get_error);
 	ClassDB::bind_static_method("GADSTessellator", D_METHOD("get_build_hash"), &GADSTessellator::get_build_hash);
@@ -209,50 +210,69 @@ static PackedFloat32Array floats(const std::vector<float> &v) {
 	return out;
 }
 
+// One output surface as Mesh arrays.
+static Array surface_arrays(const gads::SurfaceOutput &o) {
+	Array arrays;
+	arrays.resize(ARRAY_MAX);
+	size_t n = o.positions.size() / 3;
+	PackedVector3Array vertices, normals;
+	vertices.resize(int64_t(n));
+	normals.resize(int64_t(n));
+	for (size_t i = 0; i < n; i++) {
+		vertices.set(int64_t(i), Vector3(o.positions[i * 3], o.positions[i * 3 + 1], o.positions[i * 3 + 2]));
+		normals.set(int64_t(i), Vector3(o.normals[i * 3], o.normals[i * 3 + 1], o.normals[i * 3 + 2]));
+	}
+	arrays[ARRAY_VERTEX] = vertices;
+	arrays[ARRAY_NORMAL] = normals;
+	arrays[ARRAY_TANGENT] = floats(o.tangents);
+	if (o.has_colors) {
+		PackedColorArray colors;
+		colors.resize(int64_t(n));
+		for (size_t i = 0; i < n; i++) {
+			colors.set(int64_t(i), Color(o.colors[i * 4], o.colors[i * 4 + 1], o.colors[i * 4 + 2], o.colors[i * 4 + 3]));
+		}
+		arrays[ARRAY_COLOR] = colors;
+	}
+	for (int ch = ARRAY_TEX_UV; ch <= ARRAY_TEX_UV2; ch++) {
+		const std::vector<float> &src = ch == ARRAY_TEX_UV ? o.uv : o.uv2;
+		if ((ch == ARRAY_TEX_UV ? o.has_uv : o.has_uv2)) {
+			PackedVector2Array uv;
+			uv.resize(int64_t(n));
+			for (size_t i = 0; i < n; i++) {
+				uv.set(int64_t(i), Vector2(src[i * 2], src[i * 2 + 1]));
+			}
+			arrays[ch] = uv;
+		}
+	}
+	arrays[ARRAY_CUSTOM0] = floats(o.custom0);
+	arrays[ARRAY_CUSTOM1] = floats(o.custom1);
+	PackedInt32Array indices;
+	indices.resize(int64_t(o.indices.size()));
+	if (!o.indices.empty()) {
+		std::memcpy(indices.ptrw(), o.indices.data(), o.indices.size() * sizeof(int));
+	}
+	arrays[ARRAY_INDEX] = indices;
+	return arrays;
+}
+
 Array GADSTessellator::get_surfaces() const {
 	Array result;
 	for (const gads::SurfaceOutput &o : core_.outputs()) {
-		Array arrays;
-		arrays.resize(ARRAY_MAX);
-		size_t n = o.positions.size() / 3;
-		PackedVector3Array vertices, normals;
-		vertices.resize(int64_t(n));
-		normals.resize(int64_t(n));
-		for (size_t i = 0; i < n; i++) {
-			vertices.set(int64_t(i), Vector3(o.positions[i * 3], o.positions[i * 3 + 1], o.positions[i * 3 + 2]));
-			normals.set(int64_t(i), Vector3(o.normals[i * 3], o.normals[i * 3 + 1], o.normals[i * 3 + 2]));
+		result.push_back(surface_arrays(o));
+	}
+	return result;
+}
+
+// The outputs in spatial clusters of at most p_max_triangles: an Array per cluster of surface
+// arrays (as get_surfaces(); a surface with no triangles in the cluster has empty arrays).
+Array GADSTessellator::get_cluster_surfaces(int p_max_triangles) const {
+	Array result;
+	for (const std::vector<gads::SurfaceOutput> &cluster : core_.clusters(p_max_triangles)) {
+		Array surfaces;
+		for (const gads::SurfaceOutput &o : cluster) {
+			surfaces.push_back(surface_arrays(o));
 		}
-		arrays[ARRAY_VERTEX] = vertices;
-		arrays[ARRAY_NORMAL] = normals;
-		arrays[ARRAY_TANGENT] = floats(o.tangents);
-		if (o.has_colors) {
-			PackedColorArray colors;
-			colors.resize(int64_t(n));
-			for (size_t i = 0; i < n; i++) {
-				colors.set(int64_t(i), Color(o.colors[i * 4], o.colors[i * 4 + 1], o.colors[i * 4 + 2], o.colors[i * 4 + 3]));
-			}
-			arrays[ARRAY_COLOR] = colors;
-		}
-		for (int ch = ARRAY_TEX_UV; ch <= ARRAY_TEX_UV2; ch++) {
-			const std::vector<float> &src = ch == ARRAY_TEX_UV ? o.uv : o.uv2;
-			if ((ch == ARRAY_TEX_UV ? o.has_uv : o.has_uv2)) {
-				PackedVector2Array uv;
-				uv.resize(int64_t(n));
-				for (size_t i = 0; i < n; i++) {
-					uv.set(int64_t(i), Vector2(src[i * 2], src[i * 2 + 1]));
-				}
-				arrays[ch] = uv;
-			}
-		}
-		arrays[ARRAY_CUSTOM0] = floats(o.custom0);
-		arrays[ARRAY_CUSTOM1] = floats(o.custom1);
-		PackedInt32Array indices;
-		indices.resize(int64_t(o.indices.size()));
-		if (!o.indices.empty()) {
-			std::memcpy(indices.ptrw(), o.indices.data(), o.indices.size() * sizeof(int));
-		}
-		arrays[ARRAY_INDEX] = indices;
-		result.push_back(arrays);
+		result.push_back(surfaces);
 	}
 	return result;
 }

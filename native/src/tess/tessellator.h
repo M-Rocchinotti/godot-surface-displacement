@@ -138,6 +138,10 @@ public:
 	bool run(const std::atomic<bool> &cancel, std::atomic<float> &progress, std::atomic<int> &triangles);
 
 	const std::vector<SurfaceOutput> &outputs() const { return outputs_; }
+	// The outputs split into spatial clusters of at most max_triangles (all surfaces together,
+	// median splits along the longest axis): clusters()[c][s] is surface s's part of cluster c
+	// (no indices where cluster c has none of it). After run().
+	std::vector<std::vector<SurfaceOutput>> clusters(int max_triangles) const;
 	const Stats &stats() const { return stats_; }
 	const std::string &error() const { return error_; }
 

@@ -179,6 +179,9 @@ static func mesh_triangles(mesh: Mesh) -> int:
 	if mesh == null:
 		return 0
 	var n := 0
+	# A clustered bake: the other clusters ride in the first one's metadata.
+	for cluster: Mesh in GADSMeshInstance3D.cluster_meshes_of(mesh):
+		n += mesh_triangles(cluster)
 	for s in mesh.get_surface_count():
 		var arrays := mesh.surface_get_arrays(s)
 		var indices: PackedInt32Array = arrays[Mesh.ARRAY_INDEX] if arrays[Mesh.ARRAY_INDEX] != null else PackedInt32Array()
@@ -193,6 +196,8 @@ static func mesh_bytes(mesh: Mesh) -> int:
 	if mesh == null:
 		return 0
 	var total := 0
+	for cluster: Mesh in GADSMeshInstance3D.cluster_meshes_of(mesh):
+		total += mesh_bytes(cluster)
 	for s in mesh.get_surface_count():
 		var arrays := mesh.surface_get_arrays(s)
 		var vertices := (arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()

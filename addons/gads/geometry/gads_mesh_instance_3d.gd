@@ -77,6 +77,10 @@ const BAKED_PARAMETER := &"gads_baked"
 ## Source normals further apart than this keep a hard edge.
 @export_range(0.0, 180.0, 0.1, "degrees") var hard_angle := 30.0
 @export var generate_lods := true
+## Splits the bake into clusters of at most this many triangles, each drawn as its own instance:
+## the engine culls them and picks LODs per cluster, so a large mesh (a cliff, a facade, a terrain
+## patch) is detailed only where the camera is close. 0: one mesh.
+@export_range(0, 1000000, 1000, "or_greater") var cluster_triangles := 0
 ## Where bakes are saved (one file per key; files of earlier bakes are not deleted).
 @export_dir var cache_directory := "res://gads_baked"
 
@@ -154,12 +158,16 @@ var _view_eye := Vector3.INF
 var _view_focal := 0.0
 var _view_xform := Transform3D()
 var _view_images := {}
+var _cluster_nodes: Array[MeshInstance3D] = []
+var _cluster_snapshot := []
+var _hlod := false # the node and its clusters show while the fallback is hidden
 
 
 func _ready() -> void:
 	# _process polls a background bake (which may have started before the node was ready) and
 	# follows the camera for the runtime tessellation.
 	set_process(is_baking() or _view_running())
+	_sync_clusters()
 	# A MeshInstance3D converted to this type keeps its mesh as the source.
 	if source_mesh == null and not baked and mesh != null:
 		source_mesh = mesh
@@ -219,6 +227,8 @@ func get_bake_settings() -> Dictionary:
 		"hard_angle_deg": hard_angle,
 		"lods": generate_lods,
 	}
+	if cluster_triangles > 0:
+		settings["cluster_triangles"] = cluster_triangles
 	if direction == Direction.AXIS:
 		settings["direction"] = direction_axis.normalized()
 	if collision != GADSMeshBaker.Collision.NONE:
@@ -322,9 +332,12 @@ func _process(_delta: float) -> void:
 			_complete(_baker.finish())
 		else:
 			bake_progress.emit(_baker.get_progress(), _baker.get_triangle_count())
+	if not _cluster_nodes.is_empty() and _draw_snapshot() != _cluster_snapshot:
+		_sync_clusters()
+		_update_fallback()
 	if _view_running():
 		_update_view()
-	elif _baker == null:
+	elif _baker == null and _cluster_nodes.is_empty():
 		set_process(false)
 
 
@@ -460,6 +473,7 @@ func _apply_state(state: Dictionary) -> void:
 	mesh = state.get("mesh") if baked else source_mesh
 	_apply_parameter()
 	_update_collision()
+	_sync_clusters()
 	_update_fallback()
 	update_configuration_warnings()
 	notify_property_list_changed()
@@ -521,6 +535,7 @@ func _update_fallback() -> void:
 			visibility_range_end_margin = 0.0
 			visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_DISABLED
 			_owns_visibility_range = false
+		_update_cluster_visibility()
 		return
 	if _fallback == null:
 		_fallback = MeshInstance3D.new()
@@ -537,10 +552,108 @@ func _update_fallback() -> void:
 	_fallback.visibility_range_begin = geometry_range
 	_fallback.visibility_range_begin_margin = geometry_range_margin
 	_fallback.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF
-	visibility_range_end = geometry_range
-	visibility_range_end_margin = geometry_range_margin
-	visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF
 	_owns_visibility_range = true
+	if _cluster_nodes.is_empty():
+		visibility_range_end = geometry_range
+		visibility_range_end_margin = geometry_range_margin
+		visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF
+	else:
+		# Clusters each measure the distance to their own centre: instead they all show while the
+		# fallback (the whole source mesh) is hidden by its range, one distance for all (HLOD).
+		visibility_range_end = 0.0
+		visibility_range_end_margin = 0.0
+		visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_DISABLED
+	_update_cluster_visibility()
+
+
+# --- Clusters ------------------------------------------------------------------------------------
+
+## Draw settings the cluster instances copy from the node (checked each frame while there are
+## clusters; the visibility settings follow in _update_cluster_visibility()).
+const CLUSTER_SYNCED: Array[StringName] = [&"material_override", &"material_overlay", &"cast_shadow", &"layers", &"gi_mode",
+	&"lod_bias", &"transparency", &"extra_cull_margin", &"visibility_range_begin", &"visibility_range_end",
+	&"visibility_range_begin_margin", &"visibility_range_end_margin", &"visibility_range_fade_mode", &"visibility_parent"]
+
+
+## The other clusters of a clustered bake (the first is [param m] itself), from its metadata.
+static func cluster_meshes_of(m: Mesh) -> Array:
+	return m.get_meta(&"gads_clusters", []) if m != null else []
+
+
+## How many instances draw the mesh: 1, or the clusters of a clustered bake (see
+## [member cluster_triangles]).
+func get_cluster_count() -> int:
+	return 1 + _cluster_nodes.size()
+
+
+## The internal children that draw a clustered bake's other clusters.
+func get_cluster_nodes() -> Array[MeshInstance3D]:
+	return _cluster_nodes
+
+
+func _draw_snapshot() -> Array:
+	var out := []
+	for p in CLUSTER_SYNCED:
+		out.append(get(p))
+	for s in get_surface_override_material_count():
+		out.append(get_surface_override_material(s))
+	return out
+
+
+## One internal MeshInstance3D per cluster beyond the first, drawing like the node.
+func _sync_clusters() -> void:
+	var meshes: Array = cluster_meshes_of(mesh) if baked or _view_mesh != null else []
+	while _cluster_nodes.size() > meshes.size():
+		_cluster_nodes.pop_back().queue_free()
+	while _cluster_nodes.size() < meshes.size():
+		var mi := MeshInstance3D.new()
+		mi.name = "GADSCluster%d" % (_cluster_nodes.size() + 2)
+		add_child(mi, false, Node.INTERNAL_MODE_BACK)
+		_cluster_nodes.append(mi)
+	for i in meshes.size():
+		var mi := _cluster_nodes[i]
+		mi.mesh = meshes[i]
+		for p in CLUSTER_SYNCED:
+			if not String(p).begins_with("visibility"):
+				mi.set(p, get(p))
+		for s in mini(get_surface_override_material_count(), mi.get_surface_override_material_count()):
+			mi.set_surface_override_material(s, get_surface_override_material(s))
+		mi.set_instance_shader_parameter(BAKED_PARAMETER, 1.0)
+	_update_cluster_visibility()
+	if not _cluster_nodes.is_empty() and is_inside_tree():
+		set_process(true)
+
+
+## Clusters show and hide with the node: by its own visibility range, or (with a geometry range)
+## all together by the fallback's. The fallback link is set on the rendering instances directly:
+## a node's visibility_parent would also apply to its children, the fallback among them.
+func _update_cluster_visibility() -> void:
+	var parent := get_node_or_null(visibility_parent) if not visibility_parent.is_empty() else null
+	for mi in _cluster_nodes:
+		mi.visibility_range_begin = visibility_range_begin
+		mi.visibility_range_end = visibility_range_end
+		mi.visibility_range_begin_margin = visibility_range_begin_margin
+		mi.visibility_range_end_margin = visibility_range_end_margin
+		mi.visibility_range_fade_mode = visibility_range_fade_mode
+		mi.visibility_parent = mi.get_path_to(parent) if parent != null else NodePath()
+	var hlod := _owns_visibility_range and _fallback != null and not _cluster_nodes.is_empty()
+	if hlod or _hlod:
+		var target := _fallback.get_instance() if hlod else RID()
+		RenderingServer.instance_set_visibility_parent(get_instance(), target)
+		for mi in _cluster_nodes:
+			RenderingServer.instance_set_visibility_parent(mi.get_instance(), target)
+		_hlod = hlod
+	_cluster_snapshot = _draw_snapshot()
+
+
+## The rendering instances that show while the fallback is hidden (see _update_cluster_visibility()).
+func get_fallback_dependents() -> Array[RID]:
+	var out: Array[RID] = []
+	if _hlod:
+		out.append(get_instance())
+		for mi in _cluster_nodes:
+			out.append(mi.get_instance())
+	return out
 
 
 # --- Runtime (view-dependent) tessellation ------------------------------------------------------
@@ -584,6 +697,7 @@ func _drop_view_mesh() -> void:
 		_view_mesh = null
 		mesh = _static_mesh
 		_static_mesh = null
+		_sync_clusters()
 	_view_eye = Vector3.INF
 
 
@@ -666,5 +780,6 @@ func _finish_view() -> void:
 	view_stats["view_position"] = _view_eye
 	mesh = _view_mesh
 	_apply_parameter()
+	_sync_clusters()
 	_update_fallback()
 	view_tessellated.emit(view_stats)

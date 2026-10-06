@@ -42,7 +42,7 @@ var _settings := {}
 var _tess: RefCounted
 var _collision_tess: RefCounted
 var _task := -1
-var _importer: ImporterMesh
+var _importers: Array[ImporterMesh] = [] # one per cluster (one when not clustered)
 var _collision_faces := PackedVector3Array()
 var _ok := false
 var _started_ms := 0
@@ -229,7 +229,9 @@ static func _resource_id(res: Resource) -> String:
 
 ## [param settings]: the tessellator's (see native/src/tess/tessellator.h, Settings) plus
 ## "collision" (Collision), "collision_max_triangles" and "collision_error_scale" (the collision
-## pass's tolerance relative to the render pass's), "lods" (bool) and "lod_normal_merge_angle".
+## pass's tolerance relative to the render pass's), "lods" (bool), "lod_normal_merge_angle" and
+## "cluster_triangles" (split the result into spatial clusters of at most this many triangles,
+## each with its own LODs: [member mesh] is the first, its "gads_clusters" metadata the others).
 func setup(source: Mesh, materials: Array[Material], xform: Transform3D, settings: Dictionary) -> void:
 	_source = source
 	_materials = materials
@@ -287,8 +289,18 @@ func finish() -> bool:
 		error = "cancelled" if _cancelled else (native_error if not native_error.is_empty() else "the tessellator failed")
 		_release()
 		return false
-	mesh = _importer.get_mesh()
-	mesh.resource_name = (_source.resource_name if not _source.resource_name.is_empty() else "mesh") + " (GADS baked)"
+	var meshes: Array[ArrayMesh] = []
+	for im in _importers:
+		var m := im.get_mesh()
+		m.resource_name = (_source.resource_name if not _source.resource_name.is_empty() else "mesh") + " (GADS baked)"
+		meshes.append(m)
+	mesh = meshes[0]
+	if meshes.size() > 1:
+		# A clustered bake: the first cluster is the mesh, the others ride along in its metadata
+		# (saved with it), drawn by GADSMeshInstance3D's internal children.
+		for i in meshes.size():
+			meshes[i].resource_name += " cluster %d" % (i + 1)
+		mesh.set_meta(&"gads_clusters", meshes.slice(1))
 	match int(_settings.get("collision", Collision.NONE)):
 		Collision.TRIMESH:
 			var shape := ConcavePolygonShape3D.new()
@@ -311,7 +323,7 @@ func finish() -> bool:
 func _release() -> void:
 	_tess = null
 	_collision_tess = null
-	_importer = null
+	_importers.clear()
 	_collision_faces = PackedVector3Array()
 
 
@@ -405,24 +417,38 @@ func _work() -> void:
 	if not _ok:
 		return
 	stats.merge(_tess.call("get_stats"), true)
-	var surfaces: Array = _tess.call("get_surfaces")
-	_importer = ImporterMesh.new()
 	var flags := (Mesh.ARRAY_CUSTOM_RGBA_FLOAT << Mesh.ARRAY_FORMAT_CUSTOM0_SHIFT) | (Mesh.ARRAY_CUSTOM_RGBA_FLOAT << Mesh.ARRAY_FORMAT_CUSTOM1_SHIFT)
-	for s in surfaces.size():
-		var arrays: Array = surfaces[s]
-		if (arrays[Mesh.ARRAY_INDEX] as PackedInt32Array).is_empty():
-			continue # A surface whose triangles were all degenerate.
-		# The mesh's own surface material: overrides on the node keep working on the baked mesh.
-		_importer.add_surface(Mesh.PRIMITIVE_TRIANGLES, arrays, [], {}, _source.surface_get_material(s),
-			(_source as ArrayMesh).surface_get_name(s) if _source is ArrayMesh else "", flags)
-	if _importer.get_surface_count() == 0:
-		_ok = false
-		return
-	if _settings.get("lods", true):
-		_importer.generate_lods(float(_settings.get("lod_normal_merge_angle", 60.0)), 0.0, [])
-	if _cancelled:
-		_ok = false
-		return
+	var target := int(_settings.get("cluster_triangles", 0))
+	var groups: Array
+	if target > 0 and int(stats.get("triangles", 0)) > target:
+		groups = _tess.call("get_cluster_surfaces", target)
+		stats["clusters"] = groups.size()
+	else:
+		groups = [_tess.call("get_surfaces")]
+	_importers.clear()
+	for surfaces: Array in groups:
+		var im := ImporterMesh.new()
+		var anchor := _anchor_of(surfaces)
+		for s in surfaces.size():
+			var arrays: Array = surfaces[s]
+			if (arrays[Mesh.ARRAY_INDEX] as PackedInt32Array).is_empty():
+				if groups.size() == 1:
+					continue # A surface whose triangles were all degenerate.
+				# A cluster without this surface: a degenerate triangle keeps the surface indices
+				# (and so the node's surface material overrides) the same in every cluster.
+				arrays = _placeholder_surface(anchor)
+			# The mesh's own surface material: overrides on the node keep working on the baked mesh.
+			im.add_surface(Mesh.PRIMITIVE_TRIANGLES, arrays, [], {}, _source.surface_get_material(s),
+				(_source as ArrayMesh).surface_get_name(s) if _source is ArrayMesh else "", flags)
+		if im.get_surface_count() == 0:
+			_ok = false
+			return
+		if _settings.get("lods", true):
+			im.generate_lods(float(_settings.get("lod_normal_merge_angle", 60.0)), 0.0, [])
+		if _cancelled:
+			_ok = false
+			return
+		_importers.append(im)
 	if _collision_tess != null:
 		if not _collision_tess.call("run"):
 			_ok = false
@@ -432,3 +458,27 @@ func _work() -> void:
 			for i: int in arrays[Mesh.ARRAY_INDEX]:
 				_collision_faces.append(vertices[i])
 		stats["collision_triangles"] = _collision_faces.size() / 3
+
+
+## A vertex of a cluster's surfaces (where its placeholder surfaces sit, inside its bounds).
+static func _anchor_of(surfaces: Array) -> Vector3:
+	for arrays: Array in surfaces:
+		var v: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+		if not v.is_empty():
+			return v[0]
+	return Vector3.ZERO
+
+
+## One degenerate triangle at [param at] with the attributes a baked surface has.
+static func _placeholder_surface(at: Vector3) -> Array:
+	var arrays := []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = PackedVector3Array([at, at, at])
+	arrays[Mesh.ARRAY_NORMAL] = PackedVector3Array([Vector3.UP, Vector3.UP, Vector3.UP])
+	arrays[Mesh.ARRAY_TANGENT] = PackedFloat32Array([1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1])
+	var custom := PackedFloat32Array()
+	custom.resize(12)
+	arrays[Mesh.ARRAY_CUSTOM0] = custom
+	arrays[Mesh.ARRAY_CUSTOM1] = custom
+	arrays[Mesh.ARRAY_INDEX] = PackedInt32Array([0, 1, 2])
+	return arrays
