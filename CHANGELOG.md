@@ -106,6 +106,11 @@ All notable changes to this project are documented here. The format follows
   Project > Tools > **Make Selected Meshes GADSMeshInstance3D** and **Bake Selected
   GADSMeshInstance3D** (undoable); Validate Setup reports stale bakes, unbakeable meshes, a
   missing native library and bakes the budget cut short.
+- **Terrain occluders**: `GADSTerrain3D.occluders` gives each chunk a conservative occluder (a
+  coarse grid lowered by its own largest error, below the drawn surface everywhere) for Godot's
+  occlusion culling.
+- **Demo scene 7, Material lab**: procedural materials on baked spheres, a procedural tile floor
+  and brick wall with cavity colours, and vector displacement curling into overhangs.
 - **Platform caps and capabilities**: `GADSManager.platform_caps` (default: Low on phones and in
   browsers) caps the preset by OS feature tag or renderer while the game runs,
   `simulate_platform` tests another platform, `get_capabilities()` reports the renderer, native

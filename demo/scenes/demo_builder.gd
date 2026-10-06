@@ -6,7 +6,7 @@ extends RefCounted
 ## GADSManager node, and "views" metadata: view name -> [camera position, look target].
 
 const TEX := "res://demo/textures/"
-const SCENE_NAMES: Array[String] = ["Gravel path", "Cobblestone street", "Rocky ground", "Brick wall and props", "Hills and tracks", "Cliff"]
+const SCENE_NAMES: Array[String] = ["Gravel path", "Cobblestone street", "Rocky ground", "Brick wall and props", "Hills and tracks", "Cliff", "Material lab"]
 const Rover := preload("res://demo/scenes/demo_rover.gd")
 const VIEW_NAMES: Array[String] = ["Eye level", "Grazing", "Overview"]
 
@@ -23,8 +23,10 @@ static func build(index: int) -> Node3D:
 			return build_brick_wall()
 		4:
 			return build_hills()
-		_:
+		5:
 			return build_cliff()
+		_:
+			return build_material_lab()
 
 
 # --- Shared pieces ---------------------------------------------------------------------------
@@ -559,5 +561,95 @@ static func build_cliff() -> Node3D:
 		"Eye level": [Vector3(1.0, 1.7, -6.0), Vector3(-1.5, 2.0, -13.5)],
 		"Grazing": [Vector3(-8.5, 1.4, -9.0), Vector3(4.0, 3.0, -13.6)],
 		"Overview": [Vector3(0.0, 8.0, 6.0), Vector3(0.0, 4.0, -12.0)],
+	})
+	return root
+
+
+# --- 7. Material lab (procedural materials, surface effects, vector displacement) ---------------
+
+## A procedural material of [param kind], or [param fallback] where the native library is missing.
+static func _procedural(kind: String, options: Dictionary, fallback: ShaderMaterial) -> ShaderMaterial:
+	if not GADSProcedural.is_available():
+		return fallback
+	var m := GADSProcedural.create_material(kind, options)
+	return m if m != null else fallback
+
+
+## A vector displacement map of curling ridges: three per repeat across u, each a bump that leans
+## forward along +u as it rises, so its crest overhangs (a height map cannot do that). Signed
+## RGBF, tangent space.
+static func curl_vector_map(size := 128) -> ImageTexture:
+	var rgb := PackedFloat32Array()
+	rgb.resize(size * size * 3)
+	for y in size:
+		for x in size:
+			var t := fposmod((x + 0.5) / size * 3.0, 1.0)
+			var v := (y + 0.5) / size
+			# Bell across the ridge, varying slowly along it.
+			var z := exp(-pow((t - 0.45) / 0.16, 2.0)) * (0.75 + 0.25 * sin(TAU * v * 2.0))
+			var i := (y * size + x) * 3
+			rgb[i] = 1.1 * z * z
+			rgb[i + 1] = 0.0
+			rgb[i + 2] = z
+	var img := Image.create_from_data(size, size, false, Image.FORMAT_RGBF, rgb.to_byte_array())
+	img.generate_mipmaps()
+	return ImageTexture.create_from_image(img)
+
+
+static func build_material_lab() -> Node3D:
+	var root := make_root("Material lab", 40.0, 35.0)
+	var fallback_ground := ground_material("rocky_gravel")
+	# Floor: procedural tiles, dirt in the joints, worn edges.
+	var floor_mat := _procedural("tiles", {"size": 512, "mapping": GADSMaterials.Mapping.WORLD, "tile_m": Vector2(2, 2),
+		"params": {"scale": 4, "seed": 2}}, fallback_ground)
+	floor_mat.set_shader_parameter("cavity_amount", 0.55)
+	floor_mat.set_shader_parameter("cavity_color", Color(0.22, 0.2, 0.16))
+	floor_mat.set_shader_parameter("edge_amount", 0.35)
+	var floor_mesh := PlaneMesh.new()
+	floor_mesh.size = Vector2(24, 24)
+	_mesh_node(root, "Floor", floor_mesh, floor_mat)
+	# A brick wall with moss in the joints (parallax, UV mapping).
+	var wall_mat := _procedural("bricks", {"size": 512, "tile_m": Vector2(2, 2), "params": {"seed": 5}},
+		GADSMaterials.from_texture_set(TEX + "brick_wall_001", GADSMaterials.Mapping.UV, {}, GADSMaterials.Quality.POM_SELF_SHADOW))
+	wall_mat.set_shader_parameter("cavity_amount", 0.7)
+	wall_mat.set_shader_parameter("cavity_color", Color(0.16, 0.26, 0.1))
+	var wall := _mesh_node(root, "Wall", wall_quad(Vector2(8, 3), 2.0), wall_mat, Vector3(0, 0, -6))
+	wall.rotation_degrees = Vector3.ZERO
+	# Baked spheres, one per procedural kind.
+	var kinds := ["rock", "stones", "craters", "cracks", "ridged"]
+	for i in kinds.size():
+		var kind: String = kinds[i]
+		# Around a sphere u runs twice as far as v: two repeats around keep the texels square.
+		var mat := _procedural(kind, {"size": 512, "tile_m": Vector2(1.7, 1.7), "params": {"seed": 11 + i}}, fallback_ground)
+		mat.set_shader_parameter("uv_scale", Vector2(2.0, 1.0))
+		var sphere := SphereMesh.new()
+		sphere.radius = 0.55
+		sphere.height = 1.1
+		sphere.radial_segments = 32
+		sphere.rings = 16
+		var mi := MeshInstance3D.new()
+		mi.mesh = sphere
+		mi.material_override = mat
+		mi.position = Vector3(-4.0 + 2.0 * i, 0.6, -2.5)
+		var node := baked(mi, "Sphere_%s" % kind)
+		node.quality = GADSMeshInstance3D.Quality.MEDIUM
+		root.add_child(node)
+	# Vector displacement: curling ridges that overhang, baked from a flat panel.
+	var curl := GADSMaterials.create(GADSMaterials.Mapping.UV, {"albedo": (floor_mat.get_shader_parameter("albedo_texture") as Texture2D)},
+		{"vector_displacement_texture": curl_vector_map(), "vector_displacement_m": 0.35, "vector_displacement_signed": true,
+		"height_m": 0.0, "albedo_tint": Color(0.75, 0.82, 0.9)}, GADSMaterials.Quality.POM)
+	var panel := PlaneMesh.new()
+	panel.size = Vector2(3, 3)
+	var panel_mi := MeshInstance3D.new()
+	panel_mi.mesh = panel
+	panel_mi.material_override = curl
+	panel_mi.position = Vector3(4.5, 0.02, 1.5)
+	var curl_node := baked(panel_mi, "VectorDisplaced")
+	curl_node.quality = GADSMeshInstance3D.Quality.MEDIUM
+	root.add_child(curl_node)
+	_views(root, {
+		"Eye level": [Vector3(0.5, 1.6, 3.5), Vector3(0.0, 0.8, -3.0)],
+		"Grazing": [Vector3(4.1, 0.5, 4.7), Vector3(4.6, 0.12, 1.5)],
+		"Overview": [Vector3(0.0, 6.0, 7.0), Vector3(0.0, 0.0, -2.0)],
 	})
 	return root

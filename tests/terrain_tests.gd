@@ -32,6 +32,7 @@ func _run() -> void:
 	await _test("streams_chunks_around_the_camera", test_streaming)
 	await _test("paints_layers_at_runtime", test_painting)
 	await _test("navigation_mesh_follows_the_terrain", test_navigation)
+	await _test("occluders_stay_below_the_surface", test_occluders)
 	if DisplayServer.get_name() != "headless":
 		await _test("renders_front_faces_and_coarser_far_away", test_render)
 	print("\nterrain tests: %d passed, %d failed" % [_passed, _failed])
@@ -588,4 +589,50 @@ func test_navigation() -> void:
 		print("  from %s: %d vertices, %d polygons, largest height difference %.2f m" % [label, vertices.size(), nav.get_polygon_count(), worst])
 		check(nav.get_polygon_count() > 50 and worst < 0.4, "a navigation mesh baked from the terrain's %s follows it" % label)
 	holder.queue_free()
+	await process_frame
+
+
+
+## Occluders: one per chunk, a coarse grid that lies below the drawn surface everywhere (it never
+## hides what is visible) but within a few of its errors of it (it still hides what is behind).
+func test_occluders() -> void:
+	var t := make_terrain({"height_scale": 10.0})
+	t.occluders = true
+	t.occluder_quads = 4
+	root.add_child(t)
+	await process_frame
+	var count := 0
+	var above := 0
+	var worst_gap := 0.0
+	var triangles := 0
+	for chunk in t.get_chunks():
+		var nodes := chunk.get_children(true).filter(func(n: Node) -> bool: return n is OccluderInstance3D)
+		if nodes.size() != 1:
+			continue
+		count += 1
+		var occ := (nodes[0] as OccluderInstance3D).occluder as ArrayOccluder3D
+		var v := occ.vertices
+		var idx := occ.indices
+		triangles += idx.size() / 3
+		# Points across each occluder triangle against the terrain's surface there.
+		for i in range(0, idx.size(), 3):
+			for k in 6:
+				var a := (k % 3 + 1) / 4.0
+				var b := (1.0 - a) * (0.25 + 0.5 * float(k / 3))
+				var p: Vector3 = v[idx[i]] * a + v[idx[i + 1]] * b + v[idx[i + 2]] * (1.0 - a - b)
+				var surface := t.get_height(t.to_global(p))
+				if p.y > surface + 1e-4:
+					above += 1
+				worst_gap = maxf(worst_gap, surface - p.y)
+	print("  %d chunks, %d occluder triangles; occluder points above the surface: %d; largest gap below it %.2f m" % [count, triangles, above, worst_gap])
+	check(count == t.get_chunks().size() and triangles == count * 2 * 4 * 4, "every chunk has a 4 x 4 quad occluder")
+	check(above == 0 and worst_gap < 1.5, "it lies below the drawn surface everywhere, and close to it")
+	t.occluders = false
+	await process_frame
+	await process_frame
+	var left := 0
+	for chunk in t.get_chunks():
+		left += chunk.get_children(true).filter(func(n: Node) -> bool: return n is OccluderInstance3D).size()
+	check(left == 0, "switching them off removes them")
+	t.queue_free()
 	await process_frame

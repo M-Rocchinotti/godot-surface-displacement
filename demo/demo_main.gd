@@ -1,7 +1,7 @@
 extends Node
-## GADS demo: six scenes, presets, per-feature switches, a flat / POM /
+## GADS demo: seven scenes, presets, per-feature switches, a flat / POM /
 ## POM + geometry comparison, weather, debug views and a frame-time overlay.
-## Keys: 1-6 scene, V next camera view, P next preset, B next comparison mode, R next weather,
+## Keys: 1-7 scene, V next camera view, P next preset, B next comparison mode, R next weather,
 ## H hide the panel, G the GADS profiler overlay;
 ## hold the right mouse button and use WASD/QE to fly (Shift fast, Alt slow).
 
@@ -126,7 +126,7 @@ func _unhandled_key_input(event: InputEvent) -> void:
 	if key == null or not key.pressed or key.echo:
 		return
 	match key.keycode:
-		KEY_1, KEY_2, KEY_3, KEY_4, KEY_5, KEY_6:
+		KEY_1, KEY_2, KEY_3, KEY_4, KEY_5, KEY_6, KEY_7:
 			load_scene(key.keycode - KEY_1)
 		KEY_V:
 			set_view((_view_index + 1) % Builder.VIEW_NAMES.size())
@@ -180,7 +180,7 @@ func _build_ui() -> void:
 	title.add_theme_font_size_override("font_size", 18)
 	box.add_child(title)
 
-	_scene_option = _option(box, "Scene  (1-6)", Builder.SCENE_NAMES, func(i: int) -> void: load_scene(i))
+	_scene_option = _option(box, "Scene  (1-7)", Builder.SCENE_NAMES, func(i: int) -> void: load_scene(i))
 	_view_option = _option(box, "Camera  (V)", Builder.VIEW_NAMES, func(i: int) -> void: set_view(i))
 	_section(box, "Quality")
 	_preset_option = _option(box, "Preset  (P)", PRESETS, func(i: int) -> void:

@@ -114,6 +114,19 @@ const MAX_STREAM_TASKS := 4
 		for chunk in _chunks:
 			chunk.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON if value else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 
+## Occlusion culling: each chunk gets an occluder (its grid at about [member occluder_quads]
+## quads a side, lowered below the drawn surface by that grid's largest error, so it never hides
+## what is visible), so hills hide what lies behind them. Needs Project Settings > Rendering >
+## Occlusion Culling > Use Occlusion Culling.
+@export var occluders := false:
+	set(value):
+		occluders = value
+		_queue_rebuild()
+@export_range(1, 64) var occluder_quads := 8:
+	set(value):
+		occluder_quads = value
+		_queue_rebuild()
+
 @export_group("Streaming")
 ## Build only the chunks within this distance (m) of the camera, on worker threads, and free those
 ## that fall behind; 0 = the whole terrain at once. For terrains of kilometres: collision comes per
@@ -831,7 +844,44 @@ func _chunk_arrays(cx: int, cz: int, levels: int) -> Dictionary:
 		# its mesh LOD threshold on screen), strictly increasing.
 		key = maxf(errors[k], key + 1e-5)
 		lods[key] = _chunk_indices(cq, 1 << k, ring.size())
-	return {"arrays": arrays, "lods": lods, "heights": heights}
+	var out := {"arrays": arrays, "lods": lods, "heights": heights}
+	if occluders:
+		out["occluder"] = _occluder_arrays(heights, verts, cq, occluder_quads)
+	return out
+
+
+## A conservative occluder of a chunk: its grid at a coarser stride (about [member occluder_quads]
+## quads a side), lowered by that stride's largest height error plus a centimetre, so it lies
+## below the drawn surface everywhere (the difference between the finest triangles and the coarse
+## ones is linear on each fine triangle: its extremes are at grid vertices, where it is measured).
+static func _occluder_arrays(heights: PackedFloat32Array, verts: PackedVector3Array, cq: int, quads := -1) -> Dictionary:
+	var n := cq + 1
+	var s := 1
+	while s * 2 <= cq and cq / (s * 2) >= maxi(quads, 1):
+		s *= 2
+	var worst := 0.0
+	for z in n:
+		for x in n:
+			var x0 := mini((x / s) * s, cq - s)
+			var z0 := mini((z / s) * s, cq - s)
+			var hc := _tri_interp(heights[z0 * n + x0], heights[z0 * n + x0 + s], heights[(z0 + s) * n + x0],
+				heights[(z0 + s) * n + x0 + s], float(x - x0) / s, float(z - z0) / s)
+			worst = maxf(worst, hc - heights[z * n + x])
+	var drop := worst + 0.01
+	var points := PackedVector3Array()
+	var m := cq / s + 1
+	for z in range(0, n, s):
+		for x in range(0, n, s):
+			points.append(verts[z * n + x] - Vector3(0, drop, 0))
+	var idx := PackedInt32Array()
+	for z in m - 1:
+		for x in m - 1:
+			var a := z * m + x
+			var b := a + 1
+			var c := a + m
+			var d := c + 1
+			idx.append_array([a, b, c, b, d, c])
+	return {"vertices": points, "indices": idx, "drop": drop}
 
 
 ## Adds chunk [param key] from its arrays (main thread).
@@ -844,6 +894,13 @@ func _make_chunk(key: Vector2i, data: Dictionary) -> void:
 	mi.material_override = _material
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON if cast_shadows else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(mi, false, Node.INTERNAL_MODE_BACK)
+	if data.has("occluder"):
+		var occ := ArrayOccluder3D.new()
+		occ.set_arrays(data["occluder"]["vertices"], data["occluder"]["indices"])
+		var oi := OccluderInstance3D.new()
+		oi.name = "Occluder"
+		oi.occluder = occ
+		mi.add_child(oi, false, Node.INTERNAL_MODE_BACK)
 	_chunks.append(mi)
 	_chunk_nodes[key] = mi
 	_chunk_data[key] = data
