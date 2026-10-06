@@ -60,3 +60,7 @@ gads_deform_time={
 "type": "vec4",
 "value": Vector4(0, 0, 0, 0)
 }
+gads_weather={
+"type": "vec4",
+"value": Vector4(0, 0, 0, 0)
+}

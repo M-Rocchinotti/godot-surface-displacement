@@ -51,6 +51,13 @@ uniform vec4 layer_b[GADS_FIELD_LAYERS]; // 1 / size x, 1 / size z, offset x, of
 uniform vec4 layer_c[GADS_FIELD_LAYERS]; // cos(rotation), sin(rotation), ao strength, roughness scale
 uniform vec4 layer_d[GADS_FIELD_LAYERS]; // albedo tint rgb, metallic scale
 uniform vec4 layer_e[GADS_FIELD_LAYERS]; // specular, steps scale, self-shadow strength, -log2(texel size in m)
+// Each layer material's surface effects (see gads_core.gdshaderinc), blended by the weights.
+uniform vec4 layer_fx_cover_color[GADS_FIELD_LAYERS]; // cover colour rgb, cover roughness
+uniform vec4 layer_fx_cover[GADS_FIELD_LAYERS];       // cover amount, slope from, slope to, height bias
+uniform vec4 layer_fx_water[GADS_FIELD_LAYERS];       // wetness, puddle level, weather response, cover sharpness
+uniform vec4 layer_fx_cavity[GADS_FIELD_LAYERS];      // cavity colour rgb, amount
+uniform vec4 layer_fx_edge[GADS_FIELD_LAYERS];        // edge colour rgb, amount
+uniform vec4 layer_fx_radius[GADS_FIELD_LAYERS];      // cavity radius (mip levels), unused x3
 
 varying vec3 f_base_normal;
 varying float f_ground;
@@ -262,12 +269,67 @@ void fragment() {
 		nsum += w[i] * gads_apply_normal_map(GADS_LAYER_GRAD(layer_normal, i, uv, ddx, ddy).rgb, right, image_up, n, layer_a[i].w);
 		spec += w[i] * layer_e[i].x;
 	}
-	ALBEDO = albedo;
-	AO = orm.r;
-	ROUGHNESS = clamp(orm.g, 0.0, 1.0);
-	METALLIC = clamp(orm.b, 0.0, 1.0);
-	SPECULAR = spec;
+	float ao_out = orm.r;
+	float roughness_out = clamp(orm.g, 0.0, 1.0);
+	float metallic_out = clamp(orm.b, 0.0, 1.0);
 	vec3 normal_world = normalize(nsum + n * 1e-6);
+	// Surface effects: the layers' parameters blended by weight, the main layer's height.
+	GADSEffects e;
+	e.cover_color = vec4(0.0);
+	e.cover = vec4(0.0);
+	e.sharpness = 0.0;
+	e.wetness = 0.0;
+	e.puddle = 0.0;
+	e.cavity = vec4(0.0);
+	e.edge = vec4(0.0);
+	float response = 0.0;
+	float radius = 0.0;
+	float effects_keep = 1.0; // how much relief detail (normal map, self-shadow) cover and water leave
+	float wsum = 0.0;
+	for (int i = 0; i < GADS_FIELD_LAYERS; i++) {
+		if (i >= layer_count || w[i] <= 0.001) {
+			continue;
+		}
+		wsum += w[i];
+		e.cover_color += w[i] * layer_fx_cover_color[i];
+		e.cover += w[i] * layer_fx_cover[i];
+		e.wetness += w[i] * layer_fx_water[i].x;
+		e.puddle += w[i] * layer_fx_water[i].y;
+		response += w[i] * layer_fx_water[i].z;
+		e.sharpness += w[i] * layer_fx_water[i].w;
+		e.cavity += w[i] * layer_fx_cavity[i];
+		e.edge += w[i] * layer_fx_edge[i];
+		radius += w[i] * layer_fx_radius[i].x;
+	}
+	if (wsum > 0.0) {
+		float inv = 1.0 / wsum;
+		e.cover_color *= inv;
+		e.cover *= inv;
+		e.sharpness *= inv;
+		e.wetness *= inv;
+		e.puddle *= inv;
+		e.cavity *= inv;
+		e.edge *= inv;
+		response *= inv;
+		radius *= inv;
+	}
+	e.cover.x = max(e.cover.x, gads_weather.y * response);
+	e.wetness = max(e.wetness, gads_weather.x * response);
+	e.puddle = max(e.puddle, gads_weather.z * response);
+	if (gads_effects_on(e)) {
+		vec2 uv = gads_layer_uv(main_layer, xz_hit);
+		float elod = max(lod + layer_e[main_layer].w, 0.0);
+		vec2 remap = layer_a[main_layer].yz;
+		float h = gads_remap_height(GADS_LAYER_LOD(layer_height, main_layer, uv, elod).r, remap);
+		float around = e.cavity.a > 0.0 || e.edge.a > 0.0 ? gads_remap_height(GADS_LAYER_LOD(layer_height, main_layer, uv, elod + radius).r, remap) : h;
+		gads_apply_effects(e, h, around, normalize(n).y, 1.0, albedo, roughness_out, metallic_out, ao_out, effects_keep);
+		normal_world = normalize(mix(n, normal_world, effects_keep));
+	}
+	ALBEDO = albedo;
+	AO = ao_out;
+	ROUGHNESS = roughness_out;
+	METALLIC = metallic_out;
+	SPECULAR = spec;
 	NORMAL = normalize(world_to_view * normal_world);
 	vec3 offset_world = hit - wpos;
 	LIGHT_VERTEX = VERTEX + world_to_view * offset_world;
@@ -289,7 +351,7 @@ void fragment() {
 		f_ss_z_axis = world_to_view * vec3(0.0, 0.0, 1.0);
 		f_ss_up = world_to_view * vec3(0.0, 1.0, 0.0);
 		f_ss_weights = w * pom_fade;
-		f_ss_params = vec4(lod, amp * displaceable, gads_shadow.w * strength * in_range, spec);
+		f_ss_params = vec4(lod, amp * displaceable, gads_shadow.w * strength * in_range * effects_keep, spec);
 	}
 #endif
 

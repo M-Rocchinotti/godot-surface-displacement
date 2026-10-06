@@ -41,6 +41,7 @@ func _run() -> void:
 	await _test("depth_write_opt_in", test_depth_write)
 	await _test("mip_shimmer_at_distance", test_mip_shimmer)
 	await _test("relief_fades_with_distance", test_distance_fade)
+	await _test("surface_effects", test_surface_effects)
 	print("\nrender tests: %d passed, %d failed" % [_passed, _failed])
 	h.clear_scene()
 	h.viewport.queue_free()
@@ -70,8 +71,9 @@ func check(condition: bool, what: String) -> void:
 		print("  FAIL %s" % what)
 
 
-## Medium quality, no fade, mip 0 forced (LOD bias -10), self-shadow off, debug off.
+## Medium quality, no fade, mip 0 forced (LOD bias -10), self-shadow off, debug off, no weather.
 func _reset_globals() -> void:
+	GADSGlobals.set_value(GADSGlobals.WEATHER, Vector4.ZERO)
 	set_quality(8, 24, 3)
 	GADSGlobals.set_value(GADSGlobals.POM_RANGE, Vector4(1000, 2000, -10, 99))
 	GADSGlobals.set_value(GADSGlobals.SHADOW, Vector4(8, 20, 0, 0))
@@ -1123,3 +1125,102 @@ func _flicker(frames: Array[Image], cam: Camera3D) -> float:
 			total += sqrt(maxf(sum2 / frames.size() - mean * mean, 0.0))
 			n += 1
 	return total / maxf(n, 1.0)
+
+
+# --- Surface effects ------------------------------------------------------------------------------
+
+func _render_wall(material: Material) -> Image:
+	h.new_lit_scene(Color(0.15, 0.17, 0.2))
+	h.add_quad(Vector3(-2, 0, -1), Vector3(2, 0, -1), Vector3(2, 4, -1), Vector3(-2, 4, -1),
+			[Vector2(0, 2), Vector2(2, 2), Vector2(2, 0), Vector2(0, 0)], material)
+	var sun := h.add_sun(35.0, 30.0, true, 10.0)
+	sun.light_energy = 1.2
+	h.add_camera(Vector3(0.2, 1.5, 1.5), Vector3(0.0, 1.5, -1.0))
+	await h.frames(4)
+	return await h.capture()
+
+
+## Per-pixel luminance ratios of [param img] to [param base] over the pixels base draws.
+func _ratios(img: Image, base: Image) -> PackedFloat32Array:
+	var out := PackedFloat32Array()
+	for py in range(0, SIZE.y, 2):
+		for px in range(0, SIZE.x, 2):
+			var lb := Harness.luminance(base.get_pixel(px, py))
+			if lb > 0.02:
+				out.append(Harness.luminance(img.get_pixel(px, py)) / lb)
+	return out
+
+
+static func _fraction(values: PackedFloat32Array, test: Callable) -> float:
+	var n := 0
+	for v in values:
+		n += 1 if test.call(v) else 0
+	return float(n) / maxf(values.size(), 1)
+
+
+static func _mean_rgb(img: Image) -> Color:
+	var sum := Color(0, 0, 0)
+	var n := 0
+	for py in range(0, SIZE.y, 2):
+		for px in range(0, SIZE.x, 2):
+			var c := img.get_pixel(px, py)
+			if Harness.luminance(c) > 0.02:
+				sum += c
+				n += 1
+	return sum / maxf(n, 1)
+
+
+## Surface effects: off (amounts 0) the image is unchanged; cover on level ground and not on a
+## wall; the weather global covers every material that responds to it; wetness darkens; a cavity
+## colour lands in the relief's hollows and not on its crests; puddles fill the low relief on the
+## ground and not on a wall.
+func test_surface_effects() -> void:
+	var field := Harness.make_wave_field(128)
+	var tex := ImageTexture.create_from_image(field["image"])
+	var make := func(extra: Dictionary) -> ShaderMaterial:
+		var p := {"height_m": 0.03, "height_center": 1.0, "albedo_tint": Color(0.5, 0.5, 0.5)}
+		p.merge(extra, true)
+		return GADSMaterials.create(GADSMaterials.Mapping.UV, {"height": tex}, p, GADSMaterials.Quality.POM)
+	var cam := Vector3(0.0, 2.2, 1.2)
+	var base := await _render_lit_plane(make.call({}), false, cam)
+	var off := await _render_lit_plane(make.call({"cover_color": Color(1, 0, 0), "cavity_color": Color(0, 1, 0), "wetness": 0.0}), false, cam)
+	check(_relative_difference(base, off)["max"] == 0.0, "effects off (colours set, amounts 0): the image is unchanged")
+	var blue := {"cover_amount": 1.0, "cover_color": Color(0.1, 0.2, 0.9), "cover_height_bias": 0.0}
+	var snow := _mean_rgb(await _render_lit_plane(make.call(blue), false, cam))
+	var plain := _mean_rgb(base)
+	print("  ground: mean %s, covered %s" % [plain, snow])
+	check(snow.b > 3.0 * snow.r and plain.b < 1.5 * plain.r, "full cover colours level ground")
+	var wall_base := await _render_wall(make.call({}))
+	var wall_snow := await _render_wall(make.call(blue))
+	check(_relative_difference(wall_base, wall_snow)["max"] < 1e-6, "and leaves a wall alone (cover_slope)")
+	GADSGlobals.set_value(GADSGlobals.WEATHER, Vector4(0, 1, 0, 0))
+	var weather := _ratios(await _render_lit_plane(make.call({}), false, cam), base)
+	var deaf := await _render_lit_plane(make.call({"weather_response": 0.0}), false, cam)
+	GADSGlobals.set_value(GADSGlobals.WEATHER, Vector4.ZERO)
+	weather.sort()
+	print("  snow from the weather: median brightness x %.2f" % weather[weather.size() / 2])
+	check(weather[weather.size() / 2] > 1.3, "the weather's snow covers a material with no cover of its own")
+	check(_relative_difference(base, deaf)["max"] == 0.0, "but not one with weather_response 0")
+	var wet := _ratios(await _render_lit_plane(make.call({"wetness": 1.0}), false, cam), base)
+	wet.sort()
+	print("  wet: median brightness x %.2f" % wet[wet.size() / 2])
+	check(wet[wet.size() / 2] < 0.8, "wetness darkens")
+	# Cavities: stones with gaps between them (the gaps are the hollows).
+	var stones := Harness.make_stone_field(256, 40, 3)
+	var stone_tex := ImageTexture.create_from_image(stones["image"])
+	var stone_mat := func(extra: Dictionary) -> ShaderMaterial:
+		var p := {"height_m": 0.03, "height_center": 1.0, "albedo_tint": Color(0.5, 0.5, 0.5)}
+		p.merge(extra, true)
+		return GADSMaterials.create(GADSMaterials.Mapping.UV, {"height": stone_tex}, p, GADSMaterials.Quality.POM)
+	var stone_base := await _render_lit_plane(stone_mat.call({}), false, cam)
+	var cavity := _ratios(await _render_lit_plane(stone_mat.call({"cavity_amount": 1.0, "cavity_color": Color(0, 0, 0)}), false, cam), stone_base)
+	var dark := _fraction(cavity, func(r: float) -> bool: return r < 0.5)
+	var same := _fraction(cavity, func(r: float) -> bool: return absf(r - 1.0) < 0.01)
+	print("  cavity: %.0f %% of the pixels much darker, %.0f %% unchanged" % [dark * 100.0, same * 100.0])
+	check(dark > 0.05 and dark < 0.7 and same > 0.2, "a cavity colour lands in the hollows (the gaps between stones), not on the stones")
+	var puddles := _ratios(await _render_lit_plane(make.call({"puddle_level": 0.5}), false, cam), base)
+	var water := _fraction(puddles, func(r: float) -> bool: return r < 0.8)
+	print("  puddles at half height: %.0f %% of the pixels under water" % [water * 100.0])
+	check(water > 0.1 and water < 0.9, "puddles fill the low relief")
+	var wall_puddles := await _render_wall(make.call({"puddle_level": 0.5}))
+	check(_relative_difference(wall_base, wall_puddles)["max"] < 1e-6, "and not on a wall")

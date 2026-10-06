@@ -32,6 +32,7 @@ func _run() -> void:
 	await _test("no_cracks_between_rings", test_no_cracks)
 	await _test("geometry_does_not_swim", test_no_swimming)
 	await _test("edge_blends_into_pom", test_edge_seam)
+	await _test("edge_blends_into_pom_in_weather", test_edge_seam_weather)
 	await _test("ground_bake_precision", test_ground_bake)
 	await _test("pebbles_stay_put", test_pebbles)
 	await _test("lifetime_resize_viewports", test_lifetime)
@@ -507,6 +508,18 @@ func test_no_swimming() -> void:
 ## hidden: around the field's edge, where its relief has faded out, both must look the same,
 ## and beyond it they must be identical.
 func test_edge_seam() -> void:
+	await _edge_seam(Vector4.ZERO, 0.01, 0.005)
+
+
+## The same under weather (rain, snow cover and puddles at once): the field applies its layers'
+## surface effects as the ground material does.
+func test_edge_seam_weather() -> void:
+	GADSGlobals.set_value(GADSGlobals.WEATHER, Vector4(0.3, 0.35, 0.3, 0.0))
+	await _edge_seam(Vector4(0.3, 0.35, 0.3, 0.0), 0.02, 0.01)
+	GADSGlobals.set_value(GADSGlobals.WEATHER, Vector4.ZERO)
+
+
+func _edge_seam(weather: Vector4, inner_limit: float, band_limit: float) -> void:
 	var results := []
 	for with_field in [true, false]:
 		h.new_lit_scene(Color(0.2, 0.21, 0.24))
@@ -567,9 +580,10 @@ func test_edge_seam() -> void:
 	# The field marches the same relief from the same ground as the ground material: they differ
 	# only by float rounding and the proxy's coverage (0.15 % / 0.08 % measured; with the relief
 	# shifted up by `lift` it was 16 % / 3 %).
-	check(inner.size() > 10000 and inner_mean < 0.01, "inside the grid the field shades like the parallax ground (within 1 %)")
-	check(band_n > 1000 and mean_band < 0.005, "at its edge the field looks like the parallax ground it covers (within 0.5 %)")
-	check(beyond.size() > 10000 and percentile(beyond, 0.999) < 0.001, "beyond the grid nothing changes")
+	var label := "" if weather == Vector4.ZERO else " (rain, snow and puddles)"
+	check(inner.size() > 10000 and inner_mean < inner_limit, "inside the grid the field shades like the parallax ground (within %.0f %%)%s" % [inner_limit * 100.0, label])
+	check(band_n > 1000 and mean_band < band_limit, "at its edge the field looks like the parallax ground it covers (within %.1f %%)%s" % [band_limit * 100.0, label])
+	check(beyond.size() > 10000 and percentile(beyond, 0.999) < 0.001, "beyond the grid nothing changes%s" % label)
 
 
 # --- 5. Ground bake ----------------------------------------------------------------------------

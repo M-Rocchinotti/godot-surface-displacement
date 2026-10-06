@@ -86,6 +86,8 @@ signal baked
 @export var camera: Camera3D
 
 const MAX_LAYERS := 4
+## The field shader's per-layer surface-effect parameters (see _apply_layers).
+const EFFECT_PARAMS := ["layer_fx_cover_color", "layer_fx_cover", "layer_fx_water", "layer_fx_cavity", "layer_fx_edge", "layer_fx_radius"]
 const MAX_LEVELS := 8
 
 static var _mesh_cache := {}
@@ -362,6 +364,9 @@ func _apply_layers() -> void:
 	var c: Array[Vector4] = []
 	var d: Array[Vector4] = []
 	var e: Array[Vector4] = []
+	var effects: Array = []
+	for k in EFFECT_PARAMS.size():
+		effects.append([] as Array[Vector4])
 	for i in MAX_LAYERS:
 		var m: ShaderMaterial = layers[i] if i < count else null
 		if m == null:
@@ -374,6 +379,8 @@ func _apply_layers() -> void:
 			c.append(Vector4(1, 0, 1, 1))
 			d.append(Vector4(1, 1, 1, 0))
 			e.append(Vector4(0.5, 1, 1, 0))
+			for fx in effects:
+				fx.append(Vector4.ZERO)
 			continue
 		var height_tex: Texture2D = _param(m, "height_texture")
 		heights.append(height_tex)
@@ -387,10 +394,22 @@ func _apply_layers() -> void:
 		b.append(Vector4(1.0 / size.x, 1.0 / size.y, offset.x, offset.y))
 		var rot := deg_to_rad(float(_param(m, "planar_rotation_deg")))
 		c.append(Vector4(cos(rot), sin(rot), _param(m, "ao_strength"), _param(m, "roughness_scale")))
-		var tint: Color = _param(m, "albedo_tint")
+		# The materials' colours are source_color uniforms, which Godot hands to the shader in
+		# linear space; the field's arrays are plain vec4s, so they are converted here.
+		var tint: Color = (_param(m, "albedo_tint") as Color).srgb_to_linear()
 		d.append(Vector4(tint.r, tint.g, tint.b, _param(m, "metallic_scale")))
 		var texel := size.x / float(height_tex.get_width()) if height_tex != null else size.x / 1024.0
 		e.append(Vector4(_param(m, "specular"), _param(m, "pom_steps_scale"), _param(m, "self_shadow_strength"), -log(texel) / log(2.0)))
+		var cover_color: Color = (_param(m, "cover_color") as Color).srgb_to_linear()
+		var slope: Vector2 = _param(m, "cover_slope")
+		var cavity_color: Color = (_param(m, "cavity_color") as Color).srgb_to_linear()
+		var edge_color: Color = (_param(m, "edge_color") as Color).srgb_to_linear()
+		effects[0].append(Vector4(cover_color.r, cover_color.g, cover_color.b, _param(m, "cover_roughness")))
+		effects[1].append(Vector4(_param(m, "cover_amount"), slope.x, slope.y, _param(m, "cover_height_bias")))
+		effects[2].append(Vector4(_param(m, "wetness"), _param(m, "puddle_level"), _param(m, "weather_response"), _param(m, "cover_sharpness")))
+		effects[3].append(Vector4(cavity_color.r, cavity_color.g, cavity_color.b, _param(m, "cavity_amount")))
+		effects[4].append(Vector4(edge_color.r, edge_color.g, edge_color.b, _param(m, "edge_amount")))
+		effects[5].append(Vector4(_param(m, "cavity_radius"), 0, 0, 0))
 	_set_param("layer_count", count)
 	_set_param("layer_height", heights)
 	_set_param("layer_albedo", albedos)
@@ -401,6 +420,8 @@ func _apply_layers() -> void:
 	_set_param("layer_c", c)
 	_set_param("layer_d", d)
 	_set_param("layer_e", e)
+	for k in EFFECT_PARAMS.size():
+		_set_param(EFFECT_PARAMS[k], effects[k])
 
 
 ## The clipmap mesh: [param levels] rings of [param n] x [param n] quads (vertex positions in

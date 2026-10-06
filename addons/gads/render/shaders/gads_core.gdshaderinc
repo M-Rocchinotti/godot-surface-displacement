@@ -81,6 +81,33 @@ uniform int vector_displacement_space : hint_enum("Tangent", "Object") = 0;
 // Signed: texel values are offsets as they are (an EXR or HDR); unsigned: 0..1 maps to -1..1.
 uniform bool vector_displacement_signed = false;
 #endif
+group_uniforms effects;
+// Optional surface effects on top of the textures. They change only the shading (albedo,
+// roughness, metallic, AO, how much of the normal map shows), never the relief or a bake, and
+// read the main height map at the hit. All off by default, and then free (one uniform branch).
+// - Cover (snow, dust, sand): on surfaces facing up (cover_slope: band of the world normal's y),
+//   on relief tops first (cover_height_bias > 0) or in hollows first (< 0).
+// - Wetness: darker and glossier. Puddles: flat water where the relief lies below
+//   puddle_level on level ground.
+// - Cavity / edge: a colour in the relief's hollows (dirt, moss) / on its crests (wear),
+//   against the relief within cavity_radius mip levels around (3 = 8 texels).
+// The global gads_weather (GADSManager: rain, snow, puddles) adds to every material, scaled by
+// weather_response; effects_vertex_mask limits all of it to a painted vertex colour channel.
+uniform vec4 cover_color : source_color = vec4(0.92, 0.94, 0.97, 1.0);
+uniform float cover_amount : hint_range(0.0, 1.0) = 0.0;
+uniform float cover_roughness : hint_range(0.0, 1.0) = 0.65;
+uniform vec2 cover_slope = vec2(0.35, 0.75);
+uniform float cover_height_bias : hint_range(-1.0, 1.0) = 0.5;
+uniform float cover_sharpness : hint_range(1.0, 64.0) = 8.0;
+uniform float wetness : hint_range(0.0, 1.0) = 0.0;
+uniform float puddle_level : hint_range(0.0, 1.0) = 0.0;
+uniform vec4 cavity_color : source_color = vec4(0.16, 0.14, 0.1, 1.0);
+uniform float cavity_amount : hint_range(0.0, 1.0) = 0.0;
+uniform vec4 edge_color : source_color = vec4(0.85, 0.82, 0.76, 1.0);
+uniform float edge_amount : hint_range(0.0, 1.0) = 0.0;
+uniform float cavity_radius : hint_range(1.0, 6.0) = 3.0;
+uniform int effects_vertex_mask : hint_enum("None", "Vertex R", "Vertex G", "Vertex B", "Vertex A") = 0;
+uniform float weather_response : hint_range(0.0, 1.0) = 1.0;
 #ifdef GADS_LAYERED
 // Layers 1 and 2 cover the layer below where their mask is: a vertex colour channel (or
 // everywhere) times layerN_amount, times a band of the surface's up-facing when layerN_slope.y >
@@ -172,6 +199,33 @@ float gads_remap(float h) {
 	return gads_remap_height(h, height_remap);
 }
 
+// The vertex colour channel a mask comes from (4 = everywhere).
+float gads_mask_channel(vec4 c, int channel) {
+	return channel == 0 ? c.r : channel == 1 ? c.g : channel == 2 ? c.b : channel == 3 ? c.a : 1.0;
+}
+
+// Surface effects (see the effects uniforms, plus the weather) at the hit uv (main map mip lod)
+// on a surface whose world normal has y = up. normal_keep: how much of the normal map stays.
+void gads_surface_effects(vec2 uv, float lod, float up, vec4 vertex_color,
+		inout vec3 albedo, inout float roughness, inout float metallic, inout float ao, out float normal_keep) {
+	normal_keep = 1.0;
+	GADSEffects e;
+	e.cover_color = vec4(cover_color.rgb, cover_roughness);
+	e.cover = vec4(max(cover_amount, gads_weather.y * weather_response), cover_slope, cover_height_bias);
+	e.sharpness = cover_sharpness;
+	e.wetness = max(wetness, gads_weather.x * weather_response);
+	e.puddle = max(puddle_level, gads_weather.z * weather_response);
+	e.cavity = vec4(cavity_color.rgb, cavity_amount);
+	e.edge = vec4(edge_color.rgb, edge_amount);
+	if (!gads_effects_on(e)) {
+		return;
+	}
+	float mask = effects_vertex_mask == 0 ? 1.0 : gads_mask_channel(vertex_color, effects_vertex_mask - 1);
+	float h = gads_remap(textureLod(height_texture, uv, max(lod, 0.0)).r);
+	float around = cavity_amount > 0.0 || edge_amount > 0.0 ? gads_remap(textureLod(height_texture, uv, max(lod, 0.0) + cavity_radius).r) : h;
+	gads_apply_effects(e, h, around, up, mask, albedo, roughness, metallic, ao, normal_keep);
+}
+
 // The detail layer's depth relative to the main one (0 = off), so the distance fade, which
 // scales the main amplitude, fades both.
 float gads_detail_ratio() {
@@ -237,11 +291,6 @@ float gads_layered_depth(vec3 arg) {
 	float depth = height_m;
 	depth = arg.y > 0.0 ? max(depth, layer1_height_m) : depth;
 	return arg.z > 0.0 ? max(depth, layer2_height_m) : depth;
-}
-
-// The vertex colour channel a layer's mask comes from (4 = everywhere).
-float gads_mask_channel(vec4 c, int channel) {
-	return channel == 0 ? c.r : channel == 1 ? c.g : channel == 2 ? c.b : channel == 3 ? c.a : 1.0;
 }
 
 float gads_slope_band(vec2 band, float up) {

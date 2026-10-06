@@ -59,6 +59,22 @@ enum DebugView { OFF = 0, HIT_OFFSET = 1, COST = 2, RELIEF = 3, NORMALS = 4, SEL
 	set(value):
 		scatter = value
 		_queue_apply()
+@export_group("Weather")
+## Surface effects on every GADS material at once (each scaled by its weather_response): rain
+## darkens and glosses surfaces, snow covers what faces up, puddles fill low relief on level
+## ground. 0..1; applied in the editor too, for a preview.
+@export_range(0.0, 1.0, 0.01) var rain_wetness := 0.0:
+	set(value):
+		rain_wetness = value
+		_apply_weather()
+@export_range(0.0, 1.0, 0.01) var snow_cover := 0.0:
+	set(value):
+		snow_cover = value
+		_apply_weather()
+@export_range(0.0, 1.0, 0.01) var puddle_level := 0.0:
+	set(value):
+		puddle_level = value
+		_apply_weather()
 @export_group("Debug")
 @export var debug_view := DebugView.OFF:
 	set(value):
@@ -138,6 +154,18 @@ func is_feature_active(feature: Feature) -> bool:
 			return s.scatter_enabled
 
 
+## Sets the weather: [member rain_wetness], [member snow_cover] and [member puddle_level] (0..1).
+func set_weather(rain: float, snow: float, puddles: float) -> void:
+	rain_wetness = rain
+	snow_cover = snow
+	puddle_level = puddles
+
+
+func _apply_weather() -> void:
+	if is_inside_tree():
+		GADSGlobals.set_value(GADSGlobals.WEATHER, Vector4(rain_wetness, snow_cover, puddle_level, 0.0))
+
+
 ## The target added GPU time of the current preset (ms), see [method GADSSettings.get_budget_ms].
 func get_budget_ms() -> float:
 	return GADSSettings.get_budget_ms(preset if enabled else GADSSettings.Preset.OFF)
@@ -178,6 +206,7 @@ func apply() -> void:
 		return
 	var s := get_effective_settings()
 	s.apply_globals()
+	_apply_weather()
 	GADSGlobals.set_value(GADSGlobals.DEBUG, Vector4(debug_view, 0.1, 0.0, 0.0))
 	# In the editor only the globals change: materials keep the variant they are saved with, and
 	# fields and scatters keep their saved properties (they are scene data).

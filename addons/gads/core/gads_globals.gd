@@ -22,6 +22,8 @@ extends RefCounted
 ## [code]gads_deform_params[/code]  x, z: the deformation window's origin (m), y: its side (m), w: the
 ##     deepest deformation (m; 0 = no deformation).
 ## [code]gads_deform_time[/code]  x: now (s, the field's clock), y: recovery (m per second), z, w: unused.
+## [code]gads_weather[/code]  surface effects on every GADS material (GADSManager's weather): x: rain
+##     wetness, y: snow cover, z: puddle level (all 0..1), w: unused.
 
 const POM_STEPS := &"gads_pom_steps"
 const POM_RANGE := &"gads_pom_range"
@@ -32,6 +34,7 @@ const DFG_PATH := "res://addons/gads/render/textures/gads_dfg_lut.exr"
 const DEFORM := &"gads_deform"
 const DEFORM_PARAMS := &"gads_deform_params"
 const DEFORM_TIME := &"gads_deform_time"
+const WEATHER := &"gads_weather"
 
 
 ## name -> [RenderingServer type, Project Settings type name, default value]. The defaults are the
@@ -46,6 +49,7 @@ static func definitions() -> Dictionary:
 		DEFORM: [RenderingServer.GLOBAL_VAR_TYPE_SAMPLER2D, "sampler2D", ""],
 		DEFORM_PARAMS: [RenderingServer.GLOBAL_VAR_TYPE_VEC4, "vec4", Vector4(0, 0, 1, 0)],
 		DEFORM_TIME: [RenderingServer.GLOBAL_VAR_TYPE_VEC4, "vec4", Vector4(0, 0, 0, 0)],
+		WEATHER: [RenderingServer.GLOBAL_VAR_TYPE_VEC4, "vec4", Vector4(0, 0, 0, 0)],
 	}
 
 

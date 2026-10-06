@@ -106,6 +106,16 @@ All notable changes to this project are documented here. The format follows
   Project > Tools > **Make Selected Meshes GADSMeshInstance3D** and **Bake Selected
   GADSMeshInstance3D** (undoable); Validate Setup reports stale bakes, unbakeable meshes, a
   missing native library and bakes the budget cut short.
+- **Surface effects and weather**: every GADS material has optional cover (snow, dust, sand on
+  what faces up, tops of the relief first), wetness, puddles (flat water in the relief's low
+  parts on level ground) and cavity / edge colours, limited by a vertex colour channel if wanted;
+  shading only, free while off. GADSManager's Weather (`rain_wetness`, `snow_cover`,
+  `puddle_level`, `set_weather()`) applies them everywhere through the `gads_weather` shader
+  global, scaled by each material's `weather_response`. The near-camera field blends its layers'
+  effects and the scattered pebbles follow theirs, so near and far ground match. Snow and water
+  also soften the relief's normal map and self-shadow. Demo: R cycles the weather.
+- The field's layer colours (albedo tint) are converted to linear like the materials' own
+  `source_color` uniforms (a tinted layer drew lighter on the field than around it).
 - **Export baked meshes**: `GADSMeshInstance3D.export_baked()` and an Export button in the
   inspector write the bake (every cluster) as glTF binary, glTF or OBJ with a material library,
   GADS materials as plain PBR materials; `GADSMeshExporter` for any meshes.

@@ -213,14 +213,27 @@ void fragment() {
 #endif
 
 #ifdef GADS_LAYERED
-	ALBEDO = albedo_sum; // Each layer's tint is applied in gads_sample_surface().
+	vec3 albedo_out = albedo_sum; // Each layer's tint is applied in gads_sample_surface().
 #else
-	ALBEDO = albedo_sum * albedo_tint.rgb;
+	vec3 albedo_out = albedo_sum * albedo_tint.rgb;
 #endif
-	AO = mix(1.0, orm_sum.r, ao_strength);
-	ROUGHNESS = clamp(orm_sum.g * roughness_scale, 0.0, 1.0);
-	METALLIC = clamp(orm_sum.b * metallic_scale, 0.0, 1.0);
+	float ao_out = mix(1.0, orm_sum.r, ao_strength);
+	float roughness_out = clamp(orm_sum.g * roughness_scale, 0.0, 1.0);
+	float metallic_out = clamp(orm_sum.b * metallic_scale, 0.0, 1.0);
+	float normal_keep;
+	gads_surface_effects(main_uv, main_lod, normalize(gads_world_normal).y, COLOR, albedo_out, roughness_out, metallic_out, ao_out, normal_keep);
+	ALBEDO = albedo_out;
+	AO = ao_out;
+	ROUGHNESS = roughness_out;
+	METALLIC = metallic_out;
 	SPECULAR = specular;
+	if (normal_keep < 1.0) {
+#ifdef GADS_MAPPING_UV
+		NORMAL_MAP_DEPTH = gads_normal_strength() * normal_keep;
+#else
+		NORMAL = normalize(world_to_view * mix(normalize(gads_geom_normal), normal_world, normal_keep));
+#endif
+	}
 #ifdef GADS_POM
 	LIGHT_VERTEX = VERTEX + offset_view;
 #endif
@@ -259,7 +272,8 @@ void fragment() {
 		gads_ss_gv = to_view * main_plane.gv;
 		gads_ss_n = normalize(to_view * main_n);
 		gads_ss_axis = normalize(to_view * main_plane.axis);
-		gads_ss_params = vec4(main_lod, steps_used > 0.0 ? amp : 0.0, height_center, gads_shadow.w * self_shadow_strength * in_range);
+		// Snow and standing water fill the relief: they soften its self-shadow as its normal map.
+		gads_ss_params = vec4(main_lod, steps_used > 0.0 ? amp : 0.0, height_center, gads_shadow.w * self_shadow_strength * in_range * normal_keep);
 #ifdef GADS_LAYERED
 		gads_ss_arg = arg;
 #endif

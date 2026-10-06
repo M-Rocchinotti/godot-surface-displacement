@@ -431,3 +431,20 @@ shaders read them), occlusion as 1 - sin of the horizon elevation averaged over 
 in parallel; the results do not depend on the thread count. `tests/run_logic_tests.gd` checks
 the range, the seams (the wrap-around boundary against its neighbours), determinism and the
 derived maps on known shapes.
+
+## 14. Surface effects
+
+`gads_apply_effects()` (`gads_common.gdshaderinc`) shades a hit from its remapped height `h`, the
+height `around` it (the same map a few mips coarser, so `h - around` is positive on crests and
+negative in hollows), the world normal's y and a mask. Cavity and edge colours mix in by
+`smoothstep(0.02, 0.2, -+(h - around))`; wetness halves the albedo and lowers roughness; a puddle
+is where `h` is below the level on ground facing up (`smoothstep(0.85, 0.97, up)`), and there the
+surface is a flat mirror (roughness 0.02, no normal map); cover is
+`smoothstep(1 - amount, 1 - amount + 1 / sharpness, facing * preference)`, where facing is the
+slope band and preference leans towards high (or low) relief. The surface shaders call it with
+the material's uniforms and the weather global; the field calls it with its layers' parameters
+blended by their weights (the same way it blends their textures) and the dominant layer's height,
+which is why the field and the ground material agree under weather (field tests). The share of
+the relief the effects leave (`normal_keep`: 1 - water, times 1 - 0.75 x cover) scales the normal
+map and the self-shadow strength, since snow and water fill the relief. Everything sits behind one
+branch on uniforms, so materials without effects pay nothing.

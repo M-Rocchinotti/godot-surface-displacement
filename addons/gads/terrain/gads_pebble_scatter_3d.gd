@@ -50,7 +50,7 @@ const PROCESS_SHADER := preload("res://addons/gads/render/shaders/gads_pebble_pr
 const PEBBLE_SHADER := preload("res://addons/gads/render/shaders/gads_pebble.gdshader")
 const COPIED_FROM_FIELD := ["ground_mode", "ground_data", "ground_rect", "ground_decode", "layer_count",
 		"layer_height", "layer_a", "layer_b", "layer_c", "layer_e", "lift", "base_spacing"]
-const COPIED_TO_PEBBLES := ["layer_albedo", "layer_orm", "layer_b", "layer_c", "layer_d"]
+const COPIED_TO_PEBBLES := ["layer_albedo", "layer_orm", "layer_b", "layer_c", "layer_d", "layer_fx_cover_color", "layer_fx_cover", "layer_fx_water"]
 
 var _particles: GPUParticles3D
 var _process_material: ShaderMaterial

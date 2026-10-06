@@ -1,14 +1,16 @@
 extends Node
-## GADS demo: four scenes, presets, per-feature switches, a flat / POM /
-## POM + geometry comparison, debug views and a frame-time overlay.
-## Keys: 1-6 scene, V next camera view, P next preset, B next comparison mode, H hide the panel,
-## G the GADS profiler overlay;
+## GADS demo: six scenes, presets, per-feature switches, a flat / POM /
+## POM + geometry comparison, weather, debug views and a frame-time overlay.
+## Keys: 1-6 scene, V next camera view, P next preset, B next comparison mode, R next weather,
+## H hide the panel, G the GADS profiler overlay;
 ## hold the right mouse button and use WASD/QE to fly (Shift fast, Alt slow).
 
 const Builder := preload("res://demo/scenes/demo_builder.gd")
 const FlyCamera := preload("res://demo/fly_camera.gd")
 const PRESETS: Array[String] = ["Off", "Low", "Medium", "High", "Ultra"]
 const COMPARE: Array[String] = ["Flat (normal map)", "POM", "POM + geometry"]
+## Weather states (R): name, rain wetness, snow cover, puddle level.
+const WEATHER := [["Dry", 0.0, 0.0, 0.0], ["Rain", 0.7, 0.0, 0.25], ["Snow", 0.0, 0.55, 0.0], ["Thaw", 0.4, 0.25, 0.2]]
 const DEBUG_VIEWS := [["Final", 0], ["Hit offset", 1], ["Cost (steps)", 2], ["Relief height", 3], ["Normals", 4], ["Self-shadow", 5], ["Field levels", 8], ["Tessellation", 9]]
 const PANEL_WIDTH := 300.0
 
@@ -26,6 +28,7 @@ var _compare_buttons: Array[Button] = []
 var _debug_option: OptionButton
 var _stats: Label
 var _gpu_ms := 0.0
+var _weather := 0
 var _frame_ms := 0.0
 var _overlay: GADSStatsOverlay
 
@@ -113,9 +116,9 @@ func _process(delta: float) -> void:
 	_gpu_ms = lerpf(_gpu_ms, RenderingServer.viewport_get_measured_render_time_gpu(get_viewport().get_viewport_rid()), 0.1)
 	if Engine.get_process_frames() % 10 == 0 and gads != null:
 		var budget := gads.get_budget_ms()
-		_stats.text = "%d fps   frame %.2f ms   GPU %.2f ms\n%s preset, added-cost target %s   (%s)" % [
+		_stats.text = "%d fps   frame %.2f ms   GPU %.2f ms\n%s preset, added-cost target %s, %s (R)   (%s)" % [
 			Engine.get_frames_per_second(), _frame_ms, _gpu_ms, GADSSettings.preset_name(gads.preset),
-			"%.1f ms" % budget if budget < INF else "-", RenderingServer.get_video_adapter_name()]
+			"%.1f ms" % budget if budget < INF else "-", WEATHER[_weather][0], RenderingServer.get_video_adapter_name()]
 
 
 func _unhandled_key_input(event: InputEvent) -> void:
@@ -132,6 +135,10 @@ func _unhandled_key_input(event: InputEvent) -> void:
 			_sync_ui()
 		KEY_B:
 			set_compare((_compare_mode() + 1) % COMPARE.size())
+		KEY_R:
+			_weather = (_weather + 1) % WEATHER.size()
+			var w: Array = WEATHER[_weather]
+			gads.set_weather(w[1], w[2], w[3])
 		KEY_H:
 			_panel.visible = not _panel.visible
 		KEY_G:

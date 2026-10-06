@@ -244,6 +244,9 @@ func test_manager() -> void:
 	gads.enabled = false
 	gads.apply()
 	check(GADSMaterials.parse(mat.shader)["quality"] == GADSMaterials.Quality.FLAT and is_zero_approx(gads.get_budget_ms()), "enabled = false draws everything flat")
+	gads.set_weather(0.25, 0.5, 0.75)
+	check(GADSGlobals.get_value(GADSGlobals.WEATHER) == Vector4(0.25, 0.5, 0.75, 0.0), "set_weather() sets the weather global")
+	gads.set_weather(0.0, 0.0, 0.0)
 	scene.queue_free()
 
 

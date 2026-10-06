@@ -21,6 +21,7 @@ global uniform sampler2D gads_dfg;    // Godot's multiple-scattering term, see t
 global uniform sampler2D gads_deform;        // runtime deformation: r = depth when stamped (m, down), g = stamp time (s)
 global uniform vec4 gads_deform_params;      // window origin x, z (m), window side (m), deepest deformation (m; 0 = off)
 global uniform vec4 gads_deform_time;        // now (s), recovery (m/s), unused, unused
+global uniform vec4 gads_weather;            // surface effects everywhere: rain wetness, snow cover, puddle level, unused
 
 // Lookups into the 4-element layer sampler arrays by a loop index. GLSL 1.30+ (the Compatibility
 // renderer) indexes sampler arrays only with constant expressions, so there a lookup picks the
@@ -74,6 +75,53 @@ float gads_remap_height(float h, vec2 remap) {
 	float span = remap.y - remap.x;
 	span = abs(span) < 1e-5 ? 1e-5 : span;
 	return clamp((h - remap.x) / span, 0.0, 1.0);
+}
+
+// Surface effects (the effects uniforms of the surface materials, per layer in the field).
+struct GADSEffects {
+	vec4 cover_color; // rgb, roughness
+	vec4 cover;       // amount, slope from, slope to (no band when to <= from), height bias
+	float sharpness;
+	float wetness;
+	float puddle;
+	vec4 cavity;      // colour rgb, amount
+	vec4 edge;        // colour rgb, amount
+};
+
+// Whether e changes anything (it reads the height map only then).
+bool gads_effects_on(GADSEffects e) {
+	return e.cover.x > 0.0 || e.wetness > 0.0 || e.puddle > 0.0 || e.cavity.a > 0.0 || e.edge.a > 0.0;
+}
+
+// Applies e to a surface whose remapped height is h (0..1), its surroundings' `around` (a coarser
+// mip), world normal y = up, limited to `mask`. normal_keep: how much of the relief's detail
+// shows through (normal map and self-shadow; snow and standing water fill the relief).
+void gads_apply_effects(GADSEffects e, float h, float around, float up, float mask, inout vec3 albedo, inout float roughness,
+		inout float metallic, inout float ao, out float normal_keep) {
+	normal_keep = 1.0;
+	float d = h - around; // > 0 on crests, < 0 in hollows
+	albedo = mix(albedo, e.cavity.rgb, e.cavity.a * mask * smoothstep(0.02, 0.2, -d));
+	albedo = mix(albedo, e.edge.rgb, e.edge.a * mask * smoothstep(0.02, 0.2, d));
+	if (e.wetness > 0.0 || e.puddle > 0.0) {
+		float level = e.puddle > 0.0 ? smoothstep(0.85, 0.97, up) : 0.0;
+		float water = level * (1.0 - smoothstep(e.puddle - 0.03, e.puddle, h)) * mask;
+		float damp = max(e.wetness * mask, water);
+		// Water fills the pores: darker diffuse, glossier; standing water is a flat mirror.
+		albedo *= mix(1.0, 0.5, damp);
+		roughness = mix(roughness, mix(0.25, 0.02, water), damp);
+		metallic *= 1.0 - water;
+		normal_keep = 1.0 - water;
+	}
+	if (e.cover.x > 0.0) {
+		float facing = e.cover.z > e.cover.y ? smoothstep(e.cover.y, e.cover.z, up) : 1.0;
+		float prefer = e.cover.w >= 0.0 ? mix(1.0, h, e.cover.w) : mix(1.0, 1.0 - h, -e.cover.w);
+		float c = smoothstep(1.0 - e.cover.x, 1.0 - e.cover.x + 1.0 / max(e.sharpness, 1.0), facing * prefer * mask);
+		albedo = mix(albedo, e.cover_color.rgb, c);
+		roughness = mix(roughness, e.cover_color.a, c);
+		metallic *= 1.0 - c;
+		ao = mix(ao, 1.0, 0.5 * c);
+		normal_keep *= 1.0 - 0.75 * c;
+	}
 }
 
 // Unpacks an OpenGL-convention normal map sample exactly like BaseMaterial3D (z rebuilt from xy,
