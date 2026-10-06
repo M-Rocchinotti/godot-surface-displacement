@@ -106,6 +106,13 @@ All notable changes to this project are documented here. The format follows
   Project > Tools > **Make Selected Meshes GADSMeshInstance3D** and **Bake Selected
   GADSMeshInstance3D** (undoable); Validate Setup reports stale bakes, unbakeable meshes, a
   missing native library and bakes the budget cut short.
+- **Adaptive quality and runtime budgets**: `GADSManager.adaptive_quality` lowers the preset
+  one step at a time (down to `adaptive_min_preset`) and coarsens runtime tessellation while the
+  main viewport's GPU time misses `target_frame_ms`, and restores it when there is room again
+  (hysteresis: a second over the target to step down, four seconds well under it to step up, a
+  pause between steps); `adapt_to()` takes a game's own measurement. `runtime_triangle_budget`
+  shares one budget among all view-dependent meshes by screen coverage and
+  `displacement_priority`, within each one's own maximum and a minimum.
 - **Surface effects and weather**: every GADS material has optional cover (snow, dust, sand on
   what faces up, tops of the relief first), wetness, puddles (flat water in the relief's low
   parts on level ground) and cavity / edge colours, limited by a vertex colour channel if wanted;

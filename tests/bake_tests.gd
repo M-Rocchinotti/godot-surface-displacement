@@ -65,6 +65,7 @@ func _run() -> void:
 		await _test("renders_like_parallax", test_render)
 		await _test("geometry_to_parallax_by_distance", test_geometry_range)
 		await _test("runtime_tessellation_follows_the_camera", test_runtime_tessellation)
+		await _test("runtime_budget_and_adaptive_quality", test_runtime_budget)
 	print("\nbake tests: %d passed, %d failed" % [_passed, _failed])
 	h.clear_scene()
 	h.viewport.queue_free()
@@ -1395,4 +1396,52 @@ func test_export() -> void:
 	for f in DirAccess.get_files_at(dir):
 		DirAccess.remove_absolute(ProjectSettings.globalize_path(dir.path_join(f)))
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(dir))
+	await process_frame
+
+
+## A GADSManager's shared runtime budget limits a view-dependent mesh's tessellation, and its
+## adaptive quality coarsens it.
+func test_runtime_budget() -> void:
+	var s := h.new_debug_scene()
+	var gads := GADSManager.new()
+	s.add_child(gads)
+	var field := Harness.make_stone_field(256, 60, 11)
+	var node := _make_node(uv_material(field, 0.05))
+	node.source_mesh = plane(8.0)
+	node.view_dependent = true
+	node.view_max_triangles = 400000
+	s.add_child(node)
+	h.add_camera(Vector3(-3.5, 0.6, -3.5), Vector3(0, 0, 0))
+	var done := []
+	node.view_tessellated.connect(func(stats: Dictionary) -> void: done.append(stats))
+	var wait_for := func(count: int) -> void:
+		for i in 900:
+			if done.size() >= count and not node.is_view_tessellating():
+				return
+			await process_frame
+	await wait_for.call(1)
+	var free_triangles: int = done.back()["triangles"] if not done.is_empty() else 0
+	check(node.is_in_group(&"gads_view_dependent") and node.get_runtime_max_triangles() == 400000, "without a shared budget it has its own")
+	gads.runtime_triangle_budget = 1500
+	gads.distribute_runtime_budget()
+	check(node.get_runtime_max_triangles() == 1500, "a shared budget limits it (the only one: all of it)")
+	await wait_for.call(2)
+	var limited: int = done.back()["triangles"] if done.size() >= 2 else 0
+	print("  own budget %d triangles, shared budget 1500: %d" % [free_triangles, limited])
+	check(done.size() >= 2 and limited <= 1510 and limited < free_triangles, "and it tessellates again within it (the last split may add a triangle)")
+	gads.runtime_triangle_budget = 0
+	gads.adaptive_quality = true
+	gads.set_process(false)
+	for i in 300:
+		gads.adapt_to(40.0, 1.0 / 60.0)
+	gads.distribute_runtime_budget()
+	check(gads.get_adapt_level() >= 2 and is_equal_approx(node.get_runtime_pixel_error(), node.pixel_error * gads.get_runtime_detail_scale()),
+		"the adaptive quality makes it coarser (pixel error x %.2f)" % gads.get_runtime_detail_scale())
+	var before := done.size()
+	await wait_for.call(before + 1)
+	var coarse: int = done.back()["triangles"] if done.size() > before else free_triangles
+	print("  adaptive level %d: %d triangles" % [gads.get_adapt_level(), coarse])
+	check(done.size() > before and coarse < free_triangles, "and it tessellates again, coarser")
+	gads.adaptive_quality = false
+	h.clear_scene()
 	await process_frame

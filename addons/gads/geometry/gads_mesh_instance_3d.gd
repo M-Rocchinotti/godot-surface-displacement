@@ -137,6 +137,9 @@ const BAKED_PARAMETER := &"gads_baked"
 @export_range(1000, 5000000, 1000, "or_greater") var view_max_triangles := 150000
 ## The camera to follow; empty = the viewport's current camera.
 @export var view_camera: NodePath
+## How much this mesh matters when a GADSManager shares its runtime_triangle_budget among
+## view-dependent meshes (0-100; twice the priority, twice the share at the same size on screen).
+@export_range(0, 100) var displacement_priority := 50
 
 @export_storage var bake_key := ""
 ## The bake's statistics: source_triangles, triangles, vertices, max_level, budget_reached,
@@ -158,6 +161,8 @@ var _view_eye := Vector3.INF
 var _view_focal := 0.0
 var _view_xform := Transform3D()
 var _view_images := {}
+var _limit_triangles := -1 # from GADSManager's shared budget (-1: none)
+var _limit_scale := 1.0 # pixel error factor from GADSManager's adaptive quality
 var _cluster_nodes: Array[MeshInstance3D] = []
 var _cluster_snapshot := []
 var _hlod := false # the node and its clusters show while the fallback is hidden
@@ -720,7 +725,38 @@ func _view_running() -> bool:
 	return view_dependent and not Engine.is_editor_hint() and is_inside_tree() and source_mesh != null
 
 
+## Called by GADSManager: the most triangles its shared budget leaves this mesh (-1: no shared
+## budget) and how much coarser than [member pixel_error] to tessellate (its adaptive quality).
+## A change of a quarter or more in the effective budget, or any change of the scale,
+## re-tessellates.
+func set_runtime_limits(max_triangles: int, pixel_scale: float) -> void:
+	var before := get_runtime_max_triangles()
+	var scale_before := _limit_scale
+	_limit_triangles = max_triangles
+	_limit_scale = maxf(pixel_scale, 1.0)
+	var after := get_runtime_max_triangles()
+	if absi(after - before) > before / 4 or not is_equal_approx(scale_before, _limit_scale):
+		_view_eye = Vector3.INF
+
+
+## The triangle budget the runtime tessellation uses: [member view_max_triangles], or less when a
+## GADSManager shares a runtime_triangle_budget.
+func get_runtime_max_triangles() -> int:
+	return mini(view_max_triangles, _limit_triangles) if _limit_triangles >= 0 else view_max_triangles
+
+
+## The pixel error the runtime tessellation keeps: [member pixel_error] times the adaptive
+## quality's scale.
+func get_runtime_pixel_error() -> float:
+	return pixel_error * _limit_scale
+
+
 func _update_view_processing() -> void:
+	# The group GADSManager shares its runtime budget in (kept while out of the tree).
+	if view_dependent and not Engine.is_editor_hint():
+		add_to_group(&"gads_view_dependent")
+	elif is_in_group(&"gads_view_dependent"):
+		remove_from_group(&"gads_view_dependent")
 	if _view_running():
 		set_process(true)
 	elif _view_baker != null or _view_mesh != null:
@@ -796,13 +832,13 @@ func _start_view(cam: Camera3D, eye: Vector3, focal: float) -> void:
 	var settings := get_bake_settings()
 	settings.erase("collision")
 	settings["lods"] = false
-	settings["max_triangles"] = view_max_triangles
+	settings["max_triangles"] = get_runtime_max_triangles()
 	if cam.projection == Camera3D.PROJECTION_ORTHOGONAL:
-		settings["max_error"] = maxf(settings["max_error"], pixel_error / focal)
+		settings["max_error"] = maxf(settings["max_error"], get_runtime_pixel_error() / focal)
 	else:
 		settings["view_dependent"] = true
 		settings["view_position"] = eye
-		settings["pixel_error"] = pixel_error
+		settings["pixel_error"] = get_runtime_pixel_error()
 		settings["focal_px"] = focal
 	_view_baker = GADSMeshBaker.new()
 	_view_baker.image_cache = _view_images

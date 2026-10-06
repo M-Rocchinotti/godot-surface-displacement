@@ -230,6 +230,20 @@ their `next_pass` chains, MultiMesh and particle meshes, CSG shapes and GridMap 
 the end of the frame like the node's own properties. In the editor it only writes the
 globals, so saved materials keep their variant (editor check).
 
+**Adaptive quality.** The measured frame time (the main viewport's GPU time; the frame delta
+where the renderer reports none) is smoothed with a quarter-second exponential average. Over
+105 % of the target, time accumulates towards a step down; under 80 %, towards a step up; in
+between, both reset, so the quality does not oscillate around the target. After a step the
+measurement settles for a second (the new variants and tessellations take effect) before any
+time counts again. The effective preset is the preset minus the level (not below the floor);
+the level also scales the view-dependent meshes' pixel error by 1.5 per step. **Shared budget.**
+Four times a second the node shares `runtime_triangle_budget` among the meshes in the
+`gads_view_dependent` group by water-filling: weights are priority x (radius / distance)^2,
+entries whose share would pass their own maximum are fixed there first (freeing budget for the
+others), then entries whose share would fall under the minimum are fixed at it, and the rest is
+shared again until nothing changes. A mesh tessellates again when its share changes by a quarter
+or the scale changes.
+
 ## 7. Resource lifetime
 
 The field and scatter own their render objects as *internal* children (never saved, freed with

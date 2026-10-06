@@ -18,6 +18,8 @@ extends Node
 ## variant they were saved with.
 
 signal settings_changed
+## The adaptive quality stepped: [param level] steps below the preset (0: the preset itself).
+signal quality_adapted(level: int)
 
 enum Feature { POM, SELF_SHADOW, NEAR_FIELD, SCATTER }
 enum DebugView { OFF = 0, HIT_OFFSET = 1, COST = 2, RELIEF = 3, NORMALS = 4, SELF_SHADOW = 5, FIELD_LEVELS = 8, TESSELLATION = 9 }
@@ -59,6 +61,36 @@ enum DebugView { OFF = 0, HIT_OFFSET = 1, COST = 2, RELIEF = 3, NORMALS = 4, SEL
 	set(value):
 		scatter = value
 		_queue_apply()
+@export_group("Adaptive quality")
+## While the game runs, lower the quality when frames take longer than [member target_frame_ms]
+## and bring it back when there is room again, one step at a time: a step down once the target
+## has been missed for [member adaptive_down_seconds], a step up after
+## [member adaptive_up_seconds] well under it (below 80 %), and a second between steps for the
+## measurement to settle. A step lowers the preset by one (down to [member adaptive_min_preset];
+## Custom settings keep theirs) and makes runtime tessellation 1.5 times coarser, up to
+## [constant ADAPT_MAX_LEVEL] steps. Never above [member preset]. Measured: the main viewport's
+## GPU time (or the frame time where the renderer does not measure it); a game that measures its
+## own can feed [method adapt_to] instead.
+@export var adaptive_quality := false:
+	set(value):
+		adaptive_quality = value
+		if not value:
+			_set_adapt_level(0)
+		_update_processing()
+@export_range(4.0, 100.0, 0.1, "suffix:ms") var target_frame_ms := 16.6
+@export var adaptive_min_preset := GADSSettings.Preset.LOW
+@export_range(0.1, 10.0, 0.1, "suffix:s") var adaptive_down_seconds := 1.0
+@export_range(0.5, 60.0, 0.5, "suffix:s") var adaptive_up_seconds := 4.0
+@export_group("Runtime tessellation budget")
+## The triangles all view-dependent GADSMeshInstance3D nodes may use together (0: each keeps its
+## own [member GADSMeshInstance3D.view_max_triangles]). Shared by how much of the view each covers
+## times its [member GADSMeshInstance3D.displacement_priority], never more than a node's own
+## maximum (what a capped node leaves goes to the others), at least [constant MIN_SHARE] each.
+## Updated four times a second.
+@export_range(0, 50000000, 1000, "or_greater") var runtime_triangle_budget := 0:
+	set(value):
+		runtime_triangle_budget = value
+		_update_processing()
 @export_group("Weather")
 ## Surface effects on every GADS material at once (each scaled by its weather_response): rain
 ## darkens and glosses surfaces, snow covers what faces up, puddles fill low relief on level
@@ -83,6 +115,21 @@ enum DebugView { OFF = 0, HIT_OFFSET = 1, COST = 2, RELIEF = 3, NORMALS = 4, SEL
 
 var _materials := {} # instance id -> WeakRef(ShaderMaterial)
 var _apply_queued := false
+var _adapt_level := 0
+var _over_s := 0.0
+var _under_s := 0.0
+var _settle_s := 0.0
+var _smoothed_ms := -1.0
+var _measuring := false
+var _budget_timer := 0.0
+var _limits_pushed := false
+
+## The most steps the adaptive quality takes below the preset.
+const ADAPT_MAX_LEVEL := 4
+## How much coarser runtime tessellation gets per adaptive step (pixel error factor).
+const ADAPT_PIXEL_SCALE := 1.5
+## The fewest triangles a view-dependent node gets from a shared budget.
+const MIN_SHARE := 1000
 
 
 ## The GADSManager node of [param tree], or null.
@@ -93,6 +140,7 @@ static func find_in(tree: SceneTree) -> GADSManager:
 
 func _enter_tree() -> void:
 	add_to_group(&"gads_manager")
+	_update_processing()
 	GADSGlobals.ensure_registered()
 	if not Engine.is_editor_hint():
 		get_tree().node_added.connect(_on_node_added)
@@ -102,6 +150,7 @@ func _ready() -> void:
 	if not Engine.is_editor_hint():
 		register_scene(get_tree().root)
 	apply()
+	_update_processing()
 
 
 func _exit_tree() -> void:
@@ -114,10 +163,11 @@ func _exit_tree() -> void:
 ## [member enabled] applied. A new resource; changing it has no effect.
 func get_effective_settings() -> GADSSettings:
 	var base: GADSSettings
-	if preset == GADSSettings.Preset.CUSTOM and custom_settings != null:
+	var effective := get_effective_preset()
+	if effective == GADSSettings.Preset.CUSTOM and custom_settings != null:
 		base = custom_settings.duplicate()
 	else:
-		base = GADSSettings.create_preset(preset if preset != GADSSettings.Preset.CUSTOM else GADSSettings.Preset.MEDIUM)
+		base = GADSSettings.create_preset(effective if effective != GADSSettings.Preset.CUSTOM else GADSSettings.Preset.MEDIUM)
 	if not enabled:
 		base = GADSSettings.create_preset(GADSSettings.Preset.OFF)
 	base.pom_enabled = base.pom_enabled and pom
@@ -154,6 +204,172 @@ func is_feature_active(feature: Feature) -> bool:
 			return s.scatter_enabled
 
 
+## The preset in effect: [member preset], lowered by the adaptive quality's steps (not below
+## [member adaptive_min_preset]; Off and Custom are never stepped).
+func get_effective_preset() -> GADSSettings.Preset:
+	if _adapt_level == 0 or preset == GADSSettings.Preset.OFF or preset == GADSSettings.Preset.CUSTOM:
+		return preset
+	var floor_preset := clampi(adaptive_min_preset, GADSSettings.Preset.LOW, preset)
+	return maxi(preset - _adapt_level, floor_preset) as GADSSettings.Preset
+
+
+## How many steps the adaptive quality is below the preset (0: none).
+func get_adapt_level() -> int:
+	return _adapt_level
+
+
+## How much coarser than their pixel_error view-dependent meshes tessellate because of the
+## adaptive quality (1: not at all).
+func get_runtime_detail_scale() -> float:
+	return pow(ADAPT_PIXEL_SCALE, _adapt_level)
+
+
+## The frame time the adaptive quality reacts to, smoothed (ms; -1 before the first frame).
+func get_measured_frame_ms() -> float:
+	return _smoothed_ms
+
+
+## Feeds one frame of [param frame_ms] (taking [param delta] seconds) to the adaptive quality.
+## Called every frame while [member adaptive_quality] is on, with the measured time.
+func adapt_to(frame_ms: float, delta: float) -> void:
+	_smoothed_ms = frame_ms if _smoothed_ms < 0.0 else lerpf(_smoothed_ms, frame_ms, clampf(delta * 4.0, 0.0, 1.0))
+	if _settle_s > 0.0:
+		_settle_s -= delta
+		_over_s = 0.0
+		_under_s = 0.0
+		return
+	if _smoothed_ms > target_frame_ms * 1.05:
+		_over_s += delta
+		_under_s = 0.0
+	elif _smoothed_ms < target_frame_ms * 0.8:
+		_under_s += delta
+		_over_s = 0.0
+	else:
+		_over_s = 0.0
+		_under_s = 0.0
+	if _over_s >= adaptive_down_seconds and _adapt_level < ADAPT_MAX_LEVEL:
+		_set_adapt_level(_adapt_level + 1)
+	elif _under_s >= adaptive_up_seconds and _adapt_level > 0:
+		_set_adapt_level(_adapt_level - 1)
+
+
+func _set_adapt_level(level: int) -> void:
+	if level == _adapt_level:
+		return
+	_adapt_level = level
+	_over_s = 0.0
+	_under_s = 0.0
+	_settle_s = 1.0
+	_queue_apply()
+	_budget_timer = 0.0
+	quality_adapted.emit(level)
+
+
+## Splits [param budget] triangles among [param entries] ({"priority" (0-100), "radius" and
+## "distance" (m), "max" (triangles)}): by priority times the share of the view each covers
+## ((radius / distance)^2, the distance at least the radius), each at most its "max"; what a
+## capped entry leaves goes to the others. Every entry gets at least [constant MIN_SHARE].
+static func share_budget(budget: int, entries: Array) -> PackedInt32Array:
+	var n := entries.size()
+	var out := PackedInt32Array()
+	out.resize(n)
+	var weights := PackedFloat64Array()
+	weights.resize(n)
+	var caps := PackedInt32Array()
+	caps.resize(n)
+	var open: Array[int] = []
+	var left := float(budget)
+	for i in n:
+		var e: Dictionary = entries[i]
+		var r := maxf(float(e.get("radius", 1.0)), 1e-3)
+		var cover := r / maxf(float(e.get("distance", r)), r)
+		weights[i] = clampf(float(e.get("priority", 50)), 0.0, 100.0) / 100.0 * cover * cover
+		caps[i] = int(e.get("max", 1 << 30))
+		if weights[i] > 0.0:
+			open.append(i)
+		else:
+			out[i] = mini(MIN_SHARE, caps[i])
+			left -= out[i]
+	# Water-filling: entries whose share would pass their maximum get the maximum (which frees
+	# budget for the others), then entries whose share would fall under the minimum get the
+	# minimum; each time the rest is shared again among the others.
+	while not open.is_empty():
+		var total := 0.0
+		for i in open:
+			total += weights[i]
+		var capped: Array[int] = []
+		var floored: Array[int] = []
+		for i in open:
+			var share := maxf(left, 0.0) * weights[i] / total
+			if share >= caps[i]:
+				capped.append(i)
+			elif share < MIN_SHARE:
+				floored.append(i)
+		var fix := capped if not capped.is_empty() else floored
+		if fix.is_empty():
+			for i in open:
+				out[i] = int(left * weights[i] / total)
+			break
+		for i in fix:
+			out[i] = caps[i] if fix == capped else mini(MIN_SHARE, caps[i])
+			left -= out[i]
+			open.erase(i)
+	return out
+
+
+## Shares [member runtime_triangle_budget] among the view-dependent GADSMeshInstance3D nodes and
+## hands them the adaptive quality's detail scale (four times a second while either is on; call it
+## to apply a change at once).
+func distribute_runtime_budget() -> void:
+	if not is_inside_tree():
+		return
+	var nodes := get_tree().get_nodes_in_group(&"gads_view_dependent")
+	var scale := get_runtime_detail_scale()
+	var cam := get_viewport().get_camera_3d() if get_viewport() != null else null
+	if runtime_triangle_budget <= 0 or cam == null:
+		for node in nodes:
+			(node as GADSMeshInstance3D).set_runtime_limits(-1, scale)
+		_limits_pushed = scale != 1.0
+		return
+	var entries := []
+	for node in nodes:
+		var mi := node as GADSMeshInstance3D
+		var aabb := mi.global_transform * mi.source_mesh.get_aabb() if mi.source_mesh != null else AABB()
+		entries.append({"priority": mi.displacement_priority, "radius": aabb.size.length() * 0.5,
+			"distance": cam.global_position.distance_to(aabb.get_center()), "max": mi.view_max_triangles})
+	var shares := share_budget(runtime_triangle_budget, entries)
+	for i in nodes.size():
+		(nodes[i] as GADSMeshInstance3D).set_runtime_limits(shares[i], scale)
+	_limits_pushed = true
+
+
+func _process(delta: float) -> void:
+	if Engine.is_editor_hint():
+		return
+	if adaptive_quality:
+		adapt_to(_measure_frame_ms(delta), delta)
+	if runtime_triangle_budget > 0 or _adapt_level > 0 or _limits_pushed:
+		_budget_timer -= delta
+		if _budget_timer <= 0.0:
+			_budget_timer = 0.25
+			distribute_runtime_budget()
+
+
+func _measure_frame_ms(delta: float) -> float:
+	var vp := get_viewport().get_viewport_rid()
+	if not _measuring:
+		RenderingServer.viewport_set_measure_render_time(vp, true)
+		_measuring = true
+	var gpu := RenderingServer.viewport_get_measured_render_time_gpu(vp)
+	if gpu > 0.0:
+		return maxf(gpu, RenderingServer.viewport_get_measured_render_time_cpu(vp))
+	return delta * 1000.0
+
+
+func _update_processing() -> void:
+	set_process(not Engine.is_editor_hint() and (adaptive_quality or runtime_triangle_budget > 0 or _adapt_level > 0 or _limits_pushed))
+
+
 ## Sets the weather: [member rain_wetness], [member snow_cover] and [member puddle_level] (0..1).
 func set_weather(rain: float, snow: float, puddles: float) -> void:
 	rain_wetness = rain
@@ -166,9 +382,9 @@ func _apply_weather() -> void:
 		GADSGlobals.set_value(GADSGlobals.WEATHER, Vector4(rain_wetness, snow_cover, puddle_level, 0.0))
 
 
-## The target added GPU time of the current preset (ms), see [method GADSSettings.get_budget_ms].
+## The target added GPU time of the preset in effect (ms), see [method GADSSettings.get_budget_ms].
 func get_budget_ms() -> float:
-	return GADSSettings.get_budget_ms(preset if enabled else GADSSettings.Preset.OFF)
+	return GADSSettings.get_budget_ms(get_effective_preset() if enabled else GADSSettings.Preset.OFF)
 
 
 ## Adds [param material] to the materials this node switches (automatic for materials on

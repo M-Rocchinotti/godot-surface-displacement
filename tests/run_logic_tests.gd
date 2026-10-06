@@ -32,6 +32,7 @@ func _run() -> void:
 	test_texture_sets()
 	test_mesh_diagnostics()
 	test_procedural()
+	await test_adaptive_quality()
 	await test_scatter_parameter_sync()
 	print("\nlogic tests: %d passed, %d failed" % [_passed, _failed])
 	quit(1 if _failed > 0 else 0)
@@ -946,3 +947,91 @@ func test_procedural() -> void:
 	for f in DirAccess.get_files_at(dir):
 		DirAccess.remove_absolute(ProjectSettings.globalize_path(dir.path_join(f)))
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(dir))
+
+## Adaptive quality: one slow frame changes nothing; sustained slow frames step the preset down
+## one step at a time (with a pause between steps) to the floor, then only coarsen runtime
+## tessellation; room again steps it back up, never above the preset; switching it off restores
+## the preset at once. Shared runtime budget: by coverage and priority, capped, with a minimum.
+func test_adaptive_quality() -> void:
+	print("\n== adaptive quality and runtime budget")
+	var scene := Node3D.new()
+	var gads := GADSManager.new()
+	gads.preset = GADSSettings.Preset.HIGH
+	gads.adaptive_min_preset = GADSSettings.Preset.LOW
+	gads.target_frame_ms = 16.0
+	scene.add_child(gads)
+	root.add_child(scene)
+	gads.adaptive_quality = true
+	gads.set_process(false) # frames are fed by hand
+	var steps: Array[int] = []
+	gads.quality_adapted.connect(func(level: int) -> void: steps.append(level))
+	var dt := 1.0 / 60.0
+	for i in 240:
+		gads.adapt_to(200.0 if i == 120 else 15.0, dt)
+	check(gads.get_adapt_level() == 0 and steps.is_empty(), "one 200 ms frame among 15 ms ones changes nothing")
+	var t := 0.0
+	while gads.get_adapt_level() == 0 and t < 10.0:
+		gads.adapt_to(25.0, dt)
+		t += dt
+	print("  first step down after %.2f s of 25 ms frames" % t)
+	check(gads.get_adapt_level() == 1 and t >= 1.0 and t < 1.5 and gads.get_effective_preset() == GADSSettings.Preset.MEDIUM,
+		"sustained 25 ms frames (target 16 ms) lower High to Medium after about a second")
+	var levels := []
+	t = 0.0
+	while t < 30.0:
+		gads.adapt_to(25.0, dt)
+		t += dt
+		if levels.is_empty() or levels.back() != gads.get_adapt_level():
+			levels.append(gads.get_adapt_level())
+	check(levels == [1, 2, 3, 4] and gads.get_effective_preset() == GADSSettings.Preset.LOW
+		and is_equal_approx(gads.get_runtime_detail_scale(), pow(GADSManager.ADAPT_PIXEL_SCALE, 4)),
+		"it keeps stepping one level at a time (%s): Low is the floor, further steps coarsen runtime tessellation" % [levels])
+	await process_frame
+	var applied: Vector4 = GADSGlobals.get_value(GADSGlobals.POM_STEPS)
+	GADSSettings.create_preset(GADSSettings.Preset.HIGH).apply_globals()
+	var high: Vector4 = GADSGlobals.get_value(GADSGlobals.POM_STEPS)
+	GADSSettings.create_preset(GADSSettings.Preset.LOW).apply_globals()
+	check(applied == GADSGlobals.get_value(GADSGlobals.POM_STEPS) and applied != high, "the Low preset's globals are in effect")
+	t = 0.0
+	var up_at := []
+	while gads.get_adapt_level() > 0 and t < 120.0:
+		var before := gads.get_adapt_level()
+		gads.adapt_to(8.0, dt)
+		t += dt
+		if gads.get_adapt_level() != before:
+			up_at.append(snappedf(t, 0.1))
+	print("  back up at %s s" % [up_at])
+	check(gads.get_adapt_level() == 0 and up_at.size() == 4 and up_at[0] >= 4.0 and gads.get_effective_preset() == GADSSettings.Preset.HIGH,
+		"with room again (8 ms) it climbs back one step at a time, to the preset and no further")
+	for i in 600:
+		gads.adapt_to(2.0, dt)
+	check(gads.get_adapt_level() == 0, "never above the preset")
+	for i in 120:
+		gads.adapt_to(40.0, dt)
+	gads.adaptive_quality = false
+	check(gads.get_adapt_level() == 0 and gads.get_effective_preset() == GADSSettings.Preset.HIGH, "switching it off restores the preset at once")
+	scene.queue_free()
+	# Shared budget.
+	var shares := GADSManager.share_budget(1000000, [
+		{"priority": 50, "radius": 1.0, "distance": 2.0, "max": 1000000},
+		{"priority": 50, "radius": 1.0, "distance": 20.0, "max": 1000000},
+		{"priority": 100, "radius": 1.0, "distance": 20.0, "max": 1000000},
+		{"priority": 0, "radius": 1.0, "distance": 2.0, "max": 1000000},
+	])
+	print("  shares %s" % [shares])
+	check(shares[0] > 90 * shares[1] and absi(shares[2] - 2 * shares[1]) <= 1 and shares[3] == GADSManager.MIN_SHARE,
+		"a shared budget goes by the share of the view (near 100 x far) and the priority (2 x), priority 0 gets the minimum")
+	var sum := 0
+	for v in shares:
+		sum += v
+	check(sum <= 1000000 and sum > 1000000 - 4, "and adds up to the budget (%d)" % sum)
+	var tiny := GADSManager.share_budget(10000, [
+		{"priority": 50, "radius": 1.0, "distance": 2.0, "max": 1000000},
+		{"priority": 50, "radius": 1.0, "distance": 40.0, "max": 1000000},
+	])
+	check(tiny[1] == GADSManager.MIN_SHARE and tiny[0] == 10000 - GADSManager.MIN_SHARE, "a share under the minimum gets the minimum, from the others' (%s)" % [tiny])
+	var capped := GADSManager.share_budget(100000, [
+		{"priority": 50, "radius": 1.0, "distance": 2.0, "max": 20000},
+		{"priority": 50, "radius": 1.0, "distance": 20.0, "max": 1000000},
+	])
+	check(capped[0] == 20000 and capped[1] == 80000, "a node at its own maximum leaves the rest to the others (%s)" % [capped])
