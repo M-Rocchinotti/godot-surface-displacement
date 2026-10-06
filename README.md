@@ -67,6 +67,7 @@ what the engine allows:
 - Baked adaptive displacement: Rivara longest-edge bisection on welded topology driven by the
   height field's own deviation (in metres), a triangle budget, MikkTSpace tangents, LODs, collision at its own resolution; on a baked mesh the same materials
   skip their march and add only the normal-map detail finer than the triangles.
+- Baked meshes export to glTF (.glb / .gltf) or OBJ for other tools.
 - Procedural relief without texture files: eleven tileable patterns (noise, ridged, billow, rock,
   stones, cracks, bricks, tiles, waves, ripples, craters) and normal, occlusion, curvature,
   albedo and ORM maps from any height map, as a complete material in one click.
@@ -484,6 +485,14 @@ meshes named `*-gads` (the suffix is dropped, like Godot's own `-col` hints), or
 draws a GADS material, into GADSMeshInstance3D, baked during the import at `quality` with the
 bake stored in the imported scene (`bake`). `GADSImportTools.process(scene, options)` does the same
 to any scene from a script.
+
+**Export.** **Export** in the inspector (or `export_baked(path)`) writes the bake to a `.glb`,
+`.gltf` or `.obj` (with a `.mtl` and the textures as PNG) for other tools: every cluster as its own
+object, positions, normals, UVs (and tangents and colours in glTF), the node's materials as plain
+PBR materials (albedo, normal map, roughness / metallic / occlusion from the ORM texture, UV
+scale and offset; the relief is in the geometry, so the height map is left out). Read back, a
+glTF is the same triangles at the same positions, facing the same way (tests).
+`GADSMeshExporter.export_meshes()` does the same for any meshes.
 
 **Clusters.** A large mesh baked as one piece is culled as one piece and gets one LOD for all of
 it, however close the camera is to one end. With `cluster_triangles` the bake is split into

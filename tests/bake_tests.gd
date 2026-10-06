@@ -59,6 +59,7 @@ func _run() -> void:
 	await _test("cluster_node", test_cluster_node)
 	await _test("profiler", test_profiler)
 	await _test("diagnostics_overlay", test_diagnostics)
+	await _test("export", test_export)
 	await _test("import_options", test_import)
 	if DisplayServer.get_name() != "headless":
 		await _test("renders_like_parallax", test_render)
@@ -1268,3 +1269,130 @@ func test_vector_displacement() -> void:
 		var want: Vector3 = expect.call(buv[i]) + (frame[3] as Vector3) * 0.03 * Harness.sample_field(field, buv[i])
 		worst_both = maxf(worst_both, bv[i].distance_to(want))
 	check(worst_both < tolerance, "with a height map as well, the two add up (%.3f mm)" % (worst_both * 1000.0))
+
+
+## The geometry of every surface of [param m]: [triangles, sorted rounded positions].
+static func _geometry_of(meshes: Array) -> Array:
+	var tris := 0
+	var keys := {}
+	for m: Mesh in meshes:
+		for s in m.get_surface_count():
+			var arrays := m.surface_get_arrays(s)
+			tris += (arrays[Mesh.ARRAY_INDEX] as PackedInt32Array).size() / 3 if arrays[Mesh.ARRAY_INDEX] != null else (arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array).size() / 3
+			for p: Vector3 in arrays[Mesh.ARRAY_VERTEX]:
+				keys[Vector3i((p * 1e4).round())] = true
+	var sorted := keys.keys()
+	sorted.sort()
+	return [tris, sorted]
+
+
+## Whether the triangles of [param m] wind so that their front faces look along the vertex
+## normals (Godot: clockwise seen from the front); the fraction of triangles that do.
+static func _front_facing(m: Mesh) -> float:
+	var good := 0
+	var total := 0
+	for s in m.get_surface_count():
+		var arrays := m.surface_get_arrays(s)
+		var v: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+		var n: PackedVector3Array = arrays[Mesh.ARRAY_NORMAL]
+		var idx: PackedInt32Array = arrays[Mesh.ARRAY_INDEX]
+		for t in range(0, idx.size(), 3):
+			var face := (v[idx[t + 1]] - v[idx[t]]).cross(v[idx[t + 2]] - v[idx[t]])
+			if face.length_squared() < 1e-14:
+				continue
+			total += 1
+			# Clockwise front faces: the right-handed cross product points away from the front.
+			good += 1 if face.dot(n[idx[t]] + n[idx[t + 1]] + n[idx[t + 2]]) < 0.0 else 0
+	return float(good) / maxf(total, 1)
+
+
+## Export: a bake written as glTF binary and read back is the same geometry, facing the same way,
+## with its material as a plain PBR material; as OBJ it has every vertex and triangle, faces wound
+## counter-clockwise around their normals and a material library with the albedo; a clustered
+## bake exports every cluster; nothing baked, nothing exported.
+func test_export() -> void:
+	var field := bump_field(128, 0.1)
+	var albedo := Image.create(16, 16, false, Image.FORMAT_RGB8)
+	albedo.fill(Color(0.8, 0.3, 0.2))
+	var mat := uv_material(field, 0.05, {"albedo_texture": ImageTexture.create_from_image(albedo), "roughness_scale": 0.6})
+	mat.resource_name = "Rock"
+	var node := _make_node(mat)
+	root.add_child(node)
+	check(node.export_baked("user://gads_export/none.glb") == ERR_UNCONFIGURED, "nothing baked: nothing exported")
+	node.bake()
+	var dir := "user://gads_export"
+	var glb := dir.path_join("bump.glb")
+	check(node.export_baked(glb) == OK and FileAccess.file_exists(glb), "export_baked writes a .glb")
+	var doc := GLTFDocument.new()
+	var state := GLTFState.new()
+	var read_back: Node = doc.generate_scene(state) if doc.append_from_file(ProjectSettings.globalize_path(glb), state) == OK else null
+	var meshes := []
+	var materials := []
+	if read_back != null:
+		for mi: Node in read_back.find_children("*", "MeshInstance3D", true, false):
+			var m: Mesh = (mi as MeshInstance3D).mesh
+			meshes.append(m)
+			for s in m.get_surface_count():
+				materials.append(m.surface_get_material(s))
+	var want := _geometry_of([node.mesh])
+	var got := _geometry_of(meshes)
+	print("  %d triangles, %d positions; read back %d, %d" % [want[0], (want[1] as Array).size(), got[0], (got[1] as Array).size()])
+	check(meshes.size() == 1 and got[0] == want[0] and got[1] == want[1], "read back: the same triangles at the same positions (0.1 mm)")
+	check(meshes.size() == 1 and _front_facing(meshes[0]) > 0.99 and _front_facing(node.mesh) > 0.99, "facing the same way")
+	var std := materials[0] as BaseMaterial3D if materials.size() == 1 else null
+	check(std != null and std.albedo_texture != null and is_equal_approx(snappedf(std.roughness, 0.01), 0.6),
+		"with the material's albedo texture and roughness as a PBR material")
+	if read_back != null:
+		read_back.free()
+	# OBJ.
+	var obj := dir.path_join("bump.obj")
+	check(node.export_baked(obj) == OK and FileAccess.file_exists(dir.path_join("bump.mtl")), "export_baked writes an .obj and its .mtl")
+	var lines := FileAccess.get_file_as_string(obj).split("\n")
+	var vs: Array[Vector3] = []
+	var ns: Array[Vector3] = []
+	var faces := []
+	for line in lines:
+		var parts := line.split(" ", false)
+		if parts.is_empty():
+			continue
+		match parts[0]:
+			"v":
+				vs.append(Vector3(float(parts[1]), float(parts[2]), float(parts[3])))
+			"vn":
+				ns.append(Vector3(float(parts[1]), float(parts[2]), float(parts[3])))
+			"f":
+				faces.append([parts[1], parts[2], parts[3]])
+	var ccw := 0
+	for f: Array in faces:
+		var ids := []
+		for corner: String in f:
+			var c := corner.split("/")
+			ids.append([int(c[0]) - 1, int(c[2]) - 1])
+		var face := (vs[ids[1][0]] - vs[ids[0][0]]).cross(vs[ids[2][0]] - vs[ids[0][0]])
+		ccw += 1 if face.dot(ns[ids[0][1]] + ns[ids[1][1]] + ns[ids[2][1]]) > 0.0 else 0
+	var vertex_count := (node.mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()
+	check(vs.size() == vertex_count and ns.size() == vertex_count and faces.size() == want[0] and ccw == faces.size(),
+		"the OBJ has every vertex (%d) and triangle (%d), counter-clockwise around the normals (%d)" % [vs.size(), faces.size(), ccw])
+	var mtl := FileAccess.get_file_as_string(dir.path_join("bump.mtl"))
+	check(mtl.contains("newmtl surface_0_Rock") and mtl.contains("map_Kd bump_0_albedo.png") and FileAccess.file_exists(dir.path_join("bump_0_albedo.png")),
+		"the material library names the material and its albedo, written as PNG")
+	# Clusters.
+	node.quality = GADSMeshInstance3D.Quality.HIGH
+	node.cluster_triangles = 300
+	node.bake(true)
+	var clustered := dir.path_join("clusters.glb")
+	node.export_baked(clustered)
+	doc = GLTFDocument.new()
+	state = GLTFState.new()
+	read_back = doc.generate_scene(state) if doc.append_from_file(ProjectSettings.globalize_path(clustered), state) == OK else null
+	var parts_back := read_back.find_children("*", "MeshInstance3D", true, false) if read_back != null else []
+	var cluster_meshes: Array = parts_back.map(func(mi: Node) -> Mesh: return (mi as MeshInstance3D).mesh)
+	check(parts_back.size() == node.get_cluster_count() and parts_back.size() > 1 and _geometry_of(cluster_meshes)[0] == int(node.bake_stats.get("triangles", -1)),
+		"a clustered bake exports every cluster (%d objects)" % parts_back.size())
+	if read_back != null:
+		read_back.free()
+	node.queue_free()
+	for f in DirAccess.get_files_at(dir):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(dir.path_join(f)))
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(dir))
+	await process_frame

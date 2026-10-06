@@ -597,6 +597,21 @@ func is_diagnostics_visible() -> bool:
 	return _diagnostics != null
 
 
+## Writes the bake (every cluster of it; while the game runs, the runtime mesh if one shows) to
+## [param path] for other tools: glTF binary (.glb), glTF (.gltf) or OBJ (.obj with a .mtl), with
+## the materials this node draws with as plain PBR materials (see [GADSMeshExporter]).
+## ERR_UNCONFIGURED when there is nothing baked.
+func export_baked(path: String) -> Error:
+	if not baked and _view_mesh == null:
+		return ERR_UNCONFIGURED
+	var meshes: Array = [mesh]
+	meshes.append_array(cluster_meshes_of(mesh))
+	var names := PackedStringArray()
+	for i in meshes.size():
+		names.append(String(name) if meshes.size() == 1 else "%s_cluster_%d" % [name, i])
+	return GADSMeshExporter.export_meshes(meshes, path, _materials(), names)
+
+
 # --- Clusters ------------------------------------------------------------------------------------
 
 ## Draw settings the cluster instances copy from the node (checked each frame while there are

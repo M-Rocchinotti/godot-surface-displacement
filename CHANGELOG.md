@@ -106,6 +106,9 @@ All notable changes to this project are documented here. The format follows
   Project > Tools > **Make Selected Meshes GADSMeshInstance3D** and **Bake Selected
   GADSMeshInstance3D** (undoable); Validate Setup reports stale bakes, unbakeable meshes, a
   missing native library and bakes the budget cut short.
+- **Export baked meshes**: `GADSMeshInstance3D.export_baked()` and an Export button in the
+  inspector write the bake (every cluster) as glTF binary, glTF or OBJ with a material library,
+  GADS materials as plain PBR materials; `GADSMeshExporter` for any meshes.
 - **Procedural materials**: `GADSProcedural` (native `GADSHeightGenerator`) makes tileable
   height maps of eleven kinds (noise, ridged, billow, rock, stones, cracks, bricks, tiles,
   waves, ripples, craters; seed, scale, octaves, warp, gaps, bevel, variation and more) and the

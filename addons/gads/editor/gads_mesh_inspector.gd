@@ -1,7 +1,7 @@
 @tool
 extends EditorInspectorPlugin
-## Bake / Rebuild / Clear buttons, progress and statistics at the top of a GADSMeshInstance3D's
-## inspector. A finished bake and Clear are undoable.
+## Bake / Rebuild / Clear / Diagnose / Export buttons, progress and statistics at the top of a
+## GADSMeshInstance3D's inspector. A finished bake and Clear are undoable.
 
 var undo_redo: EditorUndoRedoManager
 
@@ -25,6 +25,7 @@ class BakePanel extends VBoxContainer:
 	var _clear: Button
 	var _cancel: Button
 	var _diagnose: Button
+	var _export: Button
 	var _diagnosis: Label
 	var _progress: ProgressBar
 	var _status: Label
@@ -40,6 +41,7 @@ class BakePanel extends VBoxContainer:
 		_diagnose = _button(row, "Diagnose", "Show the source mesh's open, non-manifold, UV-seam, hard and surface-border edges.", _on_diagnose)
 		_diagnose.toggle_mode = true
 		_diagnose.button_pressed = node.is_diagnostics_visible()
+		_export = _button(row, "Export", "Write the baked mesh to a .glb, .gltf or .obj file for other tools.", _on_export)
 		_progress = ProgressBar.new()
 		_progress.max_value = 1.0
 		_progress.step = 0.001
@@ -88,6 +90,21 @@ class BakePanel extends VBoxContainer:
 		if _diagnose.button_pressed:
 			_diagnosis.text = GADSMeshDiagnostics.summary(node.diagnose()) + "\nOverlay: open red, non-manifold magenta, UV seams yellow, hard edges cyan, surface borders green."
 
+	func _on_export() -> void:
+		var dialog := EditorFileDialog.new()
+		dialog.file_mode = EditorFileDialog.FILE_MODE_SAVE_FILE
+		dialog.access = EditorFileDialog.ACCESS_FILESYSTEM
+		dialog.title = "Export Baked Mesh"
+		dialog.filters = PackedStringArray(["*.glb ; glTF binary", "*.gltf ; glTF", "*.obj ; Wavefront OBJ"])
+		dialog.current_file = String(node.name).to_snake_case() + ".glb"
+		dialog.file_selected.connect(func(path: String) -> void:
+			var err := node.export_baked(path)
+			_status.text = ("Exported to %s." % path) if err == OK else ("Export failed: %s." % error_string(err))
+			dialog.queue_free())
+		dialog.canceled.connect(dialog.queue_free)
+		EditorInterface.get_base_control().add_child(dialog)
+		dialog.popup_file_dialog()
+
 	func _on_clear() -> void:
 		var before := node.get_bake_state()
 		undo_redo.create_action("Clear GADS bake", UndoRedo.MERGE_DISABLE, node)
@@ -116,6 +133,7 @@ class BakePanel extends VBoxContainer:
 		_bake.disabled = busy or not available
 		_rebuild.disabled = busy or not available
 		_clear.disabled = busy or not node.baked
+		_export.disabled = busy or not node.baked
 		_cancel.visible = busy
 		_progress.visible = busy
 		if busy:
