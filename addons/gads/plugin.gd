@@ -5,7 +5,8 @@ extends EditorPlugin
 ## the selected ground, convert materials (undoable), turn selected meshes into
 ## GADSMeshInstance3D and bake them (undoable), bake the ground of the selected field, prepare
 ## height maps selected in the FileSystem dock, and validate the setup. GADSMeshInstance3D gets
-## Bake / Rebuild / Clear buttons in the inspector; the GADS bottom panel profiles the scene.
+## Bake / Rebuild / Clear buttons in the inspector; the GADS bottom panel profiles the scene; the
+## scene import options get a GADS section (GADSImportTools).
 
 const MENU_ADD_NODE := "GADS: Add GADSManager Node"
 const MENU_ADD_FIELD := "GADS: Add GADSDisplacementField3D for Selected Ground"
@@ -19,9 +20,11 @@ const MENUS: Array[String] = [MENU_ADD_NODE, MENU_ADD_FIELD, MENU_CONVERT, MENU_
 	MENU_HEIGHT, MENU_VALIDATE]
 const MeshInspector := preload("res://addons/gads/editor/gads_mesh_inspector.gd")
 const ProfilerPanel := preload("res://addons/gads/editor/gads_profiler_panel.gd")
+const ImportPlugin := preload("res://addons/gads/editor/gads_import_plugin.gd")
 
 var _mesh_inspector: EditorInspectorPlugin
 var _profiler_panel: Control
+var _import_plugin: EditorScenePostImportPlugin
 
 
 func _enable_plugin() -> void:
@@ -44,6 +47,8 @@ func _enter_tree() -> void:
 	_profiler_panel = ProfilerPanel.new()
 	_profiler_panel.undo_redo = get_undo_redo()
 	add_control_to_bottom_panel(_profiler_panel, "GADS")
+	_import_plugin = ImportPlugin.new()
+	add_scene_post_import_plugin(_import_plugin)
 
 
 func _exit_tree() -> void:
@@ -54,6 +59,8 @@ func _exit_tree() -> void:
 	remove_control_from_bottom_panel(_profiler_panel)
 	_profiler_panel.queue_free()
 	_profiler_panel = null
+	remove_scene_post_import_plugin(_import_plugin)
+	_import_plugin = null
 
 
 ## The GADS bottom panel (profiler, recommendations, Optimize for Target).

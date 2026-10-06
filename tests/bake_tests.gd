@@ -55,6 +55,7 @@ func _run() -> void:
 	await _test("collision", test_collision)
 	await _test("save_and_load", test_save_load)
 	await _test("profiler", test_profiler)
+	await _test("import_options", test_import)
 	if DisplayServer.get_name() != "headless":
 		await _test("renders_like_parallax", test_render)
 		await _test("geometry_to_parallax_by_distance", test_geometry_range)
@@ -921,3 +922,65 @@ func test_runtime_tessellation() -> void:
 	check(node.mesh == node.source_mesh and node.get_instance_shader_parameter(&"gads_baked") in [0.0, null], "turning it off shows the source mesh again")
 	h.clear_scene()
 	await process_frame
+
+
+## The scene import options (GADSImportTools.process, what the import plugin runs): height-mapped
+## materials become GADS materials, "*-gads" meshes become baked GADSMeshInstance3D nodes.
+func test_import() -> void:
+	var field := bump_field(128, 0.08)
+	var height := ImageTexture.create_from_image(field["image"])
+	var scene := Node3D.new()
+	scene.name = "Imported"
+	var group := Node3D.new()
+	group.name = "Props"
+	group.scale = Vector3(2, 2, 2)
+	scene.add_child(group)
+	group.owner = scene
+	var std := StandardMaterial3D.new()
+	std.heightmap_enabled = true
+	std.heightmap_texture = height
+	std.heightmap_scale = 5.0
+	var rock := MeshInstance3D.new()
+	rock.name = "Rock-gads"
+	rock.mesh = plane()
+	rock.material_override = std
+	rock.position = Vector3(1, 0, 0)
+	group.add_child(rock)
+	rock.owner = scene
+	var child := Node3D.new()
+	child.name = "Marker"
+	rock.add_child(child)
+	child.owner = scene
+	var plain := MeshInstance3D.new()
+	plain.name = "Floor"
+	plain.mesh = plane()
+	plain.material_override = std
+	scene.add_child(plain)
+	plain.owner = scene
+	var report := GADSImportTools.process(scene, {"convert_materials": true, "metres_per_repeat": 1.0, "quality": GADSMeshInstance3D.Quality.DRAFT})
+	print("  %s" % report)
+	var node := scene.get_node_or_null("Props/Rock") as GADSMeshInstance3D
+	check(node != null and node.position == Vector3(1, 0, 0) and node.get_node_or_null("Marker") != null and node.owner == scene
+		and node.get_node("Marker").owner == scene, "a mesh named *-gads becomes a GADSMeshInstance3D (suffix gone, children and place kept)")
+	check(GADSMaterials.is_gads_material(node.material_override) and GADSMaterials.is_gads_material(plain.material_override)
+		and is_equal_approx(node.material_override.get_shader_parameter("height_m"), 0.05), "height-mapped materials became GADS materials")
+	check(report["converted"] == 1 and report["meshes"] == 1 and report["baked"] == 1 and node.baked and node.mesh is ArrayMesh
+		and node.mesh.resource_path.is_empty(), "it is baked into the scene (no cache file)")
+	check(scene.get_node_or_null("Floor") is MeshInstance3D and not (scene.get_node("Floor") is GADSMeshInstance3D), "other meshes stay as they are")
+	# The bake used the transform relative to the scene's root (scale 2): the relief stays 5 cm in the world.
+	var v: PackedVector3Array = node.mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX]
+	var bottom := INF
+	for p in v:
+		bottom = minf(bottom, p.y)
+	# height_center 1: the relief goes down to -height_m (5 cm) where the bump map is 0.
+	check(absf(bottom * 2.0 + 0.05) < 0.003, "the bake follows the scene's scale (lowest %.4f m in object space, x 2)" % bottom)
+	var packed := PackedScene.new()
+	check(packed.pack(scene) == OK, "the processed scene packs (what the importer saves)")
+	var again := packed.instantiate()
+	var reloaded := again.get_node("Props/Rock") as GADSMeshInstance3D
+	check(reloaded.baked and reloaded.mesh is ArrayMesh, "an instance of it shows the bake")
+	again.free()
+	report = GADSImportTools.process(scene, {"meshes": GADSImportTools.Meshes.ALL_GADS, "bake": false})
+	check(report["meshes"] == 1 and scene.get_node("Floor") is GADSMeshInstance3D and not (scene.get_node("Floor") as GADSMeshInstance3D).baked,
+		"Every Mesh With a GADS Material picks the rest (unbaked when bake is off)")
+	scene.free()

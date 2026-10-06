@@ -34,12 +34,20 @@ void fragment() {
 	vec2 uv = gads_layer_uv(pebble_layer, pebble_centre.xz);
 	vec3 albedo = vec3(0.5);
 	vec3 orm = vec3(1.0);
-	// Constant index per draw is not guaranteed, so branch explicitly.
-	for (int i = 0; i < GADS_FIELD_LAYERS; i++) {
-		if (i == pebble_layer) {
-			albedo = textureLod(layer_albedo[i], uv, albedo_lod).rgb * layer_d[i].rgb;
-			orm = textureLod(layer_orm[i], uv, albedo_lod).rgb;
-		}
+	// Constant index per draw is not guaranteed, so branch explicitly (with constant indices: the
+	// Compatibility renderer indexes sampler arrays with nothing else).
+	if (pebble_layer == 0) {
+		albedo = textureLod(layer_albedo[0], uv, albedo_lod).rgb * layer_d[0].rgb;
+		orm = textureLod(layer_orm[0], uv, albedo_lod).rgb;
+	} else if (pebble_layer == 1) {
+		albedo = textureLod(layer_albedo[1], uv, albedo_lod).rgb * layer_d[1].rgb;
+		orm = textureLod(layer_orm[1], uv, albedo_lod).rgb;
+	} else if (pebble_layer == 2) {
+		albedo = textureLod(layer_albedo[2], uv, albedo_lod).rgb * layer_d[2].rgb;
+		orm = textureLod(layer_orm[2], uv, albedo_lod).rgb;
+	} else if (pebble_layer == 3) {
+		albedo = textureLod(layer_albedo[3], uv, albedo_lod).rgb * layer_d[3].rgb;
+		orm = textureLod(layer_orm[3], uv, albedo_lod).rgb;
 	}
 	// A few pixels wide, a pebble is shaded like the mip-mapped ground around it: its normals
 	// bend towards the ground's (up) between 1 and 4 m. Otherwise its side facing the camera,

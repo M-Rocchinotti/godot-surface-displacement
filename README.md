@@ -1,6 +1,6 @@
 # GADS - Godot Adaptive Displacement System
 
-Adaptive surface displacement for Godot 4.7's Forward+ renderer: gravel that reads as
+Adaptive surface displacement for Godot 4.7 (Forward+, Mobile and Compatibility): gravel that reads as
 individually scattered stones, cobblestones as real stones, brick walls with deep joints - from
 ordinary PBR texture sets with a height map. The goal is to make true geometric displacement in
 Godot as easy as applying a normal map. GADS grew out of the Surface Displacement addon (0.1);
@@ -81,8 +81,12 @@ what the engine allows:
 
 - **Godot 4.7** or newer (developed and tested on 4.7.2-stable).
 - The **Forward+** renderer (Vulkan tested on Windows 10, NVIDIA GeForce GTX 1080; every test
-  suite also passes on Linux with Mesa's lavapipe software Vulkan, as in CI). Mobile and
-  Compatibility are untested; the near-camera geometry and scatter need a rendering device.
+  suite also passes on Linux with Mesa's lavapipe software Vulkan, as in CI). The **Mobile** and
+  **Compatibility** renderers work too (`tests/renderer_tests.gd` on lavapipe and llvmpipe:
+  every variant, the field, pebbles, terrain, depth write and deformation); their performance is
+  not measured. On Compatibility the near-camera field cannot capture the ground at runtime: it
+  needs a ground bake saved from the editor (Bake Ground with Forward+ or Mobile) and stays off
+  without one; a GADSTerrain3D makes its own ground data and works there.
 - Height maps with more than 8 bits (16-bit PNG or EXR). 8-bit height maps work but terrace
   visibly once displaced by more than a few centimetres.
 - Baked displacement (`GADSMeshInstance3D`) needs the GADS native library, which ships for
@@ -405,6 +409,14 @@ print(rock.get_bake_summary())
 A bake made while the game runs is not written into `res://` (read-only in an exported game): it
 stays in memory, unless `cache_directory` is under `user://`.
 
+**On import.** The scene import options (Import dock, or Advanced Import Settings) have a GADS
+section: `convert_materials` turns height-mapped StandardMaterial3D / ORMMaterial3D into GADS
+materials (`metres_per_repeat` sets the depth, as Convert Materials does), and `meshes` turns the
+meshes named `*-gads` (the suffix is dropped, like Godot's own `-col` hints), or every mesh that
+draws a GADS material, into GADSMeshInstance3D, baked during the import at `quality` with the
+bake stored in the imported scene (`bake`). `GADSImportTools.process(scene, options)` does the same
+to any scene from a script.
+
 **Runtime (view-dependent) tessellation.** With `view_dependent` on, the node tessellates again
 in the background while the game runs, for the camera's position: dense where the camera looks
 closely, coarser with distance, so the error stays under `pixel_error` pixels on screen (the
@@ -598,11 +610,14 @@ VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json xvfb-run -a -s "-screen 0 
 | field tests (headed, 36 checks) | **Vertex heights** against the height map: 1 539 vertices in all 4 rings, largest error 0.03 mm. **Over a baked ground** (slope, kerb, hole, other ground, the bake's edge): 12 966 vertices against `GADSGroundBake.sample()`, largest error 0.20 mm. **The field's own parallax** against the CPU ray tracer: 90th percentile 0.05 / 0.07 / 0.10 mm (steep / 45 degrees / grazing); its self-shadow agrees with the CPU height-field shadow on 99.8 % of pixels. **No cracks**: 0 background pixels inside the grid from 6 camera positions. **No swimming**: 0 mm height change in the inner ring while the camera walks; in the morph bands at most 0.96 mm per 1 cm camera step (limit 2 mm). **Field vs parallax ground**: 0.15 % mean luminance difference inside the grid (limit 1 %), 0.08 % in the last metre before the relief fades (limit 0.5 %), 0 beyond the grid. **Ground bake**: 1 698 points within 1.9 mm of the mesh surface. **Pebbles stay put**: 0 of 1 536 pebble pixels change when the camera moves 1.24 m across cell boundaries. Lifetime: presets, resizes, a second viewport, freeing the scene, a scene change during a bake. All four demo scenes render at every preset, their ground faces up, and their runtime bakes take about 0.3 s (printed by the test). The demo's fly camera flies. |
 | bake tests (headed, 64 checks; headless without the render comparison) | **Accuracy**: points inside the baked triangles of a 60 mm bump against the height field at the same uv: largest distance 0.47 mm at a 0.5 mm tolerance (736 triangles). **Adaptivity**: 107 times the triangle density on the bump as on the flat plane. **Closed meshes stay closed** (every edge in exactly two triangles after welding): a box with triplanar and with UV mapping (seams, hard edges), a UV sphere (seam, poles), a world-mapped cylinder (caps). Locked borders do not move (free ones by 22 mm); the budget caps the count exactly (3 000) and the statistics report the error left; identical results for repeated bakes and any thread count; scale 2 halves the object-space displacement (the tolerance is in world metres, the triangle count stays the same); a rotated plane moves along its own normal; a plane's 45-45-90 triangles stay 45-45-90 over 40 001 triangles; normals follow the slope, tangents along +u and perpendicular, `CUSTOM0` / `CUSTOM1` rest data, 7 LODs sharing the vertices; cancel stops a 5 M-triangle bake within milliseconds. **Node**: background bake with progress, the cache file the scene refers to, reuse of the cached file, Rebuild, Clear, the source untouched; staleness after a new relief depth, quality, source edit, scale, or (world mapping) position, not after moving a UV-mapped mesh; trimesh collision of its own resolution that a ray hits 0.4 mm from the relief's top, removed with collision None; a saved and reloaded scene refers to the bake and is not stale. **Render**: on the pixels where the relief shows, a baked mesh differs from the parallax render of the same material by 0.0065 (mean), the normal map applied on top of the geometry by 0.091; a baked mesh marches no parallax steps; the Tessellation view. |
 | terrain tests (headed, 32 checks) | **Heights**: every vertex is the heightmap's (0.003 mm), between vertices the triangles' plane, outside nothing. **Chunk LODs**: each halves the quads (skirts included), keys increase and equal each LOD's largest height error, and every chunk's skirts hang deeper than the widest gap two LODs can leave on its border. **Layers**: rock on an 80-degree flank, snow on the peak, the first layer alone on low gentle ground; the combined layered material keeps each layer's textures, texture size and vertex-colour mask; a splat map overrides the rules. **Collision**: 200 rays hit the HeightMapShape3D within 0.02 mm of the drawn surface. **Detail field**: its ground data has texel centres on the vertices and stays within the field's lift (1.6 mm of 4.3 mm) of the drawn surface on 378 displaced points, with the dominant layer right on all. Three property changes in a frame rebuild once. **Render**: the terrain draws from above and is culled from below (front faces wind right); the engine draws 14 times fewer primitives far away (its mesh LOD picks the coarser index LODs). |
+| Compatibility and Mobile renderers (`tests/renderer_tests.gd`, 6 checks each) | All 30 surface variants compile and draw; a box 0.5 m in front of a depth-writing wall shows (the depth lands in the renderer's depth range: OpenGL's clip depth is -1..1); a deformation mark changes the floor's picture under it (luminance by 0.39) and nothing beside it; the five demo scenes draw at Low and Ultra; the gravel path's field captures its ground on Mobile, and on Compatibility stays off instead of drawing a flat sheet. Shader compile errors fail the suite through the log scan. |
 | demo / editor smoke | The demo and the editor with the demo open run without script errors, engine errors or leaks. |
 | standalone addon (shipped archive) | Builds the `git archive` users download (`.gitattributes` export rules applied), checks it holds only `LICENSE` and `addons/gads` with no Markdown link to a file it does not ship, puts it alone into a fresh project, lets the plugin register its globals and checks that a POM ground and a GADSDisplacementField3D with pebbles render there. |
 | editor plugin actions | In a real editor: Add GADSManager Node, Add GADSDisplacementField3D, Convert Materials (a mesh and a CSG shape), Bake Ground, Make Selected Meshes GADSMeshInstance3D and Bake Selected GADSMeshInstance3D (the bake saved into `res://gads_baked/`), each with undo and redo; the inspector's Bake / Rebuild / Clear buttons; a second bake that replaces the first while it is in use; Validate Setup; Prepare Height Maps; a save that writes no internal nodes, keeps the materials' saved variant and the field's properties (the node's preset does not touch them in the editor) and refers to the bake files instead of embedding them. |
 | offline Blender bake (`tests/test_blender_bake.py`) | Vertex-exact displacement against the height map for the primitives and mappings, decimation and glTF export. |
-| mutation checks (`tests/run_mutations.py`) | Re-introduces one bug at a time and expects its tests to fail: height map without mipmaps, march at mip 0, wrong parallax sign, no binary refinement, world-planar rotation sign, triplanar X plane mirrored, zero-weight planes marched, no distance fade, `LIGHT_VERTEX` not written, self-shadow ray reversed, Lambert instead of Burley in `light()`, a clamped GGX term, no energy compensation, depth written by every POM variant, depth not rounded, no geomorph at ring seams, no grid snapping, vertex fetch at mip 0, relief pushed down, pebbles seeded by window slot, a bake that ignores the layers, a feature switch that adds features, an inverted remap that flattens, the field's parallax sign, the field's self-shadow direction, the field's relief measured from ground + lift, kerbs not marked (shader and CPU), ground beyond the bake displaced, local lights that never or always self-shadow, field parameters set when unchanged, a scatter that stops following its field, presets that miss CSG shapes, Custom settings not followed, the demo camera's script attached after it is ready, a baked mesh that still marches, a baked mesh lit by the full normal map on top of its slope, a bake key that ignores scale and rotation, the bake cache ignored, a collision body saved with the scene, the detail layer outside the slab, layers blended without heights, a slope band ignored. Each prints what the failing tests measured. On the GTX 1080 the first 29 were all caught; on Mesa's lavapipe 35 of the 36 are, all but "depth not rounded": there the depth pre-pass and the colour pass agree without the rounding, so the bug it guards against does not occur. The mutations added in 0.2 (baked meshes, detail and layered materials) are all caught on lavapipe. |
+| mutation checks (`tests/run_mutations.py`) | Re-introduces one bug at a time and expects its tests to fail: height map without mipmaps, march at mip 0, wrong parallax sign, no binary refinement, world-planar rotation sign, triplanar X plane mirrored, zero-weight planes marched, no distance fade, `LIGHT_VERTEX` not written, self-shadow ray reversed, Lambert instead of Burley in `light()`, a clamped GGX term, no energy compensation, depth written by every POM variant, depth not rounded, no geomorph at ring seams, no grid snapping, vertex fetch at mip 0, relief pushed down, pebbles seeded by window slot, a bake that ignores the layers, a feature switch that adds features, an inverted remap that flattens, the field's parallax sign, the field's self-shadow direction, the field's relief measured from ground + lift, kerbs not marked (shader and CPU), ground beyond the bake displaced, local lights that never or always self-shadow, field parameters set when unchanged, a scatter that stops following its field, presets that miss CSG shapes, Custom settings not followed, the demo camera's script attached after it is ready, a baked mesh that still marches, a baked mesh lit by the full normal map on top of its slope, a bake key that ignores scale and rotation, the bake cache ignored, a collision body saved with the scene, the detail layer outside the slab, layers blended without heights, a slope band ignored, a runtime tessellation that never refreshes, world-planar parallax that
+ignores deformation, terrain skirts too shallow, the terrain's ground data off its vertices, the
+Vulkan depth range on OpenGL. Each prints what the failing tests measured. On the GTX 1080 the first 29 were all caught; on Mesa's lavapipe 35 of the 36 are, all but "depth not rounded": there the depth pre-pass and the colour pass agree without the rounding, so the bug it guards against does not occur. The mutations added in 0.2 (baked meshes, detail and layered materials) are all caught on lavapipe. |
 
 Every suite fails on engine errors, script errors or leak reports ("RID ... was leaked",
 "ObjectDB instance ... leaked", "resources still in use") in its log. The tests compare against
@@ -652,6 +667,9 @@ pass because two errors cancel.
   still use Burley diffuse (the flat and POM variants follow the setting).
 - **One camera.** Fields and scatters follow one camera (the viewport's, or `camera`); split
   screen or a second viewport sees the same grid, displaced around the first camera.
+- **On Compatibility the ground cannot be captured** (the renderer's approximate sRGB round trip
+  breaks the 16-bit height code): a field there needs a bake saved from the editor, else it stays
+  off and the ground keeps its parallax.
 - **The ground bake** is a static height field: moving ground or ground edited at runtime needs
   a new bake (`bake_ground()`, a few frames: 0.2-0.3 s for the demo's 90 x 90 m at 5 cm texels, as
   printed by `tests/field_tests.gd`; the field is hidden meanwhile). Texels at the bake's edge
@@ -661,7 +679,8 @@ pass because two errors cancel.
   blended by the bake's weights; there is no height-based blending between layers.
 - **Height map precision.** 8-bit heights terrace. The Poly Haven EXRs used by the demo are
   float; other sources may not be.
-- The **Mobile** and **Compatibility** renderers and XR are untested.
+- On the **Mobile** and **Compatibility** renderers the presets' costs are not measured (they
+  were made for Forward+); start at Low on mobile hardware. XR is untested.
 
 ## Troubleshooting
 

@@ -29,6 +29,8 @@ extends Resource
 ## The layer materials the codes refer to, in order (resource paths or names), for validation.
 @export var layer_names := PackedStringArray()
 
+static var _compatibility_noted := false
+
 const CAPTURE_SHADER := preload("res://addons/gads/render/shaders/gads_ground_capture.gdshader")
 const TILE_PX := 2048
 ## Default steepest slope (rise / run between neighbouring texels) that still counts as ground:
@@ -181,8 +183,16 @@ static func bake(meshes: Array[MeshInstance3D], layers: Array, texel: float, bou
 	if meshes.is_empty():
 		push_warning("GADSGroundBake: nothing to bake (no ground meshes).")
 		return null
+	if DisplayServer.get_name() == "headless":
+		push_warning("GADSGroundBake: baking needs a renderer (the ground stays flat); not available with --headless.")
+		return null
 	if RenderingServer.get_rendering_device() == null:
-		push_warning("GADSGroundBake: baking needs a rendering device (the ground stays flat); not available with --headless.")
+		# The Compatibility renderer passes the capture through an approximate sRGB round trip that
+		# the 16-bit height code does not survive. A bake saved from the editor (Forward+ or
+		# Mobile) or GADSGroundBake.from_arrays() works there. Expected, so a message, not a warning.
+		if not _compatibility_noted:
+			_compatibility_noted = true
+			print("GADS: the Compatibility renderer cannot capture the ground; a GADSDisplacementField3D needs a ground bake saved from the editor (Bake Ground with Forward+ or Mobile) and stays off without one.")
 		return null
 	var tree := meshes[0].get_tree()
 	var aabb := AABB()

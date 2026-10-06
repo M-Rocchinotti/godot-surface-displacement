@@ -232,6 +232,9 @@ void fragment() {
 	// rounding step: a few pixels per million (README, Limitations).
 	vec4 clip = PROJECTION_MATRIX * vec4(VERTEX + offset_view, 1.0);
 	float depth = clip.z / clip.w;
+#if CURRENT_RENDERER == RENDERER_COMPATIBILITY
+	depth = depth * 0.5 + 0.5; // OpenGL clip depth is -1..1; DEPTH (gl_FragDepth) is 0..1
+#endif
 	float depth_step = exp2(floor(log2(max(depth, 1e-30))) - 12.0);
 	DEPTH = round(depth / depth_step) * depth_step;
 	if (IN_SHADOW_PASS) {

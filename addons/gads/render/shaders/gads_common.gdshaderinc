@@ -22,6 +22,17 @@ global uniform sampler2D gads_deform;        // runtime deformation: r = depth w
 global uniform vec4 gads_deform_params;      // window origin x, z (m), window side (m), deepest deformation (m; 0 = off)
 global uniform vec4 gads_deform_time;        // now (s), recovery (m/s), unused, unused
 
+// Lookups into the 4-element layer sampler arrays by a loop index. GLSL 1.30+ (the Compatibility
+// renderer) indexes sampler arrays only with constant expressions, so there a lookup picks the
+// element by branching; Vulkan indexes directly.
+#if CURRENT_RENDERER == RENDERER_COMPATIBILITY
+#define GADS_LAYER_LOD(arr, i, uv, lod) ((i) == 0 ? textureLod(arr[0], uv, lod) : (i) == 1 ? textureLod(arr[1], uv, lod) : (i) == 2 ? textureLod(arr[2], uv, lod) : textureLod(arr[3], uv, lod))
+#define GADS_LAYER_GRAD(arr, i, uv, dx, dy) ((i) == 0 ? textureGrad(arr[0], uv, dx, dy) : (i) == 1 ? textureGrad(arr[1], uv, dx, dy) : (i) == 2 ? textureGrad(arr[2], uv, dx, dy) : textureGrad(arr[3], uv, dx, dy))
+#else
+#define GADS_LAYER_LOD(arr, i, uv, lod) textureLod(arr[i], uv, lod)
+#define GADS_LAYER_GRAD(arr, i, uv, dx, dy) textureGrad(arr[i], uv, dx, dy)
+#endif
+
 // Distance fade of the relief (1 near, 0 beyond the fade end).
 float gads_fade(float view_distance) {
 	return 1.0 - smoothstep(gads_pom_range.x, max(gads_pom_range.y, gads_pom_range.x + 1e-3), view_distance);

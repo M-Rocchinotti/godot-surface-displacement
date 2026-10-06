@@ -70,6 +70,16 @@ All notable changes to this project are documented here. The format follows
   by what its bilinear heights can miss); `get_height()`, `get_normal()`,
   `get_layer_weights()`. `tests/terrain_tests.gd`, a demo scene (hills with a rover leaving
   tracks) and validator checks.
+- **Mobile and Compatibility renderers**: everything compiles and draws there. The field and
+  pebble shaders index their layer sampler arrays with constants on Compatibility (GLSL 1.30+
+  forbids a loop index there; Vulkan keeps indexing directly), and the depth write maps OpenGL's
+  -1..1 clip depth to 0..1. On Compatibility a field cannot capture its ground at runtime (the
+  renderer's approximate sRGB round trip breaks the height code): it stays off without a saved
+  bake instead of drawing a flat sheet. `tests/renderer_tests.gd` runs on both in `run_all.py` and
+  CI (CI installs Mesa's llvmpipe for OpenGL).
+- **Import automation**: a GADS section in the scene import options (convert height-mapped
+  materials; meshes named `*-gads`, or every mesh with a GADS material, become GADSMeshInstance3D
+  baked during the import, the bake stored in the imported scene). `GADSImportTools.process()`.
 - Editor: Bake / Rebuild / Clear / Cancel with progress and statistics in the inspector (undoable);
   Project > Tools > **Make Selected Meshes GADSMeshInstance3D** and **Bake Selected
   GADSMeshInstance3D** (undoable); Validate Setup reports stale bakes, unbakeable meshes, a

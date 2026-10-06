@@ -44,7 +44,8 @@ static func make_root(scene_name: String, sun_elevation: float, sun_azimuth: flo
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
 	env.ambient_light_energy = 0.8
 	env.tonemap_mode = Environment.TONE_MAPPER_AGX
-	env.ssao_enabled = true
+	# The Mobile renderer has no SSAO (and warns when asked for it).
+	env.ssao_enabled = RenderingServer.get_current_rendering_method() != "mobile"
 	env.ssao_radius = 0.6
 	env.ssao_intensity = 1.5
 	env.fog_enabled = true

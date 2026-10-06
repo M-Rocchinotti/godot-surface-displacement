@@ -1,7 +1,8 @@
 #!/usr/bin/env python
 """Run every GADS test suite and scan the engine logs for problems.
 
-    python tests/run_all.py              # import, variants, logic, render, field, bake, terrain, demo and editor
+    python tests/run_all.py              # import, variants, logic, render, field, bake, terrain, the
+                                         # Compatibility and Mobile renderers, demo and editor
                                          # smoke, shipped archive, editor plugin, Blender bake
     python tests/run_all.py --bench      # ... plus the 1080p preset benchmark (waits for an idle GPU)
     python tests/run_all.py --mutations  # ... plus tests/run_mutations.py (slow)
@@ -33,6 +34,10 @@ SUITES = [
     ("field tests", ["--script", "tests/field_tests.gd"], r"field tests: (\d+) passed, (\d+) failed"),
     ("bake tests", ["--script", "tests/bake_tests.gd"], r"bake tests: (\d+) passed, (\d+) failed"),
     ("terrain tests", ["--script", "tests/terrain_tests.gd"], r"terrain tests: (\d+) passed, (\d+) failed"),
+    ("Compatibility renderer", ["--rendering-method", "gl_compatibility", "--script", "tests/renderer_tests.gd"],
+     r"renderer tests \(gl_compatibility\): (\d+) passed, (\d+) failed"),
+    ("Mobile renderer", ["--rendering-method", "mobile", "--script", "tests/renderer_tests.gd"],
+     r"renderer tests \(mobile\): (\d+) passed, (\d+) failed"),
     ("demo smoke", ["res://demo/demo_main.tscn", "--quit-after", "400"], None),
     ("editor smoke", ["--editor", "res://demo/demo_main.tscn", "--quit-after", "300"], None),
 ]

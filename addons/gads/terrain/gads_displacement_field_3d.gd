@@ -31,6 +31,10 @@ signal baked
 	set(value):
 		ground_bake = value
 		_ground_dirty = true
+		if value != null and _no_ground:
+			_no_ground = false
+			if _mesh_instance != null:
+				_mesh_instance.visible = is_visible_in_tree() and not _baking
 @export_group("Ground")
 ## Group of the ground meshes (their descendants count too) that the bake captures.
 @export var ground_group := &"gads_ground"
@@ -94,6 +98,7 @@ var _ground_dirty := true
 var _mesh_dirty := true
 var _params_dirty := true
 var _baking := false
+var _no_ground := false # a runtime bake of existing ground meshes failed
 var _ground_texture: ImageTexture
 var _flat_height := NAN
 var _height_range := Vector2(-1.0, 1.0)
@@ -104,7 +109,7 @@ var _params_version := 0
 func _enter_tree() -> void:
 	add_to_group(&"gads_field")
 	if _mesh_instance != null:
-		_mesh_instance.visible = not _baking
+		_mesh_instance.visible = not _baking and not _no_ground
 	else:
 		_material = ShaderMaterial.new()
 		_material.shader = _field_shader(_quality)
@@ -132,7 +137,7 @@ func _exit_tree() -> void:
 
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_VISIBILITY_CHANGED and _mesh_instance != null:
-		_mesh_instance.visible = is_visible_in_tree() and not _baking
+		_mesh_instance.visible = is_visible_in_tree() and not _baking and not _no_ground
 
 
 ## Starts baking the ground from [member ground_group]; [signal baked] is emitted when done
@@ -162,8 +167,11 @@ static func _bake_and_apply(field_ref: WeakRef, meshes: Array[MeshInstance3D], b
 func _finish_bake(result: GADSGroundBake) -> void:
 	_baking = false
 	ground_bake = result
+	# Without the ground it would draw a flat sheet at the node's height across the real ground:
+	# it stays off (the ground keeps its parallax) until a bake is assigned.
+	_no_ground = result == null
 	# Out of the tree the mesh instance is not drawn anyway; _enter_tree() shows it again.
-	_mesh_instance.visible = true
+	_mesh_instance.visible = not _no_ground and is_visible_in_tree()
 	baked.emit()
 
 

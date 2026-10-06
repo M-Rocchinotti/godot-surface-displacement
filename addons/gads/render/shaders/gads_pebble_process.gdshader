@@ -80,11 +80,11 @@ void process() {
 			continue;
 		}
 		vec2 uv = gads_layer_uv(i, xz);
-		float h = textureLod(layer_height[i], uv, 0.0).r;
+		float h = GADS_LAYER_LOD(layer_height, i, uv, 0.0).r;
 		h = gads_remap_height(h, layer_a[i].yz);
 		// The field's innermost geometry samples one texel per vertex; pebbles must not sink
 		// below it (its depth hides them even where the parallax shows a deeper gap).
-		float hp = textureLod(layer_height[i], uv, max(log2(base_spacing) + layer_e[i].w, 0.0)).r;
+		float hp = GADS_LAYER_LOD(layer_height, i, uv, max(log2(base_spacing) + layer_e[i].w, 0.0)).r;
 		hp = gads_remap_height(hp, layer_a[i].yz);
 		relief += w[i] * layer_a[i].x * h;
 		relief_proxy += w[i] * layer_a[i].x * hp;

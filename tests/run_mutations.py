@@ -36,9 +36,11 @@ DEMO = "demo/demo_main.gd"
 MESH_NODE = "addons/gads/geometry/gads_mesh_instance_3d.gd"
 MESH_BAKER = "addons/gads/geometry/gads_mesh_baker.gd"
 HEIGHT_IMPORT = "demo/textures/clean_pebbles/clean_pebbles_height.exr.import"
+TERRAIN = "addons/gads/terrain/gads_terrain_3d.gd"
 
 # (name, what it breaks, [(file, old, new)], [(suite, name filter)]); suite is "logic",
-# "render" (tests/render_tests.gd), "field" (tests/field_tests.gd) or "bake" (tests/bake_tests.gd).
+# "render" (tests/render_tests.gd), "field" (tests/field_tests.gd), "bake" (tests/bake_tests.gd),
+# "terrain" (tests/terrain_tests.gd) or "compat" (tests/renderer_tests.gd on Compatibility).
 MUTATIONS = [
     ("no mipmaps", "the demo height map imported without mipmaps (the crater's POM bug)",
      [(HEIGHT_IMPORT, "mipmaps/generate=true", "mipmaps/generate=false")],
@@ -178,6 +180,21 @@ MUTATIONS = [
     ("bake collision body saved", "the collision body is an ordinary child, saved with the scene",
      [(MESH_NODE, "		add_child(_body, false, Node.INTERNAL_MODE_BACK)", "		add_child(_body)")],
      [("bake", "collision")]),
+    ("runtime tessellation never refreshes", "a view-dependent mesh keeps its first tessellation however far the camera moves",
+     [(MESH_NODE, "		var moved := eye.distance_to(_view_eye) > view_refresh * dist", "		var moved := false")],
+     [("bake", "runtime_tessellation")]),
+    ("world parallax ignores deformation", "world-planar materials draw the relief as if nothing pressed it down",
+     [(SURFACE, "	float deform = gads_deformation(gads_world_pos.xz);", "	float deform = 0.0;")],
+     [("render", "deformation")]),
+    ("terrain skirts too shallow", "skirts as deep as half the largest LOD error leave gaps between chunks",
+     [(TERRAIN, "	var skirt := 2.0 * largest + _spacing * 0.05 + 0.01", "	var skirt := 0.5 * largest")],
+     [("terrain", "chunk_lods")]),
+    ("terrain ground data off the vertices", "the detail field's ground texels sit half a texel off the terrain's vertices",
+     [(TERRAIN, "_origin - Vector2(texel, texel) * 0.5 + Vector2(gp.x, gp.z), texel)", "_origin + Vector2(gp.x, gp.z), texel)")],
+     [("terrain", "ground_data")]),
+    ("compatibility depth range", "the depth write uses Vulkan's 0..1 clip depth on OpenGL's -1..1",
+     [(SURFACE, "	depth = depth * 0.5 + 0.5; // OpenGL clip depth is -1..1; DEPTH (gl_FragDepth) is 0..1", "")],
+     [("compat", "")]),
 ]
 
 SUITES = {
@@ -185,6 +202,9 @@ SUITES = {
     "render": (["--script", "tests/render_tests.gd"], r"render tests: \d+ passed, \d+ failed"),
     "field": (["--script", "tests/field_tests.gd"], r"field tests: \d+ passed, \d+ failed"),
     "bake": (["--script", "tests/bake_tests.gd"], r"bake tests: \d+ passed, \d+ failed"),
+    "terrain": (["--script", "tests/terrain_tests.gd"], r"terrain tests: \d+ passed, \d+ failed"),
+    "compat": (["--rendering-method", "gl_compatibility", "--script", "tests/renderer_tests.gd"],
+               r"renderer tests \(gl_compatibility\): \d+ passed, \d+ failed"),
 }
 
 

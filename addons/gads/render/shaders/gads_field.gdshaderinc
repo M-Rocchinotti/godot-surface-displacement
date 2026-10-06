@@ -77,7 +77,7 @@ vec2 gads_layer_uv(int i, vec2 xz) {
 }
 
 float gads_layer_h(int i, vec2 xz, float lod) {
-	float h = textureLod(layer_height[i], gads_layer_uv(i, xz), lod).r;
+	float h = GADS_LAYER_LOD(layer_height, i, gads_layer_uv(i, xz), lod).r;
 	return gads_remap_height(h, layer_a[i].yz);
 }
 
@@ -254,12 +254,12 @@ void fragment() {
 		vec2 uv = gads_layer_uv(i, xz_hit);
 		vec2 ddx = gads_layer_uv(i, wpos.xz + dpdx) - gads_layer_uv(i, wpos.xz);
 		vec2 ddy = gads_layer_uv(i, wpos.xz + dpdy) - gads_layer_uv(i, wpos.xz);
-		albedo += w[i] * textureGrad(layer_albedo[i], uv, ddx, ddy).rgb * layer_d[i].rgb;
-		vec3 o = textureGrad(layer_orm[i], uv, ddx, ddy).rgb;
+		albedo += w[i] * GADS_LAYER_GRAD(layer_albedo, i, uv, ddx, ddy).rgb * layer_d[i].rgb;
+		vec3 o = GADS_LAYER_GRAD(layer_orm, i, uv, ddx, ddy).rgb;
 		orm += w[i] * vec3(mix(1.0, o.r, layer_c[i].z), o.g * layer_c[i].w, o.b * layer_d[i].a);
 		vec3 right = vec3(layer_c[i].x, 0.0, -layer_c[i].y);
 		vec3 image_up = -vec3(layer_c[i].y, 0.0, layer_c[i].x);
-		nsum += w[i] * gads_apply_normal_map(textureGrad(layer_normal[i], uv, ddx, ddy).rgb, right, image_up, n, layer_a[i].w);
+		nsum += w[i] * gads_apply_normal_map(GADS_LAYER_GRAD(layer_normal, i, uv, ddx, ddy).rgb, right, image_up, n, layer_a[i].w);
 		spec += w[i] * layer_e[i].x;
 	}
 	ALBEDO = albedo;

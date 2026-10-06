@@ -1,6 +1,6 @@
 # GADS - Godot Adaptive Displacement System (Godot 4.7 addon)
 
-Adaptive surface displacement for the Forward+ renderer: gravel that reads as individually
+Adaptive surface displacement for Godot's Forward+, Mobile and Compatibility renderers: gravel that reads as individually
 scattered stones, cobblestones as real stones, brick walls with deep joints.
 
 - **Parallax occlusion mapping, done properly**, for UV, world-planar and triplanar mapping:
@@ -39,7 +39,8 @@ scattered stones, cobblestones as real stones, brick walls with deep joints.
 4. Ground: select the ground mesh, **Add GADSDisplacementField3D**, set the ground material's
    `height_center` to 0 (relief above the ground). Optionally add a GADSPebbleScatter3D child.
 5. Props whose outline should follow the relief: **Make Selected Meshes GADSMeshInstance3D**,
-   then **Bake** in the inspector.
+   then **Bake** in the inspector; or name them `*-gads` in your modelling tool and they arrive
+   baked (scene import options, GADS section).
 6. **Validate Setup** reports what stands in the way.
 
 Your own shaders: `render_mode diffuse_burley, specular_schlick_ggx;`, define `GADS_MAPPING_UV` /
