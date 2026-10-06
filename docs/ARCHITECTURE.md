@@ -317,3 +317,88 @@ same rotation is applied to the full-resolution sample (Reoriented Normal Mappin
 backwards), and that detail goes on the geometry's normal and tangents. Where triangles are
 smaller than a pixel the two samples agree and the geometry alone shades; without a normal map
 the detail is flat and the geometry shades too.
+
+**Clusters.** With `cluster_triangles` the tessellator's output is split into spatial clusters
+after refinement: the triangles' centroids are split at the median along the longest axis of
+their bounding box until a part holds at most the target (a total order on ties keeps it
+deterministic), all surfaces together, and each cluster re-indexes its vertices. Every cluster
+gets its own LODs from `ImporterMesh.generate_lods`, which locks open borders, so neighbouring
+clusters at different LODs still share their border vertices. The node draws the first cluster
+itself and the others with internal children that copy its draw settings (checked each frame
+while clusters exist). Godot measures a visibility range from each instance's own AABB centre,
+so with a `geometry_range` every cluster would switch to parallax at a different moment; instead
+each cluster's rendering instance gets the fallback's instance as its visibility parent (set on
+the RenderingServer: a node's `visibility_parent` would be inherited by its whole subtree, the
+fallback included), and they all show exactly while the fallback is hidden by its range.
+
+**Runtime (view-dependent) tessellation.** The same tessellator with a view position: a
+triangle's tolerance becomes `max(max_error, pixel_error * distance / focal_px)`, where distance
+is from the eye to the triangle's bounding sphere and `focal_px` the pixels per radian of the
+camera; no edge is split below `min_edge_pixels` on screen, and refinement takes the largest
+error relative to its tolerance first, so the budget goes where the error shows most. Without a
+view the tolerance is `max_error` everywhere and the output is unchanged. `GADSMeshInstance3D`
+runs it in the background when the camera has moved a quarter of its distance (or zoomed) and
+swaps the mesh when it is ready; heights where refinement stopped early are footprint-filtered as
+in a bake, so far, coarse triangles do not alias.
+
+## 10. Runtime deformation (`GADSDeformationField`)
+
+A depth map over a square window of world XZ: `resolution` texels of `size_m / resolution`,
+addressed toroidally (a world texel `c` lives at `c mod resolution`), so when the window follows
+its node only the rows and columns that left it are cleared and every mark keeps its texel. Each
+texel holds two floats: the depth when stamped and the stamp time. Recovery is not simulated:
+the shaders and `get_depth()` both compute `depth - recovery_rate * (now - stamp time)` (clamped
+at 0), so marks refill without any per-frame work and a rate set later applies to the time
+already passed. Painting (`stamp`, `stroke`, `stamp_image`) runs on the CPU over the texels within
+reach, combining by DEEPEN (max), ADD or SET; the map is uploaded (RGF) once per frame in which it
+changed.
+
+Three shader globals carry it: the texture, the window (origin, side, deepest depth: 0 turns it
+off) and the clock (now, recovery). `gads_deformation(xz)` samples it bilinearly with wrapped
+`texelFetch` (no sampler wrap mode does modulo addressing). The displacement field subtracts it
+from the relief in its vertex shader and starts its march below the surface by `max_depth`; the
+surface shaders shift the parallax plane down by the depth (world-planar: everywhere; triplanar:
+the top plane; UV: scaled by how much the surface faces up).
+
+## 11. `GADSTerrain3D`
+
+**Grid and chunks.** The size is rounded to whole chunks of `chunk_quads` quads at
+`vertex_spacing`; heights are the heightmap, bilinear, at each vertex. Each chunk is one
+`ArrayMesh` surface whose LODs are index buffers over the same vertices at strides 2, 4, 8...
+The LOD key Godot compares against its screen-space threshold is the LOD's largest vertical
+deviation from the full grid (computed per chunk), so the engine picks the coarsest LOD whose
+error stays under `threshold_pixels`. Neighbours at different LODs interpolate the same border
+heights at different strides; each is within its LOD's error of them, so the gap between them
+is under twice the largest error, and skirts of that depth hang from every border. The grid's
+quads split along the (1, 0)-(0, 1) diagonal, the same triangulation the HeightMapShape3D of
+Jolt and Godot Physics uses, so collision is the drawn surface.
+
+**Layers.** Weights for the second and third layer per vertex (splat map, or smoothstep rules
+on slope and height) go to vertex colour R and G, which the layered material reads as its masks;
+`GADSMaterials.combine_layers()` copies the layer materials' textures, depths and texture sizes
+into one layered material.
+
+**Detail field.** The terrain gives its `GADSDisplacementField3D` ground data made with
+`GADSGroundBake.from_arrays()` instead of a capture: texel centres sit on the vertices (half the
+spacing apart by default), where the field's bilinear heights equal the triangles; in between,
+a texel cell that a quad's diagonal crosses can differ by up to an eighth of the quad's crease
+`|h00 + h11 - h10 - h01|`, so the field is lifted by the largest crease on ground it displaces.
+
+**Streaming.** With `stream_radius`, nothing is computed for the whole terrain: heights and
+weights are read from the heightmap per vertex when a chunk is built. Chunks within the radius
+are built on worker threads (four at a time, nearest first; the build function reads only
+immutable data and returns arrays), added on the main thread (two per frame), and freed beyond
+1.25 x the radius plus a chunk. Each has its own HeightMapShape3D. The field's ground data is a
+window around the camera, rebuilt on a worker thread when the camera has moved a quarter of it.
+
+## 12. Renderers
+
+The shaders are written for Forward+ and run unchanged on Mobile. On Compatibility (OpenGL 3.3 /
+ES 3.0) two things differ: GLSL 1.30+ forbids indexing a sampler array with a loop variable, so
+the field and pebble shaders select their layer textures by constant index there
+(`GADS_LAYER_LOD` / `GADS_LAYER_GRAD`, `CURRENT_RENDERER`); and clip-space depth is -1..1, so
+the depth write maps it to 0..1. The runtime ground capture is not possible on Compatibility: the
+renderer writes through an approximate sRGB encode / decode that does not return the 16-bit
+height code, so a field there needs a bake saved from the editor and stays off without one.
+`tests/renderer_tests.gd` checks every variant, the depth write, deformation and the demo scenes
+on both renderers.

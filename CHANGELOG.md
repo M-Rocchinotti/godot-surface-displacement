@@ -69,7 +69,11 @@ All notable changes to this project are documented here. The format follows
   GADSDisplacementField3D on the terrain's own ground data (texel centres on the vertices, lifted
   by what its bilinear heights can miss); `get_height()`, `get_normal()`,
   `get_layer_weights()`. `tests/terrain_tests.gd`, a demo scene (hills with a rover leaving
-  tracks) and validator checks.
+  tracks) and validator checks. **Streaming** (`stream_radius`): only the chunks around the camera,
+  built on worker threads (identical to the whole terrain's) and freed behind it with hysteresis,
+  collision per chunk, heights read from the heightmap as needed, and the detail field's ground
+  data in a window that follows the camera; under 3 ms of main-thread work per frame while
+  streaming a 2 km terrain.
 - **Clustered bakes** (`GADSMeshInstance3D.cluster_triangles`): the bake split into compact
   spatial clusters (C++, median splits of the triangles' centroids), each its own instance with its
   own LODs, so large meshes are culled and LOD-selected per cluster; the same triangles as the

@@ -29,6 +29,7 @@ func _run() -> void:
 	await _test("collision_matches_the_surface", test_collision)
 	await _test("detail_field_ground_data", test_ground_data)
 	await _test("rebuilds_once_per_change", test_rebuild)
+	await _test("streams_chunks_around_the_camera", test_streaming)
 	if DisplayServer.get_name() != "headless":
 		await _test("renders_front_faces_and_coarser_far_away", test_render)
 	print("\nterrain tests: %d passed, %d failed" % [_passed, _failed])
@@ -379,3 +380,102 @@ func test_render() -> void:
 	check(far * 4 < near, "far away the engine draws coarser LODs")
 	h.clear_scene()
 	await process_frame
+
+
+## A streamed terrain builds the chunks near the camera on worker threads, the same as the whole
+## terrain's, frees those left far behind, gives each a collision shape and the detail field a
+## ground window around the camera.
+func test_streaming() -> void:
+	var holder := Node3D.new()
+	root.add_child(holder)
+	var cam := Camera3D.new()
+	holder.add_child(cam)
+	cam.position = Vector3(-24, 30, -24)
+	var grass := layer_material(2.0, Color(0.2, 0.6, 0.2))
+	var t := make_terrain({"stream_radius": 20.0, "layers": [grass] as Array[ShaderMaterial], "detail_field": true, "height_scale": 10.0})
+	holder.add_child(t)
+	t.stream_camera = t.get_path_to(cam)
+	await _settle(t)
+	var expected := _chunks_within(t, Vector2(-24, -24), 20.0)
+	var built := _chunk_keys(t)
+	print("  %d of %d chunks built near (-24, -24): %s" % [built.size(), t.get_chunk_grid().x * t.get_chunk_grid().y, built])
+	check(built == expected and built.size() < 16, "exactly the chunks within the radius are built")
+	check(t.get_collision_body() != null and t.get_collision_body().get_child_count() == built.size(), "each with its own collision shape")
+	# The same chunk as the whole terrain builds.
+	var whole := make_terrain({"height_scale": 10.0})
+	root.add_child(whole)
+	var a: PackedVector3Array = t.get_chunks()[0].mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX]
+	var key := Vector2i(int(String(t.get_chunks()[0].name).get_slice("_", 1)), int(String(t.get_chunks()[0].name).get_slice("_", 2)))
+	var same: MeshInstance3D = null
+	for c in whole.get_chunks():
+		if c.name == t.get_chunks()[0].name:
+			same = c
+	var b: PackedVector3Array = same.mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX] if same != null else PackedVector3Array()
+	var worst := 0.0
+	for i in mini(a.size(), b.size()):
+		worst = maxf(worst, a[i].distance_to(b[i]))
+	check(a.size() == b.size() and worst < 1e-5, "a streamed chunk is the whole terrain's chunk %s (largest difference %.6f m)" % [key, worst])
+	var p := Vector3(-22.3, 0, -25.1)
+	check(absf(t.get_height(p) - whole.get_height(p)) < 1e-5, "heights are the same streamed or not")
+	whole.queue_free()
+	await physics_frame
+	await physics_frame
+	var hit := t.get_world_3d().direct_space_state.intersect_ray(PhysicsRayQueryParameters3D.create(p + Vector3(0, 50, 0), p - Vector3(0, 50, 0)))
+	check(not hit.is_empty() and absf((hit["position"] as Vector3).y - t.get_height(p)) < 0.005, "the streamed collision is the surface")
+	var field := t.get_detail_field()
+	var bake := field.ground_bake if field != null else null
+	check(bake != null and field.visible and bake.get_rect().has_point(Vector2(-24, -24)) and bake.get_rect().size.x < 64.0,
+		"the detail field's ground data is a window around the camera (%s)" % (bake.get_rect() if bake != null else "none"))
+	# Fly to the opposite corner: the old chunks go, new ones come, the window follows.
+	var before := built
+	cam.position = Vector3(24, 30, 24)
+	await _settle(t)
+	built = _chunk_keys(t)
+	expected = _chunks_within(t, Vector2(24, 24), 20.0)
+	# Old chunks stay until well beyond the radius (1.25 x radius + a chunk: no rebuilding back and
+	# forth at the edge).
+	var kept := _chunks_within(t, Vector2(24, 24), 20.0 * 1.25 + t.chunk_quads * t.get_vertex_spacing()).filter(func(k: Vector2i) -> bool: return before.has(k))
+	for k in kept:
+		if not expected.has(k):
+			expected.append(k)
+	expected.sort()
+	check(built == expected and not built.has(Vector2i(0, 0)), "after flying across: the chunks there, the far old ones gone (%s)" % [built])
+	bake = field.ground_bake
+	check(bake != null and bake.get_rect().has_point(Vector2(24, 24)), "and the ground window followed")
+	holder.queue_free()
+	await process_frame
+
+
+func _settle(t: GADSTerrain3D) -> void:
+	var stable := 0
+	var last := -1
+	for i in 600:
+		await process_frame
+		var n := t.get_chunks().size()
+		stable = stable + 1 if n == last and not t.is_streaming_busy() else 0
+		last = n
+		if stable >= 5:
+			return
+
+
+static func _chunk_keys(t: GADSTerrain3D) -> Array:
+	var out := []
+	for c in t.get_chunks():
+		var parts := String(c.name).split("_")
+		out.append(Vector2i(int(parts[1]), int(parts[2])))
+	out.sort()
+	return out
+
+
+static func _chunks_within(t: GADSTerrain3D, xz: Vector2, radius: float) -> Array:
+	var out := []
+	var grid := t.get_chunk_grid()
+	var side := t.chunk_quads * t.get_vertex_spacing()
+	var origin := -t.get_extent() * 0.5
+	for cz in grid.y:
+		for cx in grid.x:
+			var r := Rect2(origin + Vector2(cx, cz) * side, Vector2(side, side))
+			if xz.distance_to(xz.clamp(r.position, r.end)) <= radius:
+				out.append(Vector2i(cx, cz))
+	out.sort()
+	return out
