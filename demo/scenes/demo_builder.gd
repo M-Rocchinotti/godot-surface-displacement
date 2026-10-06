@@ -652,6 +652,19 @@ static func build_material_lab() -> Node3D:
 		var node := baked(mi, "Sphere_%s" % kind)
 		node.quality = GADSMeshInstance3D.Quality.MEDIUM
 		root.add_child(node)
+	# The stones sphere again, not baked: silhouette parallax draws its relief, outline included.
+	var sil_mat := _procedural("stones", {"size": 512, "tile_m": Vector2(1.7, 1.7), "params": {"seed": 12}}, fallback_ground)
+	sil_mat.set_shader_parameter("uv_scale", Vector2(2.0, 1.0))
+	GADSMaterials.set_silhouette(sil_mat, true)
+	var sil_sphere := SphereMesh.new()
+	sil_sphere.radius = 0.55
+	sil_sphere.height = 1.1
+	var sil_mi := MeshInstance3D.new()
+	sil_mi.name = "Sphere_stones_parallax"
+	sil_mi.mesh = sil_sphere
+	sil_mi.material_override = sil_mat
+	sil_mi.position = Vector3(-2.0, 0.6, 0.3)
+	root.add_child(sil_mi)
 	# Vector displacement: curling ridges that overhang, baked from a flat panel.
 	var curl := GADSMaterials.create(GADSMaterials.Mapping.UV, {"albedo": (floor_mat.get_shader_parameter("albedo_texture") as Texture2D)},
 		{"vector_displacement_texture": curl_vector_map(), "vector_displacement_m": 0.35, "vector_displacement_signed": true,

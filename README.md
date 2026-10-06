@@ -874,8 +874,9 @@ runs (`view_dependent`: about 90 000 triangles seen from its foot, more when it 
 from further out) and split into clusters; walk along its foot to see the displaced outline.
 The material lab is made without texture files: a procedural tile floor with dirt in the joints
 and worn edges, a procedural brick wall with moss in the joints, five baked spheres (rock,
-stones, craters, cracks, ridged) and a panel whose vector displacement curls into overhanging
-ridges (view Grazing).
+stones, craters, cracks, ridged), the stones sphere again unbaked with silhouette parallax (its
+outline shows the stones) and a panel whose vector displacement curls into overhanging ridges
+(view Grazing).
 
 ![Demo with its panel](docs/images/demo_ui.jpg)
 
