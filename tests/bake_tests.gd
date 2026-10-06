@@ -57,6 +57,7 @@ func _run() -> void:
 	await _test("save_and_load", test_save_load)
 	await _test("cluster_node", test_cluster_node)
 	await _test("profiler", test_profiler)
+	await _test("diagnostics_overlay", test_diagnostics)
 	await _test("import_options", test_import)
 	if DisplayServer.get_name() != "headless":
 		await _test("renders_like_parallax", test_render)
@@ -1076,5 +1077,25 @@ func test_cluster_node() -> void:
 	node.clear_bake()
 	await process_frame
 	check(node.get_cluster_nodes().is_empty() and node.mesh == node.source_mesh, "Clear removes the clusters")
+	node.queue_free()
+	await process_frame
+
+
+## The node's Diagnose overlay: the source mesh's edges as lines in an internal child.
+func test_diagnostics() -> void:
+	var node := _make_node(uv_material(bump_field(64, 0.1), 0.05))
+	node.source_mesh = BoxMesh.new()
+	root.add_child(node)
+	var report := node.diagnose()
+	check(report["counts"]["open"] == 0 and report["counts"]["uv_seam"] + report["counts"]["hard"] == 12, "diagnose() reports the source mesh's edges")
+	node.set_diagnostics_visible(true)
+	var overlay := node.get_children(true).filter(func(c: Node) -> bool: return c.name == "GADSDiagnostics")
+	var lines: Mesh = (overlay[0] as MeshInstance3D).mesh if overlay.size() == 1 else null
+	var count := (lines.surface_get_arrays(0)[Mesh.ARRAY_VERTEX] as PackedVector3Array).size() if lines != null and lines.get_surface_count() == 1 else 0
+	check(overlay.size() == 1 and not node.get_children().has(overlay[0]) and count == 24, "the overlay is an internal child drawing each edge as a line (%d vertices)" % count)
+	node.set_diagnostics_visible(false)
+	await process_frame
+	check(not node.is_diagnostics_visible() and node.get_children(true).filter(func(c: Node) -> bool: return c.name == "GADSDiagnostics").is_empty(),
+		"and goes away")
 	node.queue_free()
 	await process_frame

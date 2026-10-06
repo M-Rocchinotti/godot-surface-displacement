@@ -30,6 +30,7 @@ func _run() -> void:
 	await test_node_lifetime()
 	await test_terrain_validation()
 	test_texture_sets()
+	test_mesh_diagnostics()
 	await test_scatter_parameter_sync()
 	print("\nlogic tests: %d passed, %d failed" % [_passed, _failed])
 	quit(1 if _failed > 0 else 0)
@@ -734,6 +735,40 @@ func test_texture_sets() -> void:
 	for f in DirAccess.get_files_at(dir):
 		DirAccess.remove_absolute(ProjectSettings.globalize_path(dir.path_join(f)))
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(dir))
+
+
+## GADSMeshDiagnostics: the edges that matter for displacement, by kind, on meshes whose answer is
+## known.
+func test_mesh_diagnostics() -> void:
+	print("\n== mesh diagnostics")
+	var box := GADSMeshDiagnostics.analyse(BoxMesh.new())
+	var c: Dictionary = box["counts"]
+	check(c["open"] == 0 and c["non_manifold"] == 0 and c["uv_seam"] + c["hard"] == 12 and box["vertices"] == 8,
+		"a box: closed, its 12 edges seams or hard, 8 positions (%s)" % [c])
+	var plane := GADSMeshDiagnostics.analyse(PlaneMesh.new())
+	check(plane["counts"]["open"] == 4 and plane["counts"]["uv_seam"] == 0 and plane["counts"]["hard"] == 0 and (plane["notes"] as Array).size() == 1,
+		"a plane: four open edges, nothing else")
+	var sphere := GADSMeshDiagnostics.analyse(SphereMesh.new())
+	check(sphere["counts"]["open"] == 0 and sphere["counts"]["non_manifold"] == 0 and sphere["counts"]["uv_seam"] > 0,
+		"a sphere: closed, with its UV seam (%s, %d degenerate at the poles)" % [sphere["counts"], sphere["degenerate"]])
+	# Three triangles on one edge, a degenerate one, two surfaces sharing an edge, no UVs.
+	var am := ArrayMesh.new()
+	var arrays := []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = PackedVector3Array([Vector3(0, 0, 0), Vector3(1, 0, 0), Vector3(0.5, 1, 0), Vector3(0.5, -1, 0),
+		Vector3(0.5, 0, 1), Vector3(2, 0, 0), Vector3(3, 0, 0), Vector3(4, 0, 0)])
+	arrays[Mesh.ARRAY_INDEX] = PackedInt32Array([0, 1, 2, 1, 0, 3, 0, 1, 4, 5, 6, 7])
+	am.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	var second := []
+	second.resize(Mesh.ARRAY_MAX)
+	second[Mesh.ARRAY_VERTEX] = PackedVector3Array([Vector3(1, 0, 0), Vector3(0.5, 1, 0), Vector3(1.5, 1, 0)])
+	second[Mesh.ARRAY_TEX_UV] = PackedVector2Array([Vector2(0, 0), Vector2(1, 0), Vector2(0, 1)])
+	second[Mesh.ARRAY_INDEX] = PackedInt32Array([0, 2, 1])
+	am.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, second)
+	var odd := GADSMeshDiagnostics.analyse(am)
+	print("  %s" % GADSMeshDiagnostics.summary(odd).replace("\n", " | "))
+	check(odd["counts"]["non_manifold"] == 1 and odd["degenerate"] == 1 and odd["counts"]["surface_border"] == 1 and odd["missing_uv"] == [0],
+		"three triangles on an edge, a degenerate triangle, a border between surfaces and a surface without UVs are found")
 
 
 # --- Field parameters reach the pebbles, once ----------------------------------------------------

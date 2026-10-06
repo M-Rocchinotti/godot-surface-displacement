@@ -566,6 +566,37 @@ func _update_fallback() -> void:
 	_update_cluster_visibility()
 
 
+# --- Diagnostics ---------------------------------------------------------------------------------
+
+var _diagnostics: MeshInstance3D
+
+
+## [method GADSMeshDiagnostics.analyse] of the source mesh, with this node's hard edge angle.
+func diagnose() -> Dictionary:
+	return GADSMeshDiagnostics.analyse(source_mesh, -1.0, hard_angle)
+
+
+## Draws the source mesh's open, non-manifold, UV-seam, hard and surface-border edges over it (an
+## internal child, never saved), or removes them.
+func set_diagnostics_visible(on: bool) -> void:
+	if not on:
+		if _diagnostics != null:
+			_diagnostics.queue_free()
+			_diagnostics = null
+		return
+	if _diagnostics == null:
+		_diagnostics = MeshInstance3D.new()
+		_diagnostics.name = "GADSDiagnostics"
+		_diagnostics.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		_diagnostics.material_override = GADSMeshDiagnostics.overlay_material()
+		add_child(_diagnostics, false, Node.INTERNAL_MODE_BACK)
+	_diagnostics.mesh = GADSMeshDiagnostics.make_overlay(diagnose())
+
+
+func is_diagnostics_visible() -> bool:
+	return _diagnostics != null
+
+
 # --- Clusters ------------------------------------------------------------------------------------
 
 ## Draw settings the cluster instances copy from the node (checked each frame while there are

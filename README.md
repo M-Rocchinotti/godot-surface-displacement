@@ -386,8 +386,9 @@ A MeshInstance3D whose GADS materials' relief is baked into real geometry. Make 
 selected mesh (**Project > Tools > GADS: Make Selected Meshes GADSMeshInstance3D**, undoable: the
 mesh becomes `source_mesh`) or add the node and set `source_mesh`. The inspector shows **Bake**
 (reuses a cached bake of the same inputs), **Rebuild** (ignores the cache), **Clear** (back to
-the source mesh), **Cancel**, a progress bar and the bake's statistics; bakes run on a worker
-thread and are undoable. **Bake Selected GADSMeshInstance3D** in Project > Tools bakes several.
+the source mesh), **Cancel**, **Diagnose** (draws the source mesh's open, non-manifold, UV-seam,
+hard and surface-border edges over it and sums them up: `GADSMeshDiagnostics`), a progress bar
+and the bake's statistics; bakes run on a worker thread and are undoable. **Bake Selected GADSMeshInstance3D** in Project > Tools bakes several.
 
 | Property | Default | Meaning |
 |---|---|---|

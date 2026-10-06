@@ -79,6 +79,10 @@ All notable changes to this project are documented here. The format follows
   own LODs, so large meshes are culled and LOD-selected per cluster; the same triangles as the
   unsplit bake, in the same cache file; the clusters follow the node's draw settings and switch to
   the parallax fallback together. The profiler counts them.
+- **Mesh diagnostics** (`GADSMeshDiagnostics`, the inspector's **Diagnose**): the source mesh's
+  open, non-manifold, UV-seam, hard and surface-border edges (drawn as coloured lines over it),
+  degenerate triangles and surfaces without UVs, with what each means for the bake; Validate
+  Setup warns about non-manifold edges.
 - **Mobile and Compatibility renderers**: everything compiles and draws there. The field and
   pebble shaders index their layer sampler arrays with constants on Compatibility (GLSL 1.30+
   forbids a loop index there; Vulkan keeps indexing directly), and the depth write maps OpenGL's

@@ -210,6 +210,12 @@ static func _check_baked_mesh(mi: GADSMeshInstance3D) -> Array:
 		issues.append(_issue("info", "GADSMeshInstance3D %s is not baked: it draws the source mesh with parallax." % mi.name))
 	elif mi.is_bake_stale():
 		issues.append(_issue("warning", "GADSMeshInstance3D %s: the source, its materials, the bake settings or (world and triplanar mappings) its placement changed since the bake. Bake it again." % mi.name))
+	if problem.is_empty() and mi.source_mesh != null and GADSProfiler.mesh_triangles(mi.source_mesh) <= 200000:
+		var report := mi.diagnose()
+		if report["counts"]["non_manifold"] > 0:
+			issues.append(_issue("warning", "GADSMeshInstance3D %s: %d non-manifold edges in the source mesh; displaced, it can tear there (Diagnose in the inspector shows them)." % [mi.name, report["counts"]["non_manifold"]]))
+		if report["degenerate"] > 0:
+			issues.append(_issue("info", "GADSMeshInstance3D %s: %d degenerate triangles in the source mesh (the bake skips them)." % [mi.name, report["degenerate"]]))
 	if mi.baked and mi.bake_stats.get("budget_reached", false):
 		issues.append(_issue("info", "GADSMeshInstance3D %s: the triangle budget stopped the bake %.2f mm from the relief (tolerance %.2f mm); raise the quality to follow it closer." % [
 			mi.name, float(mi.bake_stats.get("max_error_left", 0.0)) * 1000.0, float(mi.bake_stats.get("error_m", 0.0)) * 1000.0]))

@@ -24,6 +24,8 @@ class BakePanel extends VBoxContainer:
 	var _rebuild: Button
 	var _clear: Button
 	var _cancel: Button
+	var _diagnose: Button
+	var _diagnosis: Label
 	var _progress: ProgressBar
 	var _status: Label
 	var _before := {}
@@ -35,6 +37,9 @@ class BakePanel extends VBoxContainer:
 		_rebuild = _button(row, "Rebuild", "Bake again, ignoring the cache.", _on_bake.bind(true))
 		_clear = _button(row, "Clear", "Show the source mesh again.", _on_clear)
 		_cancel = _button(row, "Cancel", "Stop the running bake.", _on_cancel)
+		_diagnose = _button(row, "Diagnose", "Show the source mesh's open, non-manifold, UV-seam, hard and surface-border edges.", _on_diagnose)
+		_diagnose.toggle_mode = true
+		_diagnose.button_pressed = node.is_diagnostics_visible()
 		_progress = ProgressBar.new()
 		_progress.max_value = 1.0
 		_progress.step = 0.001
@@ -43,6 +48,11 @@ class BakePanel extends VBoxContainer:
 		_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		_status.add_theme_font_size_override("font_size", 12)
 		add_child(_status)
+		_diagnosis = Label.new()
+		_diagnosis.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		_diagnosis.add_theme_font_size_override("font_size", 12)
+		_diagnosis.visible = false
+		add_child(_diagnosis)
 		node.bake_progress.connect(_on_progress)
 		node.bake_finished.connect(_on_finished)
 		_refresh()
@@ -70,6 +80,13 @@ class BakePanel extends VBoxContainer:
 
 	func _on_cancel() -> void:
 		node.cancel_bake()
+
+	## Toggles the edge overlay; the summary names the colours.
+	func _on_diagnose() -> void:
+		node.set_diagnostics_visible(_diagnose.button_pressed)
+		_diagnosis.visible = _diagnose.button_pressed
+		if _diagnose.button_pressed:
+			_diagnosis.text = GADSMeshDiagnostics.summary(node.diagnose()) + "\nOverlay: open red, non-manifold magenta, UV seams yellow, hard edges cyan, surface borders green."
 
 	func _on_clear() -> void:
 		var before := node.get_bake_state()
