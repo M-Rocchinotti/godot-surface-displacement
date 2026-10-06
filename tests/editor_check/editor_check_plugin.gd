@@ -167,6 +167,42 @@ func _run() -> void:
 		_check(report.get("totals", {}).get("objects", 0) == 1 and report.get("surfaces", 0) >= 2,
 				"it lists the baked box and the parallax surfaces (%s)" % report.get("totals", {}))
 
+	# 10. A downloaded texture set becomes a GADS material (Create Material from Selected Textures).
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path("res://texset"))
+	var albedo := Image.create(32, 32, false, Image.FORMAT_RGB8)
+	albedo.fill(Color(0.6, 0.4, 0.3))
+	albedo.save_png(ProjectSettings.globalize_path("res://texset/Cliff_BaseColor.png"))
+	var nrm := Image.create(32, 32, false, Image.FORMAT_RGB8)
+	nrm.fill(Color8(128, 64, 255))
+	nrm.save_png(ProjectSettings.globalize_path("res://texset/Cliff_Normal_DX.png"))
+	var rough := Image.create(32, 32, false, Image.FORMAT_L8)
+	rough.fill(Color(0.7, 0.7, 0.7))
+	rough.save_png(ProjectSettings.globalize_path("res://texset/Cliff_Roughness.png"))
+	var disp := Image.create(32, 32, false, Image.FORMAT_L8)
+	for y in 32:
+		for x in 32:
+			disp.set_pixel(x, y, Color(x / 31.0, 0, 0))
+	disp.save_png(ProjectSettings.globalize_path("res://texset/Cliff_Height.png"))
+	var set_files := PackedStringArray(["res://texset/Cliff_BaseColor.png", "res://texset/Cliff_Normal_DX.png",
+		"res://texset/Cliff_Roughness.png", "res://texset/Cliff_Height.png"])
+	var texture_sets := GADSTextureSet.detect(set_files)
+	_check(texture_sets.size() == 1 and texture_sets[0]["name"] == "cliff" and texture_sets[0]["normal_dx"], "the texture set is found, DirectX normal map and all")
+	var made: PackedStringArray = await _sd_plugin.create_materials(texture_sets, [{"texture_size_m": 3.0, "height_m": 0.09, "mapping": GADSMaterials.Mapping.TRIPLANAR}])
+	var cliff := load(made[0]) as ShaderMaterial if made.size() == 1 else null
+	var cliff_info := GADSMaterials.parse(cliff.shader) if cliff != null else {}
+	_check(made == PackedStringArray(["res://texset/cliff_gads.tres"]) and not cliff_info.is_empty() and cliff_info["mapping"] == GADSMaterials.Mapping.TRIPLANAR,
+		"it saves a triplanar GADS material next to the textures (%s)" % [made])
+	if cliff != null:
+		var h := cliff.get_shader_parameter("height_texture") as Texture2D
+		var o := cliff.get_shader_parameter("orm_texture") as Texture2D
+		var n := cliff.get_shader_parameter("normal_texture") as Texture2D
+		var a := cliff.get_shader_parameter("albedo_texture") as Texture2D
+		_check(h != null and h.resource_path == "res://texset/cliff_gads_height.exr" and o != null and o.resource_path == "res://texset/cliff_gads_orm.png"
+			and n != null and n.resource_path == "res://texset/cliff_gads_normal.png" and a != null and a.resource_path == "res://texset/Cliff_BaseColor.png",
+			"with the converted height, the packed ORM, the flipped normal map and the albedo, all imported")
+		_check(is_equal_approx(cliff.get_shader_parameter("height_m"), 0.09) and cliff.get_shader_parameter("texture_size_m") == Vector2(3, 3)
+			and h != null and h.get_image().has_mipmaps(), "and the chosen depth and size; the height has mipmaps")
+
 	# 9. What a save writes.
 	EditorInterface.save_scene()
 	await _frames_wait(5)

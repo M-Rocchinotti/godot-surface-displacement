@@ -33,8 +33,10 @@ scattered stones, cobblestones as real stones, brick walls with deep joints.
    `gads_deform*` of runtime deformation; keep them.
 2. Add a **GADSManager** node (Project > Tools > GADS: Add
    GADSManager Node) and pick a preset.
-3. **Convert Materials** turns StandardMaterial3D / ORMMaterial3D with a height map into GADS
-   materials (undoable); or use a shader from `render/shaders/variants/`. Set `height_m` to the real
+3. **Create Material from Selected Textures** makes a GADS material from a downloaded texture set
+   selected in the FileSystem dock; **Convert Materials** turns StandardMaterial3D /
+   ORMMaterial3D with a height map into GADS materials (undoable); or use a shader from
+   `render/shaders/variants/`. Set `height_m` to the real
    relief depth in metres. Height maps: 16-bit or EXR, imported **with mipmaps**.
 4. Ground: select the ground mesh, **Add GADSDisplacementField3D**, set the ground material's
    `height_center` to 0 (relief above the ground). Optionally add a GADSPebbleScatter3D child.

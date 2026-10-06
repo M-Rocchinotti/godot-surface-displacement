@@ -4,7 +4,8 @@ extends EditorPlugin
 ## adds Project > Tools entries: add the GADSManager node, add a GADSDisplacementField3D for
 ## the selected ground, convert materials (undoable), turn selected meshes into
 ## GADSMeshInstance3D and bake them (undoable), bake the ground of the selected field, prepare
-## height maps selected in the FileSystem dock, and validate the setup. GADSMeshInstance3D gets
+## height maps selected in the FileSystem dock, create materials from texture sets selected
+## there, and validate the setup. GADSMeshInstance3D gets
 ## Bake / Rebuild / Clear buttons in the inspector; the GADS bottom panel profiles the scene; the
 ## scene import options get a GADS section (GADSImportTools).
 
@@ -16,8 +17,9 @@ const MENU_MESH_CONVERT := "GADS: Make Selected Meshes GADSMeshInstance3D"
 const MENU_MESH_BAKE := "GADS: Bake Selected GADSMeshInstance3D"
 const MENU_HEIGHT := "GADS: Prepare Height Maps (FileSystem Selection)"
 const MENU_VALIDATE := "GADS: Validate Setup"
+const MENU_TEXTURE_SET := "GADS: Create Material from Selected Textures"
 const MENUS: Array[String] = [MENU_ADD_NODE, MENU_ADD_FIELD, MENU_CONVERT, MENU_MESH_CONVERT, MENU_MESH_BAKE, MENU_BAKE,
-	MENU_HEIGHT, MENU_VALIDATE]
+	MENU_HEIGHT, MENU_TEXTURE_SET, MENU_VALIDATE]
 const MeshInspector := preload("res://addons/gads/editor/gads_mesh_inspector.gd")
 const ProfilerPanel := preload("res://addons/gads/editor/gads_profiler_panel.gd")
 const ImportPlugin := preload("res://addons/gads/editor/gads_import_plugin.gd")
@@ -40,6 +42,7 @@ func _enter_tree() -> void:
 	add_tool_menu_item(MENU_MESH_BAKE, bake_selected_meshes)
 	add_tool_menu_item(MENU_BAKE, bake_selected_field)
 	add_tool_menu_item(MENU_HEIGHT, prepare_selected_height_maps)
+	add_tool_menu_item(MENU_TEXTURE_SET, create_materials_from_selection)
 	add_tool_menu_item(MENU_VALIDATE, validate)
 	_mesh_inspector = MeshInspector.new()
 	_mesh_inspector.undo_redo = get_undo_redo()
@@ -275,6 +278,117 @@ func prepare_selected_height_maps() -> void:
 		push_warning("GADS: select height map images in the FileSystem dock.")
 	else:
 		EditorInterface.get_resource_filesystem().scan()
+
+
+## Creates a GADS material for every texture set among the files selected in the FileSystem dock
+## (see GADSTextureSet): a dialog shows each set's files and the proposed size, depth and mapping.
+func create_materials_from_selection() -> void:
+	var sets := GADSTextureSet.detect(EditorInterface.get_selected_paths())
+	if sets.is_empty():
+		push_warning("GADS: select the images of a texture set (BaseColor, Normal, Roughness, Height, ...) in the FileSystem dock.")
+		return
+	var dialog := ConfirmationDialog.new()
+	dialog.title = "Create GADS Materials"
+	dialog.ok_button_text = "Create"
+	var box := VBoxContainer.new()
+	dialog.add_child(box)
+	var rows := []
+	for s: Dictionary in sets:
+		var rec := GADSTextureSet.recommend(s)
+		var label := Label.new()
+		var roles: Array = (s["files"] as Dictionary).keys()
+		label.text = "%s  (%s%s)" % [s["name"], ", ".join(roles), ", DirectX normal" if s["normal_dx"] else ""]
+		box.add_child(label)
+		for note: String in rec["notes"]:
+			var n := Label.new()
+			n.text = "    " + note
+			n.modulate = Color(1, 1, 1, 0.7)
+			box.add_child(n)
+		var grid := GridContainer.new()
+		grid.columns = 6
+		box.add_child(grid)
+		var size := _spin(grid, "Texture size (m)", 0.05, 100.0, 0.05, rec["texture_size_m"].x)
+		var depth := _spin(grid, "Relief depth (cm)", 0.1, 100.0, 0.1, rec["height_m"] * 100.0)
+		var mapping_label := Label.new()
+		mapping_label.text = "Mapping"
+		grid.add_child(mapping_label)
+		var mapping := OptionButton.new()
+		for m in ["UV", "World-planar (ground)", "Triplanar"]:
+			mapping.add_item(m)
+		grid.add_child(mapping)
+		# The depth follows the texture size until it is edited.
+		size.value_changed.connect(func(v: float) -> void: depth.value = snappedf(GADSTextureSet.DEPTH_PER_METRE * v * 100.0, 0.1))
+		rows.append({"set": s, "size": size, "depth": depth, "mapping": mapping})
+	dialog.confirmed.connect(func() -> void:
+		var options := []
+		for r: Dictionary in rows:
+			options.append({"texture_size_m": (r["size"] as SpinBox).value, "height_m": (r["depth"] as SpinBox).value / 100.0,
+				"mapping": (r["mapping"] as OptionButton).selected})
+		create_materials(sets, options)
+		dialog.queue_free())
+	dialog.canceled.connect(dialog.queue_free)
+	EditorInterface.get_base_control().add_child(dialog)
+	dialog.popup_centered(Vector2i(640, 0))
+
+
+static func _spin(parent: Control, text: String, lo: float, hi: float, step: float, value: float) -> SpinBox:
+	var label := Label.new()
+	label.text = text
+	parent.add_child(label)
+	var spin := SpinBox.new()
+	spin.min_value = lo
+	spin.max_value = hi
+	spin.step = step
+	spin.value = value
+	parent.add_child(spin)
+	return spin
+
+
+## Creates the materials of [param sets] (GADSTextureSet.detect()) with [param options] (per set:
+## {"texture_size_m", "height_m", "mapping"}): writes the prepared textures, imports them and saves
+## "<name>_gads.tres" next to each set. Returns the material paths.
+func create_materials(sets: Array, options: Array) -> PackedStringArray:
+	var fs := EditorInterface.get_resource_filesystem()
+	var created := PackedStringArray()
+	var uses := []
+	var unknown_dir := false
+	for s: Dictionary in sets:
+		uses.append(GADSTextureSet.prepare(s))
+		unknown_dir = unknown_dir or fs.get_filesystem_path(String(s["dir"])) == null
+	# Files in a folder the editor has not scanned yet cannot be imported one by one: scan it (that
+	# imports them too).
+	if unknown_dir:
+		while fs.is_scanning():
+			await fs.filesystem_changed
+		fs.scan()
+		await fs.filesystem_changed
+		while fs.is_scanning():
+			await get_tree().process_frame
+	for i in sets.size():
+		var s: Dictionary = sets[i]
+		var o: Dictionary = options[i] if i < options.size() else {}
+		var use: Dictionary = uses[i]
+		# Import what is new: the written files and source files the editor has not imported yet.
+		var pending := PackedStringArray()
+		for path: String in use.values():
+			# The written files (*_gads_*) import afresh even when an older version was imported
+			# (a scan has just imported them all).
+			if (path.get_file().contains("_gads_") and not unknown_dir) or not ResourceLoader.exists(path):
+				fs.update_file(path)
+				pending.append(path)
+		if not pending.is_empty():
+			fs.reimport_files(pending)
+		var size := float(o.get("texture_size_m", 2.0))
+		var params := {"texture_size_m": Vector2(size, size), "height_m": float(o.get("height_m", GADSTextureSet.DEPTH_PER_METRE * size))}
+		var path := String(s["dir"]).path_join("%s_gads.tres" % s["name"])
+		var material := GADSTextureSet.create_material(use, params, int(o.get("mapping", GADSMaterials.Mapping.UV)), GADSMaterials.Quality.POM_SELF_SHADOW, path)
+		if material != null and FileAccess.file_exists(path):
+			fs.update_file(path)
+			created.append(path)
+			print("GADS: created %s (%s)" % [path, ", ".join(use.keys())])
+	if not created.is_empty():
+		EditorInterface.select_file(created[0])
+	return created
 
 
 func validate() -> void:

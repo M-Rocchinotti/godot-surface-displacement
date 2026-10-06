@@ -65,7 +65,9 @@ what the engine allows:
 - Baked adaptive displacement: Rivara longest-edge bisection on welded topology driven by the
   height field's own deviation (in metres), a triangle budget, MikkTSpace tangents, LODs, collision at its own resolution; on a baked mesh the same materials
   skip their march and add only the normal-map detail finer than the triangles.
-- Editor tools: add nodes, convert StandardMaterial3D / ORMMaterial3D with a height map (undoable),
+- Editor tools: create a GADS material from a downloaded texture set (roles from file names,
+  proposed depth, height converted to 16-bit EXR, ORM packed, DirectX normals converted), add
+  nodes, convert StandardMaterial3D / ORMMaterial3D with a height map (undoable),
   make meshes GADSMeshInstance3D and bake them (undoable, with progress and cancel), bake the
   ground under a field, turn 8-bit height maps into 16-bit EXR, validate the setup.
 - Runtime: view-dependent re-tessellation of baked meshes around the camera, and deformation
@@ -163,6 +165,21 @@ what the engine allows:
 | `detail_height_texture`, `detail_height_m` | black, 0 | Optional detail relief on top of the main one (grain on stones, chips in bricks): `detail_height_m * (d - 0.5)`, marched, self-shadowed and baked together with the main relief. Off at 0. |
 | `detail_normal_texture`, `detail_normal_strength` | flat, 0 | Optional detail normal map, blended onto the main one (Reoriented Normal Mapping). Off at 0. |
 | `detail_scale` | 8 | Detail repeats per main texture repeat. |
+
+#### From a downloaded texture set
+
+Select the images of a texture set in the FileSystem dock (as downloaded from Substance, Quixel,
+Poly Haven, ambientCG or baked in Blender: `Rock_BaseColor.png`, `Rock_Normal.png`,
+`Rock_Roughness.png`, `Rock_Height.png`, `Rock_AO.png` ..., several sets at once) and run
+**Project > Tools > GADS: Create Material from Selected Textures**. GADS tells each file's role
+from its name (BaseColor / Albedo / Diffuse, Normal with OpenGL or DirectX convention,
+Roughness, Metallic, AO, ORM / ARM, Height / Displacement), shows each set with a proposed texture
+size, relief depth (3.5 % of the size: 7 cm for 2 m) and mapping, and on **Create** writes what the
+set lacks for GADS next to it (`<name>_gads_height.exr`: the height remapped to its 1st / 99th
+percentiles as a 16-bit EXR with mipmaps; `<name>_gads_orm.png`: AO, roughness and metallic packed;
+`<name>_gads_normal.png`: a DirectX normal map converted to OpenGL), imports them and saves
+`<name>_gads.tres`. `GADSTextureSet` does the same from scripts (`detect()`, `recommend()`,
+`prepare()`, `create_material()`).
 
 #### Layered materials
 
@@ -613,7 +630,7 @@ VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json xvfb-run -a -s "-screen 0 
 | Compatibility and Mobile renderers (`tests/renderer_tests.gd`, 6 checks each) | All 30 surface variants compile and draw; a box 0.5 m in front of a depth-writing wall shows (the depth lands in the renderer's depth range: OpenGL's clip depth is -1..1); a deformation mark changes the floor's picture under it (luminance by 0.39) and nothing beside it; the five demo scenes draw at Low and Ultra; the gravel path's field captures its ground on Mobile, and on Compatibility stays off instead of drawing a flat sheet. Shader compile errors fail the suite through the log scan. |
 | demo / editor smoke | The demo and the editor with the demo open run without script errors, engine errors or leaks. |
 | standalone addon (shipped archive) | Builds the `git archive` users download (`.gitattributes` export rules applied), checks it holds only `LICENSE` and `addons/gads` with no Markdown link to a file it does not ship, puts it alone into a fresh project, lets the plugin register its globals and checks that a POM ground and a GADSDisplacementField3D with pebbles render there. |
-| editor plugin actions | In a real editor: Add GADSManager Node, Add GADSDisplacementField3D, Convert Materials (a mesh and a CSG shape), Bake Ground, Make Selected Meshes GADSMeshInstance3D and Bake Selected GADSMeshInstance3D (the bake saved into `res://gads_baked/`), each with undo and redo; the inspector's Bake / Rebuild / Clear buttons; a second bake that replaces the first while it is in use; Validate Setup; Prepare Height Maps; a save that writes no internal nodes, keeps the materials' saved variant and the field's properties (the node's preset does not touch them in the editor) and refers to the bake files instead of embedding them. |
+| editor plugin actions | In a real editor: Create Material from Selected Textures (a DirectX set into a triplanar material with its converted height, packed ORM and flipped normal map), Add GADSManager Node, Add GADSDisplacementField3D, Convert Materials (a mesh and a CSG shape), Bake Ground, Make Selected Meshes GADSMeshInstance3D and Bake Selected GADSMeshInstance3D (the bake saved into `res://gads_baked/`), each with undo and redo; the inspector's Bake / Rebuild / Clear buttons; a second bake that replaces the first while it is in use; Validate Setup; Prepare Height Maps; a save that writes no internal nodes, keeps the materials' saved variant and the field's properties (the node's preset does not touch them in the editor) and refers to the bake files instead of embedding them. |
 | offline Blender bake (`tests/test_blender_bake.py`) | Vertex-exact displacement against the height map for the primitives and mappings, decimation and glTF export. |
 | mutation checks (`tests/run_mutations.py`) | Re-introduces one bug at a time and expects its tests to fail: height map without mipmaps, march at mip 0, wrong parallax sign, no binary refinement, world-planar rotation sign, triplanar X plane mirrored, zero-weight planes marched, no distance fade, `LIGHT_VERTEX` not written, self-shadow ray reversed, Lambert instead of Burley in `light()`, a clamped GGX term, no energy compensation, depth written by every POM variant, depth not rounded, no geomorph at ring seams, no grid snapping, vertex fetch at mip 0, relief pushed down, pebbles seeded by window slot, a bake that ignores the layers, a feature switch that adds features, an inverted remap that flattens, the field's parallax sign, the field's self-shadow direction, the field's relief measured from ground + lift, kerbs not marked (shader and CPU), ground beyond the bake displaced, local lights that never or always self-shadow, field parameters set when unchanged, a scatter that stops following its field, presets that miss CSG shapes, Custom settings not followed, the demo camera's script attached after it is ready, a baked mesh that still marches, a baked mesh lit by the full normal map on top of its slope, a bake key that ignores scale and rotation, the bake cache ignored, a collision body saved with the scene, the detail layer outside the slab, layers blended without heights, a slope band ignored, a runtime tessellation that never refreshes, world-planar parallax that
 ignores deformation, terrain skirts too shallow, the terrain's ground data off its vertices, the

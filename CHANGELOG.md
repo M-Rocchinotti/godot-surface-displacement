@@ -77,6 +77,11 @@ All notable changes to this project are documented here. The format follows
   renderer's approximate sRGB round trip breaks the height code): it stays off without a saved
   bake instead of drawing a flat sheet. `tests/renderer_tests.gd` runs on both in `run_all.py` and
   CI (CI installs Mesa's llvmpipe for OpenGL).
+- **Materials from texture sets**: Project > Tools > **Create Material from Selected Textures**
+  (`GADSTextureSet`): tells each file's role from its name (Substance, Quixel, Poly Haven,
+  ambientCG, Blender conventions; OpenGL or DirectX normal maps), proposes texture size, relief
+  depth and height remap, writes a 16-bit EXR height, a packed ORM and an OpenGL normal map where
+  the set needs them, imports them and saves the GADS material.
 - **Import automation**: a GADS section in the scene import options (convert height-mapped
   materials; meshes named `*-gads`, or every mesh with a GADS material, become GADSMeshInstance3D
   baked during the import, the bake stored in the imported scene). `GADSImportTools.process()`.

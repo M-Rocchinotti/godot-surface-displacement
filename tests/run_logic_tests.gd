@@ -29,6 +29,7 @@ func _run() -> void:
 	test_demo_textures()
 	await test_node_lifetime()
 	await test_terrain_validation()
+	test_texture_sets()
 	await test_scatter_parameter_sync()
 	print("\nlogic tests: %d passed, %d failed" % [_passed, _failed])
 	quit(1 if _failed > 0 else 0)
@@ -670,6 +671,69 @@ func test_terrain_validation() -> void:
 		"a UV layer, a layer whose relief sits below and a rotated terrain are reported")
 	scene.queue_free()
 	await process_frame
+
+
+## GADSTextureSet: texture sets and file roles from their names, the proposed parameters, the
+## packed ORM and the flipped DirectX normal map.
+func test_texture_sets() -> void:
+	print("\n== texture sets")
+	var dir := "user://gads_texset_test"
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(dir))
+	var grey := func(v: float) -> Image:
+		var img := Image.create(16, 16, false, Image.FORMAT_L8)
+		img.fill(Color(v, v, v))
+		return img
+	var height := Image.create(16, 16, false, Image.FORMAT_L8)
+	for y in 16:
+		for x in 16:
+			var v := 0.2 + 0.6 * x / 15.0
+			height.set_pixel(x, y, Color(v, v, v))
+	var normal := Image.create(16, 16, false, Image.FORMAT_RGB8)
+	normal.fill(Color8(128, 64, 255))
+	var files := {
+		"rocks_ground_05_diff_2k.png": grey.call(0.5), "rocks_ground_05_nor_gl_2k.png": normal, "rocks_ground_05_nor_dx_2k.png": normal,
+		"rocks_ground_05_rough_2k.png": grey.call(0.25), "rocks_ground_05_disp_2k.png": height, "rocks_ground_05_ao_2k.png": grey.call(0.5),
+		"Rock_BaseColor.png": grey.call(0.5), "Rock_Normal.png": normal, "Rock_Height.png": height, "Rock_OcclusionRoughnessMetallic.png": normal,
+		"Rock_preview.png": grey.call(0.1), "Brick_Albedo.png": grey.call(0.5), "Brick_Normal_DX.png": normal,
+	}
+	var paths := PackedStringArray()
+	for f: String in files:
+		(files[f] as Image).save_png(ProjectSettings.globalize_path(dir.path_join(f)))
+		paths.append(dir.path_join(f))
+	paths.append(dir.path_join("readme.txt"))
+	var sets := {}
+	for s: Dictionary in GADSTextureSet.detect(paths):
+		sets[s["name"]] = s
+	check(sets.keys().size() == 3 and sets.has("rocks_ground_05") and sets.has("rock") and sets.has("brick"),
+		"three sets by name: %s" % [sets.keys()])
+	var ph: Dictionary = sets.get("rocks_ground_05", {"files": {}})
+	var roles: Array = (ph["files"] as Dictionary).keys()
+	roles.sort()
+	check(roles == ["albedo", "ao", "height", "normal", "roughness"] and String(ph["files"]["normal"]).contains("nor_gl") and not ph["normal_dx"],
+		"Poly Haven names: every role, the OpenGL normal map preferred (%s)" % [roles])
+	var sub: Dictionary = sets.get("rock", {"files": {}})
+	check((sub["files"] as Dictionary).has("orm") and (sub["files"] as Dictionary).has("albedo") and not (sub["files"] as Dictionary).values().has(dir.path_join("Rock_preview.png")),
+		"Substance names: BaseColor, OcclusionRoughnessMetallic; an unknown role is left out")
+	check(sets.get("brick", {}).get("normal_dx", false), "a DirectX normal map is recognised")
+	var rec := GADSTextureSet.recommend(ph)
+	print("  recommended %s" % rec)
+	check(is_equal_approx(rec["height_m"], 0.07) and absf(rec["height_remap"].x - 0.2) < 0.03 and absf(rec["height_remap"].y - 0.8) < 0.03
+		and (rec["notes"] as Array).size() == 1, "7 cm for a 2 m texture, the height remap from its percentiles, a note on its 8 bits")
+	var orm := GADSTextureSet.pack_orm(ph["files"]["ao"], ph["files"]["roughness"], "")
+	var px := orm.get_pixel(3, 3) if orm != null else Color()
+	check(orm != null and absf(px.r - 0.5) < 0.01 and absf(px.g - 0.25) < 0.01 and px.b == 0.0, "ORM packs AO, roughness and metallic (none: 0)")
+	var use := GADSTextureSet.prepare(sets["brick"])
+	var flipped := Image.load_from_file(ProjectSettings.globalize_path(use.get("normal", "")))
+	check(String(use.get("normal", "")).ends_with("brick_gads_normal.png") and flipped != null and flipped.get_pixel(0, 0).g8 == 191,
+		"a DirectX normal map is written with its green channel flipped")
+	use = GADSTextureSet.prepare(ph)
+	var exr := Image.load_from_file(ProjectSettings.globalize_path(use.get("height", "")))
+	check(exr != null and exr.get_format() == Image.FORMAT_RH and exr.get_pixel(0, 0).r < 0.02 and exr.get_pixel(15, 0).r > 0.98
+		and String(use.get("orm", "")).ends_with("_gads_orm.png") and FileAccess.file_exists(String(use.get("orm", "")) + ".import"),
+		"prepare writes the remapped 16-bit height and the packed ORM with their import settings")
+	for f in DirAccess.get_files_at(dir):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(dir.path_join(f)))
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(dir))
 
 
 # --- Field parameters reach the pebbles, once ----------------------------------------------------
