@@ -1,12 +1,12 @@
 extends RefCounted
 ## Builds the demo scenes in code (so they need no editor setup and tests build exactly what the
-## demo shows): a gravel path, a cobblestone street, rocky ground, a brick wall with props and a
-## GADSTerrain3D with a rover leaving tracks.
+## demo shows): a gravel path, a cobblestone street, rocky ground, a brick wall with props, a
+## GADSTerrain3D with a rover leaving tracks and a cliff tessellated for the camera at runtime.
 ## Every scene is a Node3D with a WorldEnvironment, a sun, a Camera3D named "Camera", a
 ## GADSManager node, and "views" metadata: view name -> [camera position, look target].
 
 const TEX := "res://demo/textures/"
-const SCENE_NAMES: Array[String] = ["Gravel path", "Cobblestone street", "Rocky ground", "Brick wall and props", "Hills and tracks"]
+const SCENE_NAMES: Array[String] = ["Gravel path", "Cobblestone street", "Rocky ground", "Brick wall and props", "Hills and tracks", "Cliff"]
 const Rover := preload("res://demo/scenes/demo_rover.gd")
 const VIEW_NAMES: Array[String] = ["Eye level", "Grazing", "Overview"]
 
@@ -21,8 +21,10 @@ static func build(index: int) -> Node3D:
 			return build_rocky_ground()
 		3:
 			return build_brick_wall()
-		_:
+		4:
 			return build_hills()
+		_:
+			return build_cliff()
 
 
 # --- Shared pieces ---------------------------------------------------------------------------
@@ -492,5 +494,70 @@ static func build_hills() -> Node3D:
 		"Eye level": [Vector3(0.0, hills_height(0.0, 10.0) + 1.7, 10.0), Vector3(0.0, hills_height(0.0, 2.0), 2.0)],
 		"Grazing": [Vector3(6.2, hills_height(6.2, -3.5) + 0.5, -3.5), Vector3(9.0, hills_height(9.0, -0.5), -0.5)],
 		"Overview": [Vector3(18.0, 16.0, 22.0), Vector3(0.0, 0.0, -6.0)],
+	})
+	return root
+
+
+# --- 6. Cliff (runtime view-dependent tessellation, clusters) --------------------------------
+
+## A curved rock face (an arc of a cylinder, concave towards the viewer), [param rows] x
+## [param cols] quads, UVs in texture repeats of [param tile_m].
+static func cliff_mesh(radius: float, arc_deg: float, height: float, cols: int, rows: int, tile_m: float) -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var arc := deg_to_rad(arc_deg)
+	for j in rows + 1:
+		for i in cols + 1:
+			var a := -arc * 0.5 + arc * i / cols
+			var y := height * j / rows
+			# Facing the centre (+Z side of the arc looks towards -Z): normal points inwards.
+			var p := Vector3(sin(a) * radius, y, -cos(a) * radius)
+			st.set_normal(Vector3(-sin(a), 0.0, cos(a)))
+			st.set_uv(Vector2(radius * (a + arc * 0.5) / tile_m, (height - y) / tile_m))
+			st.add_vertex(p)
+	for j in rows:
+		for i in cols:
+			var a := j * (cols + 1) + i
+			var b := a + 1
+			var c := a + cols + 1
+			var d := c + 1
+			# Clockwise seen from the inside (Godot's front faces).
+			for k in [a, c, b, b, c, d]:
+				st.add_index(k)
+	st.generate_tangents()
+	return st.commit()
+
+
+static func build_cliff() -> Node3D:
+	# A low sun from the side rakes across the face and shows its relief.
+	var root := make_root("Cliff", 28.0, 40.0)
+	var gravel := ground_material("rocky_gravel")
+	var floor_mesh := PlaneMesh.new()
+	floor_mesh.size = Vector2(40.0, 40.0)
+	_mesh_node(root, "Floor", floor_mesh, gravel, Vector3.ZERO, &"gads_ground")
+	_field(root, [gravel], true)
+	var rock := GADSMaterials.from_texture_set(TEX + "rocks_ground_05", GADSMaterials.Mapping.UV,
+		{"height_m": 0.45, "height_center": 1.0}, GADSMaterials.Quality.POM_SELF_SHADOW)
+	var cliff := GADSMeshInstance3D.new()
+	cliff.name = "Cliff"
+	cliff.source_mesh = cliff_mesh(14.0, 100.0, 12.0, 40, 16, 5.0)
+	cliff.material_override = rock
+	# Tessellated for the camera while the game runs: dense where it looks closely, coarse further
+	# away and above; split into clusters so the engine culls and picks LODs per part.
+	cliff.quality = GADSMeshInstance3D.Quality.MEDIUM
+	cliff.view_dependent = true
+	cliff.pixel_error = 1.5
+	cliff.view_max_triangles = 400000
+	cliff.cluster_triangles = 30000
+	cliff.generate_lods = true
+	root.add_child(cliff)
+	var boulder_mat := GADSMaterials.from_texture_set(TEX + "rocks_ground_05", GADSMaterials.Mapping.TRIPLANAR,
+		{"height_m": 0.08, "height_center": 1.0, "texture_size_m": Vector2(1.5, 1.5)})
+	for b in [[Vector3(-3.0, 0.3, -11.8), 1.1, 3], [Vector3(2.4, 0.2, -12.4), 0.8, 5], [Vector3(5.5, 0.35, -10.9), 1.3, 9]]:
+		root.add_child(boulder(boulder_mat, b[0], b[1], b[2]))
+	_views(root, {
+		"Eye level": [Vector3(1.0, 1.7, -6.0), Vector3(-1.5, 2.0, -13.5)],
+		"Grazing": [Vector3(-8.5, 1.4, -9.0), Vector3(4.0, 3.0, -13.6)],
+		"Overview": [Vector3(0.0, 8.0, 6.0), Vector3(0.0, 4.0, -12.0)],
 	})
 	return root

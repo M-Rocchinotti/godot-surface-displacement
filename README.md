@@ -75,9 +75,9 @@ what the engine allows:
 - `GADSTerrain3D`: a heightmap terrain with chunk LODs chosen by screen-space error, up to three
   height-blended GADS layers painted by a splat map or slope and height rules, HeightMapShape3D
   collision and the near-camera displacement field on its own ground data.
-- A demo with five scenes (gravel path, cobblestone street, rocky ground, brick wall and props,
-  hills with a rover leaving tracks), a flat / POM / POM + geometry comparison and a frame-time
-  overlay.
+- A demo with six scenes (gravel path, cobblestone street, rocky ground, brick wall and props,
+  hills with a rover leaving tracks, a cliff tessellated for the camera), a flat / POM / POM +
+  geometry comparison and a frame-time overlay.
 
 ## Requirements
 
@@ -604,7 +604,7 @@ tools/                            engine runner, native build, texture fetch / p
 
 ## Demo
 
-Run the project (main scene `demo/demo_main.tscn`). Keys: **1-5** scene, **V** next camera
+Run the project (main scene `demo/demo_main.tscn`). Keys: **1-6** scene, **V** next camera
 view (eye level, grazing, overview), **P** next preset, **B** next comparison (flat / POM /
 POM + geometry), **H** hide the panel, **G** the GADS profiler overlay; hold the right mouse button and use **WASD/QE** to fly
 (Shift fast, Alt slow). In the rocky-ground scene the boulder on the right is the left one's
@@ -612,7 +612,10 @@ mesh as a GADSMeshInstance3D, baked in the background when the scene loads (debu
 Tessellation shows its triangles). The hills scene is a GADSTerrain3D (ground, rock on slopes,
 gravel on the tops) with a rover driving a loop: its two GADSDeformer3D press tracks into a
 GADSDeformationField, into the field's geometry near the camera and the terrain's parallax
-beyond, and they fill in slowly (`recovery_rate`).
+beyond, and they fill in slowly (`recovery_rate`); it also paints a gravel trail into the
+terrain's layers. The cliff is a GADSMeshInstance3D tessellated for the camera while the demo
+runs (`view_dependent`: about 90 000 triangles seen from its foot, more when it fills the view
+from further out) and split into clusters; walk along its foot to see the displaced outline.
 
 ![Demo with its panel](docs/images/demo_ui.jpg)
 

@@ -76,6 +76,8 @@ All notable changes to this project are documented here. The format follows
   streaming a 2 km terrain. **Runtime painting** (`paint_layer()`): layers painted with a soft
   edge into the chunks' vertex colours and the field's ground data, kept for chunks streamed in
   later, savable (`get_painted_weights()`).
+- Demo scene 6, **Cliff**: a curved rock face tessellated for the camera at runtime and split into
+  clusters, with boulders at its foot.
 - **Clustered bakes** (`GADSMeshInstance3D.cluster_triangles`): the bake split into compact
   spatial clusters (C++, median splits of the triangles' centroids), each its own instance with its
   own LODs, so large meshes are culled and LOD-selected per cluster; the same triangles as the
