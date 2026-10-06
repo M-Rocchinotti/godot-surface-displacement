@@ -61,6 +61,22 @@ enum DebugView { OFF = 0, HIT_OFFSET = 1, COST = 2, RELIEF = 3, NORMALS = 4, SEL
 	set(value):
 		scatter = value
 		_queue_apply()
+@export_group("Platforms")
+## The highest preset on a platform or renderer, while the game runs: keys are OS feature tags
+## ("mobile", "web", "android", "ios", "macos", "windows", "linuxbsd") or renderers
+## ("forward_plus", "mobile_renderer", "gl_compatibility"); values a GADSSettings.Preset. The
+## lowest cap that applies wins; Custom is never capped. The defaults keep phones and browsers
+## on Low.
+@export var platform_caps := {"mobile": GADSSettings.Preset.LOW, "web": GADSSettings.Preset.LOW}:
+	set(value):
+		platform_caps = value
+		_queue_apply()
+## Tags to test with instead of the real platform's (e.g. ["mobile"] on a desktop); empty: the
+## real ones. See [method get_platform_tags].
+@export var simulate_platform := PackedStringArray():
+	set(value):
+		simulate_platform = value
+		_queue_apply()
 @export_group("Adaptive quality")
 ## While the game runs, lower the quality when frames take longer than [member target_frame_ms]
 ## and bring it back when there is room again, one step at a time: a step down once the target
@@ -204,13 +220,65 @@ func is_feature_active(feature: Feature) -> bool:
 			return s.scatter_enabled
 
 
-## The preset in effect: [member preset], lowered by the adaptive quality's steps (not below
-## [member adaptive_min_preset]; Off and Custom are never stepped).
+## The preset in effect: [member preset], capped for the platform ([member platform_caps],
+## while the game runs) and lowered by the adaptive quality's steps (not below
+## [member adaptive_min_preset]); Off and Custom are never capped or stepped.
 func get_effective_preset() -> GADSSettings.Preset:
-	if _adapt_level == 0 or preset == GADSSettings.Preset.OFF or preset == GADSSettings.Preset.CUSTOM:
+	if preset == GADSSettings.Preset.OFF or preset == GADSSettings.Preset.CUSTOM:
 		return preset
-	var floor_preset := clampi(adaptive_min_preset, GADSSettings.Preset.LOW, preset)
-	return maxi(preset - _adapt_level, floor_preset) as GADSSettings.Preset
+	var base := preset
+	if not Engine.is_editor_hint():
+		base = mini(base, platform_cap(platform_caps, get_platform_tags())) as GADSSettings.Preset
+	if _adapt_level == 0:
+		return base
+	var floor_preset := clampi(adaptive_min_preset, GADSSettings.Preset.LOW, base)
+	return maxi(base - _adapt_level, floor_preset) as GADSSettings.Preset
+
+
+## The highest preset [param caps] allow for a platform with [param tags] (the lowest matching
+## cap; Ultra when none matches).
+static func platform_cap(caps: Dictionary, tags: PackedStringArray) -> int:
+	var cap := GADSSettings.Preset.ULTRA as int
+	for tag: String in tags:
+		if caps.has(tag):
+			cap = mini(cap, int(caps[tag]))
+	return cap
+
+
+## The tags [member platform_caps] match against: [member simulate_platform] when set, otherwise
+## the OS feature tags of this platform and the renderer ("forward_plus", "mobile_renderer" or
+## "gl_compatibility").
+func get_platform_tags() -> PackedStringArray:
+	if not simulate_platform.is_empty():
+		return simulate_platform
+	var tags := PackedStringArray()
+	for tag in ["mobile", "web", "android", "ios", "macos", "windows", "linuxbsd", "pc"]:
+		if OS.has_feature(tag):
+			tags.append(tag)
+	tags.append(renderer_tag())
+	return tags
+
+
+## The current renderer as a platform tag: "forward_plus", "mobile_renderer" or "gl_compatibility".
+static func renderer_tag() -> String:
+	var method := RenderingServer.get_current_rendering_method()
+	return "mobile_renderer" if method == "mobile" else method
+
+
+## What this machine supports of GADS: {"renderer" (tag), "native_library" (bakes, runtime
+## tessellation, procedural maps), "rendering_device" (the runtime ground capture of fields),
+## "tags", "cap" (the preset cap that applies)}. Unsupported parts fall back on their own: a
+## mesh that cannot bake draws its source with parallax, a field without ground data stays off,
+## and every material keeps at least normal mapping.
+func get_capabilities() -> Dictionary:
+	var tags := get_platform_tags()
+	return {
+		"renderer": renderer_tag(),
+		"native_library": GADSMeshBaker.is_available(),
+		"rendering_device": RenderingServer.get_rendering_device() != null,
+		"tags": tags,
+		"cap": platform_cap(platform_caps, tags),
+	}
 
 
 ## How many steps the adaptive quality is below the preset (0: none).

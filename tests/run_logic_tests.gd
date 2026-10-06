@@ -33,6 +33,7 @@ func _run() -> void:
 	test_mesh_diagnostics()
 	test_procedural()
 	await test_adaptive_quality()
+	await test_platform_caps()
 	await test_scatter_parameter_sync()
 	print("\nlogic tests: %d passed, %d failed" % [_passed, _failed])
 	quit(1 if _failed > 0 else 0)
@@ -1035,3 +1036,33 @@ func test_adaptive_quality() -> void:
 		{"priority": 50, "radius": 1.0, "distance": 20.0, "max": 1000000},
 	])
 	check(capped[0] == 20000 and capped[1] == 80000, "a node at its own maximum leaves the rest to the others (%s)" % [capped])
+
+
+## Per-platform caps: the lowest matching cap wins, none on a desktop by default; a simulated phone
+## gets Low; Custom is never capped; the capabilities report what this machine supports.
+func test_platform_caps() -> void:
+	print("\n== platform caps")
+	var P := GADSSettings.Preset
+	var caps := {"mobile": P.LOW, "web": P.LOW}
+	check(GADSManager.platform_cap(caps, PackedStringArray(["windows", "pc", "forward_plus"])) == P.ULTRA, "no cap on a desktop")
+	check(GADSManager.platform_cap(caps, PackedStringArray(["mobile", "android", "mobile_renderer"])) == P.LOW, "Low on a phone")
+	check(GADSManager.platform_cap({"mobile_renderer": P.MEDIUM, "android": P.LOW}, PackedStringArray(["android", "mobile_renderer"])) == P.LOW,
+		"the lowest matching cap wins")
+	var scene := Node3D.new()
+	var gads := GADSManager.new()
+	gads.preset = P.ULTRA
+	scene.add_child(gads)
+	root.add_child(scene)
+	check(gads.get_effective_preset() == P.ULTRA, "here (%s): Ultra stays Ultra" % [gads.get_platform_tags()])
+	gads.simulate_platform = PackedStringArray(["mobile", "android"])
+	gads.apply()
+	var applied: Vector4 = GADSGlobals.get_value(GADSGlobals.POM_STEPS)
+	GADSSettings.create_preset(P.LOW).apply_globals()
+	check(gads.get_effective_preset() == P.LOW and applied == GADSGlobals.get_value(GADSGlobals.POM_STEPS), "a simulated phone runs Low (and its globals)")
+	gads.preset = P.CUSTOM
+	check(gads.get_effective_preset() == P.CUSTOM, "Custom settings are never capped")
+	var info := gads.get_capabilities()
+	check(info.has("renderer") and info["native_library"] == GADSMeshBaker.is_available() and info["cap"] == P.LOW and info["tags"] == PackedStringArray(["mobile", "android"]),
+		"get_capabilities() reports the renderer, the native library, the tags and the cap (%s)" % [info])
+	scene.queue_free()
+	await process_frame

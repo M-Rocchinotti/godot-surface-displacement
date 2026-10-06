@@ -106,6 +106,10 @@ All notable changes to this project are documented here. The format follows
   Project > Tools > **Make Selected Meshes GADSMeshInstance3D** and **Bake Selected
   GADSMeshInstance3D** (undoable); Validate Setup reports stale bakes, unbakeable meshes, a
   missing native library and bakes the budget cut short.
+- **Platform caps and capabilities**: `GADSManager.platform_caps` (default: Low on phones and in
+  browsers) caps the preset by OS feature tag or renderer while the game runs,
+  `simulate_platform` tests another platform, `get_capabilities()` reports the renderer, native
+  library, rendering device and cap.
 - **Relief queries**: `GADSDisplacementField3D.get_surface_height()`, `get_surface_normal()` and
   `raycast_surface()` give gameplay the surface the field draws (ground plus the layers' relief
   at full resolution, minus the runtime deformation); `GADSTerrain3D.get_surface_height()` uses
