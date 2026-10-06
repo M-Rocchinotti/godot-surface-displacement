@@ -19,16 +19,25 @@ const MENU_HEIGHT := "GADS: Prepare Height Maps (FileSystem Selection)"
 const MENU_VALIDATE := "GADS: Validate Setup"
 const MENU_TEXTURE_SET := "GADS: Create Material from Selected Textures"
 const MENU_PROCEDURAL := "GADS: Generate Procedural Material..."
+const MENU_CLEAN_CACHE := "GADS: Clean Bake Cache..."
 const MENUS: Array[String] = [MENU_ADD_NODE, MENU_ADD_FIELD, MENU_CONVERT, MENU_MESH_CONVERT, MENU_MESH_BAKE, MENU_BAKE,
-	MENU_HEIGHT, MENU_TEXTURE_SET, MENU_PROCEDURAL, MENU_VALIDATE]
+	MENU_HEIGHT, MENU_TEXTURE_SET, MENU_PROCEDURAL, MENU_CLEAN_CACHE, MENU_VALIDATE]
 const MeshInspector := preload("res://addons/gads/editor/gads_mesh_inspector.gd")
+const TerrainInspector := preload("res://addons/gads/editor/gads_terrain_inspector.gd")
 const ProfilerPanel := preload("res://addons/gads/editor/gads_profiler_panel.gd")
 const ImportPlugin := preload("res://addons/gads/editor/gads_import_plugin.gd")
 
 var _mesh_inspector: EditorInspectorPlugin
-var _stroke_node: GADSMeshInstance3D # the node of the stroke in progress (null: none)
-var _stroke_before: Image # its sculpt map before the stroke (null: it had none)
+var _terrain_inspector: EditorInspectorPlugin
+var _stroke_node: Node3D # the node of the stroke in progress (null: none)
+var _stroke_before: Image # its sculpt map (a terrain: its edited map) before the stroke (null: it had none)
+var _stroke_kind := "" # a terrain stroke: "height" or "splat"
+var _stroke_original: Texture2D # a terrain's map before the stroke made it editable
+var _stroke_was_editable := true
+var _stroke_rect := Rect2i() # a terrain stroke's grid vertices
+var _stroke_flatten := NAN # the height Flatten levels to during the stroke
 var _pick_cache := {}
+var _brush := {} # the Sculpt tool's cursor: "camera", "position", "normal", "radius" (world), or empty
 var _profiler_panel: Control
 var _import_plugin: EditorScenePostImportPlugin
 
@@ -48,10 +57,13 @@ func _enter_tree() -> void:
 	add_tool_menu_item(MENU_HEIGHT, prepare_selected_height_maps)
 	add_tool_menu_item(MENU_TEXTURE_SET, create_materials_from_selection)
 	add_tool_menu_item(MENU_PROCEDURAL, generate_procedural_dialog)
+	add_tool_menu_item(MENU_CLEAN_CACHE, clean_bake_cache_dialog)
 	add_tool_menu_item(MENU_VALIDATE, validate)
 	_mesh_inspector = MeshInspector.new()
 	_mesh_inspector.undo_redo = get_undo_redo()
 	add_inspector_plugin(_mesh_inspector)
+	_terrain_inspector = TerrainInspector.new()
+	add_inspector_plugin(_terrain_inspector)
 	_profiler_panel = ProfilerPanel.new()
 	_profiler_panel.undo_redo = get_undo_redo()
 	add_control_to_bottom_panel(_profiler_panel, "GADS")
@@ -64,6 +76,8 @@ func _exit_tree() -> void:
 		remove_tool_menu_item(item)
 	remove_inspector_plugin(_mesh_inspector)
 	_mesh_inspector = null
+	remove_inspector_plugin(_terrain_inspector)
+	_terrain_inspector = null
 	remove_control_from_bottom_panel(_profiler_panel)
 	_profiler_panel.queue_free()
 	_profiler_panel = null
@@ -462,6 +476,50 @@ func generate_procedural_dialog() -> void:
 	dialog.popup_centered(Vector2i(420, 0))
 
 
+## Lists the bakes (and collision shapes and sculpt maps) in GADS cache directories that nothing
+## uses any more (GADSBakeCache.find_unused) and moves them to the trash when confirmed. Open
+## scenes and their undo history keep theirs; save the scenes first to clean what they dropped.
+func clean_bake_cache_dialog() -> void:
+	var unused := GADSBakeCache.find_unused()
+	if unused.is_empty():
+		var info := AcceptDialog.new()
+		info.title = "Clean GADS Bake Cache"
+		info.dialog_text = "No unused bakes: every file in the bake caches is used by a scene, a resource or the open scenes."
+		info.confirmed.connect(info.queue_free)
+		info.canceled.connect(info.queue_free)
+		EditorInterface.get_base_control().add_child(info)
+		info.popup_centered()
+		return
+	var dialog := ConfirmationDialog.new()
+	dialog.title = "Clean GADS Bake Cache"
+	dialog.ok_button_text = "Move to Trash"
+	var box := VBoxContainer.new()
+	dialog.add_child(box)
+	var label := Label.new()
+	label.text = "%d files (%s) are used by no scene or resource and by nothing open:" % [unused.size(), String.humanize_size(GADSBakeCache.total_size(unused))]
+	box.add_child(label)
+	var list := ItemList.new()
+	list.custom_minimum_size = Vector2(560, 240)
+	for p in unused:
+		list.add_item(p)
+	box.add_child(list)
+	dialog.confirmed.connect(func() -> void:
+		clean_bake_cache(unused)
+		dialog.queue_free())
+	dialog.canceled.connect(dialog.queue_free)
+	EditorInterface.get_base_control().add_child(dialog)
+	dialog.popup_centered()
+
+
+## Moves [param paths] (from GADSBakeCache.find_unused) to the trash and updates the FileSystem
+## dock. Returns how many were removed.
+func clean_bake_cache(paths: PackedStringArray) -> int:
+	var removed := GADSBakeCache.remove(paths)
+	print("GADS: removed %d unused bake files." % removed)
+	EditorInterface.get_resource_filesystem().scan()
+	return removed
+
+
 ## Writes the maps of a procedural [param kind] into [param dir] as "<name>_height.exr",
 ## "_normal.png", "_albedo.png" and "_orm.png" (GADSProcedural.write_texture_set with
 ## [param options]), imports them and saves the GADS material "<name>_gads.tres" there. Returns
@@ -545,15 +603,22 @@ static func is_imported(path: String) -> bool:
 
 
 func _handles(object: Object) -> bool:
-	return object is GADSMeshInstance3D
+	return object is GADSMeshInstance3D or object is GADSTerrain3D
 
 
-## The Sculpt tool (switched on in a GADSMeshInstance3D's inspector): left-drag in the 3D viewport
-## paints the node's sculpt map; the stroke is one undoable action and bakes again when it ends.
+## The Sculpt tool (switched on in a GADSMeshInstance3D's or GADSTerrain3D's inspector): left-drag
+## in the 3D viewport paints the node's sculpt map (bakes again when the stroke ends) or the
+## terrain's heights or layers; each stroke is one undoable action.
 func _forward_3d_gui_input(camera: Camera3D, event: InputEvent) -> int:
 	var node := GADSSculpt.tool_node
 	if node == null or not is_instance_valid(node) or not node.is_inside_tree() or not GADSSculpt.tool_active:
+		if not _brush.is_empty():
+			_brush = {}
+			update_overlays()
 		return EditorPlugin.AFTER_GUI_INPUT_PASS
+	var mouse := event as InputEventMouse
+	if mouse != null:
+		_update_brush(node, camera, mouse.position)
 	var button := event as InputEventMouseButton
 	if button != null and button.button_index == MOUSE_BUTTON_LEFT:
 		if button.pressed:
@@ -570,10 +635,76 @@ func _forward_3d_gui_input(camera: Camera3D, event: InputEvent) -> int:
 	return EditorPlugin.AFTER_GUI_INPUT_PASS
 
 
+## The brush outline under the mouse while the Sculpt tool is on.
+func _forward_3d_draw_over_viewport(overlay: Control) -> void:
+	if _brush.is_empty() or not GADSSculpt.tool_active or not is_instance_valid(_brush.get("camera")):
+		return
+	var camera: Camera3D = _brush["camera"]
+	var centre: Vector3 = _brush["position"]
+	var normal: Vector3 = _brush["normal"]
+	var radius: float = _brush["radius"]
+	var terrain: GADSTerrain3D = null
+	if _brush.has("terrain") and is_instance_valid(_brush["terrain"]):
+		terrain = _brush["terrain"]
+	var tangent := normal.cross(Vector3.UP if absf(normal.y) < 0.9 else Vector3.RIGHT).normalized()
+	var bitangent := normal.cross(tangent)
+	var points := PackedVector2Array()
+	for i in 49:
+		var a := TAU * i / 48.0
+		var p := centre + (tangent * cos(a) + bitangent * sin(a)) * radius
+		if terrain != null:
+			# On a terrain the outline lies on the ground.
+			p = centre + Vector3(cos(a), 0.0, sin(a)) * radius
+			var h := terrain.get_height(p)
+			p.y = h if not is_nan(h) else centre.y
+		if camera.is_position_behind(p):
+			return
+		points.append(camera.unproject_position(p))
+	var colors := {GADSSculpt.Mode.RAISE: Color(1.0, 0.75, 0.3), GADSSculpt.Mode.LOWER: Color(0.4, 0.7, 1.0),
+		GADSSculpt.Mode.SMOOTH: Color(0.6, 1.0, 0.6), GADSSculpt.Mode.FLATTEN: Color(1.0, 1.0, 1.0)}
+	var color: Color = colors.get(GADSSculpt.tool_mode, Color.WHITE)
+	if terrain != null and GADSSculpt.tool_paint >= 0:
+		color = Color(1.0, 0.45, 0.9)
+	overlay.draw_polyline(points, color, 2.0, true)
+	overlay.draw_circle(camera.unproject_position(centre), 2.5, color)
+
+
+func _update_brush(target: Node3D, camera: Camera3D, screen: Vector2) -> void:
+	var terrain := target as GADSTerrain3D
+	if terrain != null:
+		var at := terrain.intersect_ray(camera.project_ray_origin(screen), camera.project_ray_normal(screen))
+		if at.is_finite():
+			_brush = {"camera": camera, "position": at, "normal": Vector3.UP, "radius": GADSSculpt.terrain_radius, "terrain": terrain}
+		else:
+			_brush = {}
+		update_overlays()
+		return
+	var node := target as GADSMeshInstance3D
+	if node == null:
+		return
+	var to_local := node.global_transform.affine_inverse()
+	var hit := GADSSculpt.pick(node.mesh, to_local * camera.project_ray_origin(screen),
+		(to_local.basis * camera.project_ray_normal(screen)).normalized(), _pick_cache)
+	if hit.is_empty():
+		if not _brush.is_empty():
+			_brush = {}
+			update_overlays()
+		return
+	var xf := node.global_transform
+	_brush = {"camera": camera, "position": xf * (hit["position"] as Vector3),
+		"normal": (xf.basis.inverse().transposed() * (hit["normal"] as Vector3)).normalized(), "radius": GADSSculpt.tool_radius}
+	update_overlays()
+
+
 ## One dab of the Sculpt tool's brush where the world ray from [param origin] along
 ## [param direction] meets [param node]'s mesh (starting a stroke if none is in progress). Returns
 ## whether it hit.
-func sculpt_at(node: GADSMeshInstance3D, origin: Vector3, direction: Vector3) -> bool:
+func sculpt_at(target: Node3D, origin: Vector3, direction: Vector3) -> bool:
+	if target is GADSTerrain3D:
+		return _terrain_dab(target as GADSTerrain3D, origin, direction)
+	var node := target as GADSMeshInstance3D
+	if node == null:
+		return false
 	var to_local := node.global_transform.affine_inverse()
 	var hit := GADSSculpt.pick(node.mesh, to_local * origin, (to_local.basis * direction).normalized(), _pick_cache)
 	if hit.is_empty():
@@ -581,30 +712,97 @@ func sculpt_at(node: GADSMeshInstance3D, origin: Vector3, direction: Vector3) ->
 	if _stroke_node == null:
 		_stroke_node = node
 		_stroke_before = node.get_sculpt_image().duplicate() if node.sculpt_map != null else null
+		var img := node.get_sculpt_image()
+		var uv: Vector2 = hit["uv"]
+		_stroke_flatten = img.get_pixel(clampi(int(uv.x * img.get_width()), 0, img.get_width() - 1), clampi(int(uv.y * img.get_height()), 0, img.get_height() - 1)).r
 	# The brush radius is in metres: in uv units through the hit triangle's texel density (and the
 	# node's scale).
 	var scale := node.global_transform.basis.get_scale()
 	var radius_uv := GADSSculpt.tool_radius / maxf((scale.x + scale.y + scale.z) / 3.0, 1e-6) * float(hit["uv_per_m"])
 	var amount := GADSSculpt.tool_strength if GADSSculpt.tool_mode in [GADSSculpt.Mode.RAISE, GADSSculpt.Mode.LOWER] else 0.25
-	GADSSculpt.dab(node.get_sculpt_image(), hit["uv"], radius_uv, GADSSculpt.tool_mode, amount)
+	GADSSculpt.dab(node.get_sculpt_image(), hit["uv"], radius_uv, GADSSculpt.tool_mode, amount, _stroke_flatten)
+	return true
+
+
+## One dab on a terrain: its heights (Raise, Lower, Smooth, Flatten) or, with
+## GADSSculpt.tool_paint >= 0, its layers.
+func _terrain_dab(terrain: GADSTerrain3D, origin: Vector3, direction: Vector3) -> bool:
+	var hit := terrain.intersect_ray(origin, direction)
+	if not hit.is_finite():
+		return false
+	var painting := GADSSculpt.tool_paint >= 0
+	if _stroke_node == null:
+		_stroke_node = terrain
+		_stroke_kind = "splat" if painting else "height"
+		_stroke_was_editable = terrain.is_splat_editable() if painting else terrain.is_height_editable()
+		_stroke_original = terrain.splatmap if painting else terrain.heightmap
+		_stroke_before = terrain.get_splat_image() if painting else terrain.get_height_image()
+		_stroke_rect = Rect2i()
+		_stroke_flatten = hit.y
+	var rect: Rect2i
+	if _stroke_kind == "splat":
+		rect = terrain.paint_splatmap(hit, GADSSculpt.terrain_radius, maxi(GADSSculpt.tool_paint, 0), 0.25)
+	else:
+		var raise := GADSSculpt.tool_mode == GADSSculpt.Mode.RAISE or GADSSculpt.tool_mode == GADSSculpt.Mode.LOWER
+		rect = terrain.sculpt(hit, GADSSculpt.terrain_radius, GADSSculpt.tool_mode, GADSSculpt.terrain_strength if raise else 0.25, _stroke_flatten)
+	if rect.has_area():
+		_stroke_rect = rect if not _stroke_rect.has_area() else _stroke_rect.merge(rect)
 	return true
 
 
 ## Ends the stroke in progress: one undoable action, and the node bakes again.
 func end_sculpt_stroke() -> void:
 	if _stroke_node == null or not is_instance_valid(_stroke_node):
-		_stroke_node = null
-		_stroke_before = null
+		_reset_stroke()
 		return
-	var node := _stroke_node
+	if _stroke_node is GADSTerrain3D:
+		_end_terrain_stroke(_stroke_node as GADSTerrain3D)
+		_reset_stroke()
+		return
+	var node := _stroke_node as GADSMeshInstance3D
 	var after := node.get_sculpt_image().duplicate() as Image
 	var undo := get_undo_redo()
 	undo.create_action("GADS Sculpt", UndoRedo.MERGE_DISABLE, node)
 	undo.add_do_method(node, "set_sculpt_image", after)
 	undo.add_undo_method(node, "set_sculpt_image", _stroke_before)
-	_stroke_before = null
-	_stroke_node = null
+	_reset_stroke()
 	undo.commit_action()
+
+
+## A terrain stroke as one action: the edited region before and after (and, on the stroke that
+## made a map editable, the map it replaced); the edited maps are saved after it, its undo and redo.
+func _end_terrain_stroke(terrain: GADSTerrain3D) -> void:
+	terrain.flush_edits()
+	if not _stroke_rect.has_area() or _stroke_before == null:
+		return
+	var painting := _stroke_kind == "splat"
+	var now := terrain.get_splat_image() if painting else terrain.get_height_image()
+	var after := now.get_region(_stroke_rect)
+	var before := _stroke_before.get_region(_stroke_rect)
+	var property := "splatmap" if painting else "heightmap"
+	var setter := "set_splat_region" if painting else "set_height_region"
+	var undo := get_undo_redo()
+	undo.create_action("GADS Terrain Paint" if painting else "GADS Terrain Sculpt", UndoRedo.MERGE_DISABLE, terrain)
+	if not _stroke_was_editable:
+		undo.add_do_property(terrain, property, terrain.get(property))
+	undo.add_do_method(terrain, setter, _stroke_rect.position, after)
+	undo.add_do_method(terrain, "save_edited_maps")
+	undo.add_undo_method(terrain, setter, _stroke_rect.position, before)
+	if not _stroke_was_editable:
+		undo.add_undo_property(terrain, property, _stroke_original)
+	undo.add_undo_method(terrain, "save_edited_maps")
+	undo.commit_action(false)
+	terrain.save_edited_maps()
+
+
+func _reset_stroke() -> void:
+	_stroke_node = null
+	_stroke_before = null
+	_stroke_kind = ""
+	_stroke_original = null
+	_stroke_was_editable = true
+	_stroke_rect = Rect2i()
+	_stroke_flatten = NAN
 
 
 func validate() -> void:

@@ -61,6 +61,7 @@ func _run() -> void:
 	await _test("diagnostics_overlay", test_diagnostics)
 	await _test("export", test_export)
 	await _test("sculpt", test_sculpt)
+	await _test("bake_cache", test_bake_cache)
 	await _test("import_options", test_import)
 	if DisplayServer.get_name() != "headless":
 		await _test("renders_like_parallax", test_render)
@@ -1451,6 +1452,37 @@ func test_runtime_budget() -> void:
 ## Sculpting: picking finds the uv under a ray; a sculpt map raises the baked surface by its
 ## offsets at the source uvs, on a mesh without any relief and on top of a relief; the bake key
 ## follows it; removing it bakes flat again.
+func test_bake_cache() -> void:
+	var dir := CACHE_DIR.path_join("clean")
+	var node := GADSMeshInstance3D.new()
+	node.name = "CacheClean"
+	node.source_mesh = plane()
+	node.cache_directory = dir
+	node.material_override = uv_material(bump_field(64, 0.1), 0.02)
+	root.add_child(node)
+	node.bake()
+	var first := node.mesh.resource_path
+	node.material_override = uv_material(bump_field(64, 0.1), 0.03)
+	node.bake()
+	var second := node.mesh.resource_path
+	await process_frame
+	var unused := GADSBakeCache.find_unused(PackedStringArray([dir]))
+	check(GADSBakeCache.is_cache_file(first) and first != second and first in unused and not second in unused,
+		"the earlier bake is unused, the node's own is not (%s)" % [unused])
+	node.queue_free()
+	await process_frame
+	await process_frame
+	unused = GADSBakeCache.find_unused(PackedStringArray([dir]))
+	check(second in unused, "nothing holds the node's bake once it is gone")
+	check(GADSBakeCache.remove(unused) == unused.size() and not FileAccess.file_exists(first) and not FileAccess.file_exists(second),
+		"remove() takes them away")
+	check(not GADSBakeCache.is_cache_file("res://gads_baked/notes.txt") and GADSBakeCache.is_cache_file("res://x/rock_sculpt.res")
+		and GADSBakeCache.is_cache_file("res://x/rock_0123456789abcdef_collision.res") and not GADSBakeCache.is_cache_file("res://x/rock_ground.res"),
+		"only files named like bakes, collision shapes and sculpt maps count")
+	check(GADSBakeCache.dependency_path("uid://abc::ArrayMesh::res://a/b.mesh") == "res://a/b.mesh"
+		and GADSBakeCache.dependency_path("res://a/b.mesh::ArrayMesh") == "res://a/b.mesh", "dependency entries give their path")
+
+
 func test_sculpt() -> void:
 	var node := GADSMeshInstance3D.new()
 	node.name = "Sculpted"

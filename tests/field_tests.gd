@@ -846,6 +846,15 @@ func test_demo_camera() -> void:
 	await h.frames(2)
 	print("  moved %.3f m forward" % moved)
 	check(moved > 0.02, "holding the right mouse button and W flies the demo camera forward")
+	# C digs a crater in the hills.
+	demo.call("load_scene", 4)
+	await h.frames(3)
+	var terrain := (demo.get("scene") as Node).find_children("*", "GADSTerrain3D", true, false)[0] as GADSTerrain3D
+	var view := h.viewport.get_camera_3d()
+	var aim := terrain.intersect_ray(view.project_ray_origin(Vector2(SIZE) * 0.5), view.project_ray_normal(Vector2(SIZE) * 0.5))
+	var dug: Vector3 = demo.call("dig_crater")
+	print("  crater at %s: %.2f m deep" % [dug, aim.y - terrain.get_height(aim) if aim.is_finite() else NAN])
+	check(aim.is_finite() and dug.distance_to(aim) < 0.01 and terrain.get_height(aim) < aim.y - 0.9, "C digs a crater where the view points (hills)")
 	for field: GADSDisplacementField3D in demo.find_children("*", "GADSDisplacementField3D", true, false):
 		if field.is_baking():
 			await field.baked

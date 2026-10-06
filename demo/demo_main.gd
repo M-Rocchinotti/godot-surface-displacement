@@ -2,7 +2,7 @@ extends Node
 ## GADS demo: seven scenes, presets, per-feature switches, a flat / POM /
 ## POM + geometry comparison, weather, debug views and a frame-time overlay.
 ## Keys: 1-7 scene, V next camera view, P next preset, B next comparison mode, R next weather,
-## H hide the panel, G the GADS profiler overlay;
+## C dig a crater where the view points (hills), H hide the panel, G the GADS profiler overlay;
 ## hold the right mouse button and use WASD/QE to fly (Shift fast, Alt slow).
 
 const Builder := preload("res://demo/scenes/demo_builder.gd")
@@ -139,11 +139,30 @@ func _unhandled_key_input(event: InputEvent) -> void:
 			_weather = (_weather + 1) % WEATHER.size()
 			var w: Array = WEATHER[_weather]
 			gads.set_weather(w[1], w[2], w[3])
+		KEY_C:
+			dig_crater()
 		KEY_H:
 			_panel.visible = not _panel.visible
 		KEY_G:
 			_overlay.target = _overlay.get_path_to(scene)
 			_overlay.shown = not _overlay.shown
+
+
+## C: digs a crater where the middle of the view meets a GADSTerrain3D (the hills scene) with the
+## terrain's runtime sculpting: a raised rim, then the pit; the chunks, collision and near-camera
+## ground follow. Returns where (Vector3.INF: no terrain there).
+func dig_crater() -> Vector3:
+	var cam := get_viewport().get_camera_3d()
+	if cam == null or scene == null:
+		return Vector3.INF
+	var centre := get_viewport().get_visible_rect().size * 0.5
+	for t: GADSTerrain3D in scene.find_children("*", "GADSTerrain3D", true, false):
+		var hit := t.intersect_ray(cam.project_ray_origin(centre), cam.project_ray_normal(centre))
+		if hit.is_finite():
+			t.sculpt(hit, 4.5, GADSSculpt.Mode.RAISE, 0.35)
+			t.sculpt(hit, 3.0, GADSSculpt.Mode.LOWER, 1.4)
+			return hit
+	return Vector3.INF
 
 
 # --- UI ------------------------------------------------------------------------------------

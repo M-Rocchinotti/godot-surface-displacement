@@ -249,6 +249,76 @@ func _run() -> void:
 		GADSSculpt.tool_active = false
 		GADSSculpt.tool_node = null
 
+	# 13. Clean Bake Cache: a stale bake nothing refers to is listed and removed; the bakes the open
+	# scene uses (and its undo history holds) and files not named like bakes stay.
+	DirAccess.make_dir_recursive_absolute("res://gads_baked")
+	var stale_path := "res://gads_baked/stale_0123456789abcdef.mesh"
+	var stale_mesh := ArrayMesh.new()
+	stale_mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, BoxMesh.new().get_mesh_arrays())
+	ResourceSaver.save(stale_mesh, stale_path)
+	var notes := FileAccess.open("res://gads_baked/notes.txt", FileAccess.WRITE)
+	notes.store_string("not a bake")
+	notes.close()
+	var unused := GADSBakeCache.find_unused()
+	var in_use := baked_box.mesh.resource_path if baked_box != null and baked_box.baked else ""
+	_check(stale_path in unused and not in_use.is_empty() and not in_use in unused and not "res://gads_baked/notes.txt" in unused,
+		"Clean Bake Cache lists the stale bake, not the one in use (%s) nor other files: %s" % [in_use, unused])
+	_check(_sd_plugin.clean_bake_cache(PackedStringArray([stale_path])) == 1 and not FileAccess.file_exists(stale_path)
+		and FileAccess.file_exists(in_use), "it removes the stale bake and keeps the one in use")
+	DirAccess.remove_absolute(ProjectSettings.globalize_path("res://gads_baked/notes.txt"))
+	await _frames_wait(5)
+
+	# 14. Terrain Sculpt / Paint: strokes as the viewport sends them, the edited maps saved next to
+	# the scene, undo and redo (the first stroke's undo gives the original map back).
+	var terrain := GADSTerrain3D.new()
+	terrain.name = "Terrain"
+	terrain.size = Vector2(16, 16)
+	terrain.vertex_spacing = 0.5
+	terrain.chunk_quads = 16
+	terrain.height_scale = 10.0
+	terrain.detail_field = false
+	terrain.position = Vector3(40, 0, 0)
+	root.add_child(terrain)
+	terrain.owner = root
+	await _frames_wait(2)
+	var aim := Vector3(41, 0, 1)
+	var h0 := terrain.get_height(aim)
+	GADSSculpt.tool_active = true
+	GADSSculpt.tool_node = terrain
+	GADSSculpt.tool_mode = GADSSculpt.Mode.RAISE
+	GADSSculpt.tool_paint = -1
+	GADSSculpt.terrain_radius = 2.0
+	GADSSculpt.terrain_strength = 0.5
+	var dabs := 0
+	for i in 4:
+		dabs += 1 if _sd_plugin.sculpt_at(terrain, aim + Vector3(0.05 * i, 20, 0), Vector3.DOWN) else 0
+	_sd_plugin.end_sculpt_stroke()
+	var height_path := terrain.heightmap.resource_path if terrain.heightmap != null else ""
+	_check(dabs == 4 and terrain.get_height(aim) > h0 + 1.0 and height_path.begins_with(terrain.data_directory) and FileAccess.file_exists(height_path),
+		"a terrain Sculpt stroke raises the ground (%.2f m) and saves the heightmap (%s)" % [terrain.get_height(aim) - h0, height_path])
+	ur.undo()
+	await _frames_wait(2)
+	_check(terrain.heightmap == null and absf(terrain.get_height(aim) - h0) < 1e-4, "undo puts the heights and the original (no) heightmap back")
+	ur.redo()
+	await _frames_wait(2)
+	_check(terrain.heightmap != null and terrain.heightmap.resource_path == height_path and terrain.get_height(aim) > h0 + 1.0, "redo sculpts again")
+	GADSSculpt.tool_paint = 1
+	dabs = 0
+	for i in 4:
+		dabs += 1 if _sd_plugin.sculpt_at(terrain, aim + Vector3(0, 20, 0.05 * i), Vector3.DOWN) else 0
+	_sd_plugin.end_sculpt_stroke()
+	var splat_path := terrain.splatmap.resource_path if terrain.splatmap != null else ""
+	_check(dabs == 4 and terrain.get_layer_weights(aim).x > 0.5 and splat_path.begins_with(terrain.data_directory) and FileAccess.file_exists(splat_path),
+		"a Paint stroke paints the second layer and saves the splat map (%s)" % splat_path)
+	ur.undo()
+	await _frames_wait(2)
+	_check(terrain.splatmap == null and terrain.get_layer_weights(aim).x < 0.01 and terrain.get_height(aim) > h0 + 1.0, "undo removes the paint, the sculpt stays")
+	ur.redo()
+	await _frames_wait(2)
+	GADSSculpt.tool_active = false
+	GADSSculpt.tool_node = null
+	GADSSculpt.tool_paint = -1
+
 	# 9. What a save writes.
 	EditorInterface.save_scene()
 	await _frames_wait(5)
@@ -262,6 +332,8 @@ func _run() -> void:
 	_check(field.visible and not text.contains("visible = false") and not text.contains("resolution = "),
 			"the GADSManager node leaves the field's saved properties alone in the editor")
 	_check(text.contains("check_scene_ground.res") and not text.contains("gads_ground_bake.gd"), "the field keeps its bake as a reference to the file (nothing embedded)")
+	_check(text.contains("check_scene_terrain_height.res") and text.contains("check_scene_terrain_splat.res") and not text.contains("Chunk_"),
+		"the edited terrain refers to its saved heightmap and splat map (its chunks are not saved)")
 	_finish()
 
 

@@ -20,6 +20,11 @@ extends Node3D
 ## - Streaming ([member stream_radius]): for terrains of kilometres, only the chunks around the
 ##   camera exist, built on worker threads as the camera moves, with collision per chunk and the
 ##   detail field's ground data in a window that follows the camera.
+## - Editing ([method sculpt], [method paint_splatmap]; the inspector's Sculpt tool in the editor):
+##   raise, lower, smooth and flatten the heights and paint the layers with a brush, in the editor
+##   (undoable, saved into [member data_directory]) or while the game runs (craters, digging). The
+##   heightmap and splat map become editable maps of one texel per vertex; only what a stroke
+##   touches is rebuilt.
 ##
 ## The terrain is centred on the node, its size rounded to whole chunks. The detail field and
 ## deformation work in world space: keep the node unrotated and unscaled (moving it is fine; the
@@ -28,6 +33,9 @@ extends Node3D
 signal rebuilt
 ## A streamed chunk was built and added (chunk coordinates).
 signal chunk_loaded(chunk: Vector2i)
+## Heights or layers changed by an edit ([method sculpt], [method paint_splatmap], a region set
+## back by undo); [param rect] in grid vertices.
+signal edited(rect: Rect2i)
 
 const MAX_LAYERS := 3
 ## Streamed chunks built on worker threads at once.
@@ -38,7 +46,8 @@ const MAX_STREAM_TASKS := 4
 @export var heightmap: Texture2D:
 	set(value):
 		heightmap = value
-		_queue_rebuild()
+		if not _swapping_edit_map:
+			_queue_rebuild()
 ## Width and depth (m), rounded to whole chunks.
 @export var size := Vector2(256, 256):
 	set(value):
@@ -70,7 +79,8 @@ const MAX_STREAM_TASKS := 4
 @export var splatmap: Texture2D:
 	set(value):
 		splatmap = value
-		_queue_rebuild()
+		if not _swapping_edit_map:
+			_queue_rebuild()
 ## The layer (1 or 2; 0 = none) that covers slopes steeper than [member slope_range] (degrees,
 ## fading in over the range): rock on cliffs.
 @export_range(0, 2) var slope_layer := 1:
@@ -168,6 +178,11 @@ const MAX_STREAM_TASKS := 4
 		detail_subdivision = value
 		_queue_rebuild()
 
+@export_group("Editing")
+## Where the editor saves the terrain's edited heightmap and splat map
+## ([code]<scene>_<node>_height.res[/code], [code]_splat.res[/code]) after each stroke.
+@export_dir var data_directory := "res://gads_terrain"
+
 @export_tool_button("Rebuild", "Reload") var _rebuild_button := rebuild
 
 var _nx := 0
@@ -199,6 +214,13 @@ var _field: GADSDisplacementField3D
 var _material: Material
 var _queued := false
 var _build_ms := 0.0
+var _src_texture: Texture2D # the heightmap _src was read from
+var _splat_texture: Texture2D # the splat map _splat was read from
+var _swapping_edit_map := false
+var _whole_shape: CollisionShape3D # the whole terrain's height shape (not streaming)
+var _edit_dirty := Rect2i() # grid vertices whose ground data and map textures wait for flush_edits()
+var _edit_maps_dirty := {}
+var _edit_queued := false
 
 
 func _ready() -> void:
@@ -233,7 +255,12 @@ func _queue_rebuild() -> void:
 	if not is_inside_tree() or _queued:
 		return
 	_queued = true
-	rebuild.call_deferred()
+	_rebuild_if_queued.call_deferred()
+
+
+func _rebuild_if_queued() -> void:
+	if _queued:
+		rebuild()
 
 
 ## Builds the heights, the chunks, the collision and the detail field again (after changing the
@@ -249,6 +276,10 @@ func rebuild() -> void:
 	_setup_grid()
 	_src = _float_image(heightmap)
 	_splat = _rgba_image(splatmap)
+	_src_texture = heightmap
+	_splat_texture = splatmap
+	_edit_dirty = Rect2i()
+	_edit_maps_dirty = {}
 	_heights.clear()
 	_w1.clear()
 	_w2.clear()
@@ -433,6 +464,11 @@ func clear_paint() -> void:
 ## Refreshes the vertex colours of the chunks within local [param rect] and the field's ground
 ## data there.
 func _repaint(rect: Rect2) -> void:
+	_repaint_chunks(rect)
+	_repaint_ground(rect)
+
+
+func _repaint_chunks(rect: Rect2) -> void:
 	var cq := chunk_quads
 	for key: Vector2i in _chunk_data.keys():
 		var r := _chunk_rect(key).grow(_spacing)
@@ -453,7 +489,6 @@ func _repaint(rect: Rect2) -> void:
 		var mesh := (_chunk_nodes[key] as MeshInstance3D).mesh as ArrayMesh
 		mesh.clear_surfaces()
 		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays, [], data["lods"])
-	_repaint_ground(rect)
 
 
 ## Rewrites the layer codes of the field's ground data within local [param rect].
@@ -498,17 +533,29 @@ func get_ground_texel() -> float:
 ## [method get_ground_texel]). [param rect]: the local XZ part to cover (empty: all of it).
 ## Reads no node: a worker thread may call it.
 func make_ground_bake(rect := Rect2()) -> GADSGroundBake:
-	if _nx < 2:
+	var part := _ground_arrays(rect)
+	if part.is_empty():
 		return null
+	var texel: float = part["texel"]
+	var gp := _ground_offset_cache
+	return GADSGroundBake.from_arrays(part["size"], part["heights"], part["codes"],
+		_origin + Vector2(part["first"]) * texel - Vector2(texel, texel) * 0.5 + Vector2(gp.x, gp.z), texel)
+
+
+## The ground data's texels within local [param rect] (all: empty): {"first" (the first texel's
+## index on the terrain's texel grid), "size", "heights" (world), "codes", "texel"}, or {}.
+func _ground_arrays(rect := Rect2()) -> Dictionary:
+	if _nx < 2:
+		return {}
 	var extent := get_extent()
 	var all := Rect2(_origin, extent)
 	rect = all if not rect.has_area() else rect.intersection(all)
-	if not rect.has_area():
-		return null
 	var texel := get_ground_texel()
 	# Snap to the texel grid (which has a texel centre on vertex (0, 0)).
 	var i0 := Vector2i(((rect.position - _origin) / texel).floor())
 	var i1 := Vector2i(((rect.end - _origin) / texel).ceil())
+	if not rect.has_area():
+		return {}
 	var w := i1.x - i0.x + 1
 	var d := i1.y - i0.y + 1
 	if OS.get_thread_caller_id() == OS.get_main_thread_id() and is_inside_tree():
@@ -527,8 +574,7 @@ func make_ground_bake(rect := Rect2()) -> GADSGroundBake:
 			var wts := _weights_at(g)
 			var layer := 2 if wts.y >= 0.5 else (1 if wts.x >= 0.5 else 0)
 			codes[i] = layer if layer < layers.size() else -1
-	return GADSGroundBake.from_arrays(Vector2i(w, d), heights, codes,
-		_origin + Vector2(i0) * texel - Vector2(texel, texel) * 0.5 + Vector2(gp.x, gp.z), texel)
+	return {"first": i0, "size": Vector2i(w, d), "heights": heights, "codes": codes, "texel": texel}
 
 
 ## How far the field's bilinear heights can fall from the triangles on ground it displaces (m):
@@ -558,6 +604,426 @@ func ground_data_error(rect := Rect2()) -> float:
 				continue
 			worst = maxf(worst, absf(h00 + h11 - h10 - h01))
 	return worst * factor
+
+
+# --- Editing ------------------------------------------------------------------------------------
+
+## Sculpts the heights within [param radius] metres of [param world_position] with GADSSculpt's
+## brush: RAISE / LOWER by up to [param strength] metres in the middle, SMOOTH / FLATTEN by up to
+## [param strength] (0..1) of the way, with a smooth falloff; FLATTEN levels to the world height
+## [param flatten_to] (NAN: the height in the middle). Persistent: the heightmap becomes an
+## editable map of one texel per vertex ([method make_heights_editable]). The chunks, collision,
+## slope and height rules and (next frame) the detail field's ground data follow. Returns the grid
+## vertices it changed. Needs [member height_scale] above 0.
+func sculpt(world_position: Vector3, radius: float, mode: GADSSculpt.Mode, strength: float, flatten_to := NAN) -> Rect2i:
+	if _nx < 2 or radius <= 0.0 or height_scale <= 0.0:
+		return Rect2i()
+	make_heights_editable()
+	_wait_tasks()
+	var local := to_local(world_position)
+	var centre := (Vector2(local.x, local.z) - _origin) / _spacing + Vector2(0.5, 0.5)
+	var amount := strength / height_scale if mode == GADSSculpt.Mode.RAISE or mode == GADSSculpt.Mode.LOWER else strength
+	var target := NAN
+	if not is_nan(flatten_to):
+		target = (to_local(Vector3(world_position.x, flatten_to, world_position.z)).y - height_offset) / height_scale
+	var rect := GADSSculpt.dab_values(_src["data"], _nx, _nz, centre, Vector2.ONE * radius / _spacing, mode, amount, target)
+	_heights_changed(rect)
+	return rect
+
+
+## Paints [param layer] (1: the second layer, 2: the third, 0: back to the first) into the splat
+## map within [param radius] metres of [param world_position], by up to [param strength] (0..1) in
+## the middle with GADSSculpt's falloff. Persistent: the splat map becomes an editable map of one
+## texel per vertex ([method make_splat_editable]; the slope and height rules and what
+## [method paint_layer] painted are kept in it). Returns the grid vertices it changed.
+func paint_splatmap(world_position: Vector3, radius: float, layer: int, strength := 1.0) -> Rect2i:
+	if _nx < 2 or radius <= 0.0:
+		return Rect2i()
+	make_splat_editable()
+	_wait_tasks()
+	var local := to_local(world_position)
+	var c := (Vector2(local.x, local.z) - _origin) / _spacing
+	var r := radius / _spacing
+	var g0 := Vector2i((c - Vector2.ONE * r).floor()).clamp(Vector2i.ZERO, Vector2i(_nx - 1, _nz - 1))
+	var g1 := Vector2i((c + Vector2.ONE * r).ceil()).clamp(Vector2i.ZERO, Vector2i(_nx - 1, _nz - 1))
+	var target := Vector2(1.0 if layer == 1 else 0.0, 1.0 if layer == 2 else 0.0)
+	var data: PackedFloat32Array = _splat["data"]
+	for gz in range(g0.y, g1.y + 1):
+		for gx in range(g0.x, g1.x + 1):
+			var d := (Vector2(gx, gz) - c).length() / r
+			if d >= 1.0:
+				continue
+			var f := 1.0 - d * d
+			var k := (gz * _nx + gx) * 4
+			var w := Vector2(data[k], data[k + 1])
+			var painted := w.lerp(target, clampf(strength, 0.0, 1.0) * f * f)
+			if layer == 1:
+				painted.x = maxf(painted.x, w.x)
+			elif layer == 2:
+				painted.y = maxf(painted.y, w.y)
+			# Stored as 8 bits a channel: kept quantized, so a saved map reads back the same.
+			data[k] = roundf(clampf(painted.x, 0.0, 1.0) * 255.0) / 255.0
+			data[k + 1] = roundf(clampf(painted.y, 0.0, 1.0) * 255.0) / 255.0
+	var rect := Rect2i(g0, g1 - g0 + Vector2i.ONE)
+	_weights_changed(rect)
+	return rect
+
+
+## Whether [member heightmap] is an editable map (an ImageTexture of one float texel per vertex).
+func is_height_editable() -> bool:
+	var tex := heightmap as ImageTexture
+	return tex != null and _nx >= 2 and tex.get_width() == _nx and tex.get_height() == _nz and tex.get_format() == Image.FORMAT_RF
+
+
+## Whether [member splatmap] is an editable map (an ImageTexture of one RG8 texel per vertex).
+func is_splat_editable() -> bool:
+	var tex := splatmap as ImageTexture
+	return tex != null and _nx >= 2 and tex.get_width() == _nx and tex.get_height() == _nz and tex.get_format() == Image.FORMAT_RG8
+
+
+## Replaces [member heightmap] by an editable map with the same heights at every vertex (0..1 over
+## [member height_scale], FORMAT_RF, one texel per vertex), unless it is one.
+func make_heights_editable() -> void:
+	_sync_maps()
+	if _nx < 2 or is_height_editable():
+		return
+	_wait_tasks()
+	var data := PackedFloat32Array()
+	data.resize(_nx * _nz)
+	var inv := 1.0 / height_scale if height_scale > 0.0 else 0.0
+	for i in _nx * _nz:
+		data[i] = ((_heights[i] if not _heights.is_empty() else _grid_h(i % _nx, i / _nx)) - height_offset) * inv
+	_src = {"width": _nx, "height": _nz, "data": data}
+	_swapping_edit_map = true
+	heightmap = ImageTexture.create_from_image(_height_image())
+	_swapping_edit_map = false
+	_src_texture = heightmap
+
+
+## Replaces [member splatmap] by an editable map with the same layer weights at every vertex (R:
+## the second layer, G: the third, FORMAT_RG8, one texel per vertex), unless it is one. The rules
+## and the painted weights are kept in it.
+func make_splat_editable() -> void:
+	_sync_maps()
+	if _nx < 2 or is_splat_editable():
+		return
+	_wait_tasks()
+	var data := PackedFloat32Array()
+	data.resize(_nx * _nz * 4)
+	for z in _nz:
+		for x in _nx:
+			var w := _grid_weights(x, z)
+			var k := (z * _nx + x) * 4
+			data[k] = roundf(clampf(w.x, 0.0, 1.0) * 255.0) / 255.0
+			data[k + 1] = roundf(clampf(w.y, 0.0, 1.0) * 255.0) / 255.0
+			data[k + 3] = 1.0
+	_splat = {"width": _nx, "height": _nz, "data": data}
+	_paint = {}
+	_paint_version += 1
+	if not _w1.is_empty():
+		_build_weights()
+	_swapping_edit_map = true
+	splatmap = ImageTexture.create_from_image(_splat_image())
+	_swapping_edit_map = false
+	_splat_texture = splatmap
+
+
+## The editable heights (FORMAT_RF, 0..1 over [member height_scale], one texel per vertex), a copy.
+func get_height_image() -> Image:
+	make_heights_editable()
+	return _height_image() if not _src.is_empty() else null
+
+
+func _height_image() -> Image:
+	return Image.create_from_data(_nx, _nz, false, Image.FORMAT_RF, (_src["data"] as PackedFloat32Array).to_byte_array())
+
+
+## The editable splat map (FORMAT_RG8, one texel per vertex), a copy.
+func get_splat_image() -> Image:
+	make_splat_editable()
+	return _splat_image() if not _splat.is_empty() else null
+
+
+func _splat_image() -> Image:
+	var img := Image.create_from_data(_nx, _nz, false, Image.FORMAT_RGBAF, (_splat["data"] as PackedFloat32Array).to_byte_array())
+	img.convert(Image.FORMAT_RG8)
+	return img
+
+
+## Writes [param region] (heights as [method get_height_image] has them) into the editable
+## heightmap with its top-left texel at grid vertex [param position], and updates the terrain
+## there (the map's texture at once). The Sculpt tool's undo and redo.
+func set_height_region(position: Vector2i, region: Image) -> void:
+	make_heights_editable()
+	if _src.is_empty() or region == null:
+		return
+	_wait_tasks()
+	var img := region.duplicate() as Image
+	img.convert(Image.FORMAT_RF)
+	var rect := _blit(_src["data"], 1, img.get_data().to_float32_array(), img.get_size(), position)
+	_heights_changed(rect)
+	flush_edits()
+
+
+## Writes [param region] (FORMAT_RG8, as [method get_splat_image] has it) into the editable splat
+## map at grid vertex [param position] and updates the terrain there. The Paint tool's undo and
+## redo.
+func set_splat_region(position: Vector2i, region: Image) -> void:
+	make_splat_editable()
+	if _splat.is_empty() or region == null:
+		return
+	_wait_tasks()
+	var img := region.duplicate() as Image
+	img.convert(Image.FORMAT_RGBAF)
+	var rect := _blit(_splat["data"], 4, img.get_data().to_float32_array(), img.get_size(), position)
+	_weights_changed(rect)
+	flush_edits()
+
+
+## Copies [param src] ([param size], [param channels] floats a texel) into the grid-sized
+## [param dst] at [param position]; returns the grid rectangle written.
+func _blit(dst: PackedFloat32Array, channels: int, src: PackedFloat32Array, size: Vector2i, position: Vector2i) -> Rect2i:
+	var rect := Rect2i(position, size).intersection(Rect2i(0, 0, _nx, _nz))
+	for y in range(rect.position.y, rect.end.y):
+		for x in range(rect.position.x, rect.end.x):
+			var s := ((y - position.y) * size.x + (x - position.x)) * channels
+			var d := (y * _nx + x) * channels
+			for c in channels:
+				dst[d + c] = src[s + c]
+	return rect
+
+
+## Applies what edits left for later: the map textures and the detail field's ground data in the
+## edited rectangle. Runs by itself once a frame after edits; call it to have them at once.
+func flush_edits() -> void:
+	_edit_queued = false
+	if not _edit_dirty.has_area():
+		return
+	var rect := _edit_dirty
+	_edit_dirty = Rect2i()
+	if _edit_maps_dirty.get("height", false) and is_height_editable() and heightmap == _src_texture:
+		(heightmap as ImageTexture).update(_height_image())
+	if _edit_maps_dirty.get("splat", false) and is_splat_editable() and splatmap == _splat_texture:
+		(splatmap as ImageTexture).update(_splat_image())
+	_edit_maps_dirty = {}
+	_update_ground_region(rect)
+
+
+## Saves the edited heightmap and splat map into [member data_directory] (or where they were saved
+## before), so the scene refers to the files. Editor only; the Sculpt tool calls it after each
+## stroke and after undo and redo.
+func save_edited_maps() -> void:
+	if not Engine.is_editor_hint():
+		return
+	flush_edits()
+	for entry in [["heightmap", "height", is_height_editable()], ["splatmap", "splat", is_splat_editable()]]:
+		var tex := get(entry[0]) as ImageTexture
+		if tex == null or not entry[2]:
+			continue
+		var path := tex.resource_path
+		if path.is_empty() or path.contains("::"):
+			path = data_directory.path_join("%s_%s.res" % [_edit_stem(), entry[1]])
+		DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(path.get_base_dir()))
+		if ResourceSaver.save(tex, path) != OK:
+			push_warning("GADS: %s: cannot save %s." % [name, path])
+			continue
+		tex.take_over_path(path)
+		if Engine.has_singleton("EditorInterface"):
+			var fs: Object = Engine.get_singleton("EditorInterface").call("get_resource_filesystem")
+			fs.call("update_file", path)
+
+
+func _edit_stem() -> String:
+	var scene := owner.scene_file_path if owner != null else scene_file_path
+	var stem := scene.get_file().get_basename()
+	stem = (stem + "_" if not stem.is_empty() else "") + String(name).to_snake_case()
+	return stem.validate_filename().replace(" ", "_")
+
+
+## Where the ray from [param origin] along [param direction] (world space) first comes down onto
+## the terrain's surface (its finest LOD), or Vector3.INF. Steps along the grid at half the vertex
+## spacing within the terrain's bounds, then bisects to about a millimetre. The Sculpt tool picks
+## with it; a game can too (no physics needed).
+func intersect_ray(origin: Vector3, direction: Vector3, max_distance := 1e6) -> Vector3:
+	if _nx < 2 or direction.is_zero_approx():
+		return Vector3.INF
+	var o := to_local(origin)
+	var d := (global_basis.inverse() * direction.normalized())
+	var scale := d.length()
+	d /= scale
+	var t_max := max_distance * scale
+	var lo := Vector3(_origin.x, 0.0, _origin.y)
+	var hi := Vector3(_origin.x + get_extent().x, 0.0, _origin.y + get_extent().y)
+	# The ray's span over the terrain's rectangle (slabs in x and z).
+	var t0 := 0.0
+	var t1 := t_max
+	for a in [0, 2]:
+		if absf(d[a]) < 1e-12:
+			if o[a] < lo[a] or o[a] > hi[a]:
+				return Vector3.INF
+			continue
+		var ta := (lo[a] - o[a]) / d[a]
+		var tb := (hi[a] - o[a]) / d[a]
+		t0 = maxf(t0, minf(ta, tb))
+		t1 = minf(t1, maxf(ta, tb))
+	if t0 > t1:
+		return Vector3.INF
+	var above := func(t: float) -> float:
+		var p := o + d * t
+		var h := _height_local(Vector2(p.x, p.z))
+		return p.y - h if not is_nan(h) else 1.0
+	var step := _spacing * 0.5
+	var prev_t := t0
+	var prev_f: float = above.call(t0)
+	var t := t0
+	while t < t1:
+		t = minf(t + step, t1)
+		var f: float = above.call(t)
+		if f <= 0.0 and prev_f > 0.0:
+			var a := prev_t
+			var b := t
+			for i in 30:
+				var m := (a + b) * 0.5
+				if above.call(m) > 0.0:
+					a = m
+				else:
+					b = m
+				if b - a < 1e-4:
+					break
+			return to_global(o + d * b)
+		prev_t = t
+		prev_f = f
+	return Vector3.INF
+
+
+## Reads the maps again if a property set them since (undo and redo swap them).
+func _sync_maps() -> void:
+	if _nx >= 2 and (heightmap != _src_texture or splatmap != _splat_texture):
+		rebuild()
+
+
+## After the heights of grid [param rect] changed in _src: the height array, the rules' weights,
+## the chunks, collision; the ground data and the texture with the next flush.
+func _heights_changed(rect: Rect2i) -> void:
+	if not rect.has_area():
+		return
+	var data: PackedFloat32Array = _src["data"]
+	for z in range(rect.position.y, rect.end.y):
+		for x in range(rect.position.x, rect.end.x):
+			if not _heights.is_empty():
+				_heights[z * _nx + x] = height_offset + height_scale * data[z * _nx + x]
+	# Normals, so the rules' weights, change a vertex around the edit too.
+	var grown := rect.grow(1).intersection(Rect2i(0, 0, _nx, _nz))
+	if _splat.is_empty() and not _w1.is_empty():
+		for z in range(grown.position.y, grown.end.y):
+			for x in range(grown.position.x, grown.end.x):
+				var w := _compute_weights(x, z)
+				_w1[z * _nx + x] = w.x
+				_w2[z * _nx + x] = w.y
+	_rebuild_chunks(grown)
+	if _whole_shape != null and is_instance_valid(_whole_shape) and not _heights.is_empty():
+		var shape := _whole_shape.shape as HeightMapShape3D
+		var map := shape.map_data
+		for z in range(rect.position.y, rect.end.y):
+			for x in range(rect.position.x, rect.end.x):
+				map[z * _nx + x] = _heights[z * _nx + x] / _spacing
+		shape.map_data = map
+	_queue_edit_flush(grown, "height")
+
+
+## After the splat weights of grid [param rect] changed in _splat.
+func _weights_changed(rect: Rect2i) -> void:
+	if not rect.has_area():
+		return
+	if not _w1.is_empty():
+		_build_weights_rect(rect)
+	_paint_version += 1
+	var local := Rect2(_origin + Vector2(rect.position) * _spacing, Vector2(rect.size - Vector2i.ONE) * _spacing)
+	_repaint_chunks(local)
+	_queue_edit_flush(rect, "splat")
+
+
+func _build_weights_rect(rect: Rect2i) -> void:
+	for z in range(rect.position.y, rect.end.y):
+		for x in range(rect.position.x, rect.end.x):
+			var w := _compute_weights(x, z)
+			_w1[z * _nx + x] = w.x
+			_w2[z * _nx + x] = w.y
+
+
+func _queue_edit_flush(rect: Rect2i, map: String) -> void:
+	_edit_dirty = rect if not _edit_dirty.has_area() else _edit_dirty.merge(rect)
+	_edit_maps_dirty[map] = true
+	edited.emit(rect)
+	if not _edit_queued:
+		_edit_queued = true
+		flush_edits.call_deferred()
+
+
+## Rebuilds the built chunks that grid [param rect] touches (meshes, occluders, streamed chunks'
+## collision).
+func _rebuild_chunks(rect: Rect2i) -> void:
+	var cq := chunk_quads
+	var levels := _levels()
+	for key: Vector2i in _chunk_nodes.keys():
+		var r := Rect2i(key * cq, Vector2i(cq + 1, cq + 1))
+		if not r.intersects(rect):
+			continue
+		var data := _chunk_arrays(key.x, key.y, levels)
+		var mi: MeshInstance3D = _chunk_nodes[key]
+		var mesh := mi.mesh as ArrayMesh
+		mesh.clear_surfaces()
+		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, data["arrays"], [], data["lods"])
+		_chunk_data[key] = data
+		if data.has("occluder"):
+			for child in mi.get_children(true):
+				if child is OccluderInstance3D:
+					((child as OccluderInstance3D).occluder as ArrayOccluder3D).set_arrays(data["occluder"]["vertices"], data["occluder"]["indices"])
+		if _shapes.has(key):
+			var heights: PackedFloat32Array = data["heights"]
+			var map := PackedFloat32Array()
+			map.resize(heights.size())
+			for i in heights.size():
+				map[i] = heights[i] / _spacing
+			((_shapes[key] as CollisionShape3D).shape as HeightMapShape3D).map_data = map
+
+
+## The detail field's ground data within grid [param rect]: rewritten in place, or made again when
+## the edit left the range its heights are stored in; a streamed terrain's window is made again.
+func _update_ground_region(rect: Rect2i) -> void:
+	if _field == null:
+		return
+	if is_streaming():
+		_window_center = Vector2.INF
+		return
+	var bake := _field.ground_bake
+	if bake == null:
+		return
+	var local := Rect2(_origin + Vector2(rect.position) * _spacing, Vector2(rect.size - Vector2i.ONE) * _spacing).grow(_spacing)
+	var part := _ground_arrays(local)
+	if part.is_empty():
+		return
+	var heights: PackedFloat32Array = part["heights"]
+	var codes: PackedInt32Array = part["codes"]
+	var size: Vector2i = part["size"]
+	var first: Vector2i = part["first"]
+	var fits := true
+	for h in heights:
+		if h < bake.height_min or h > bake.height_min + bake.height_range:
+			fits = false
+			break
+	_field.lift = maxf(_field.lift, clampf(ground_data_error(local) + 0.002, 0.002, 0.1))
+	if not fits:
+		_field.ground_bake = make_ground_bake()
+		return
+	var bake_size := bake.get_size()
+	for y in size.y:
+		for x in size.x:
+			var t := first + Vector2i(x, y)
+			if t.x < 0 or t.y < 0 or t.x >= bake_size.x or t.y >= bake_size.y:
+				continue
+			bake.data.set_pixel(t.x, t.y, bake.encode(heights[y * size.x + x], codes[y * size.x + x]))
+	_field.ground_bake = bake # uploads it again
 
 
 # --- The grid -----------------------------------------------------------------------------------
@@ -1120,7 +1586,8 @@ func _build_collision() -> void:
 	data.resize(_heights.size())
 	for i in _heights.size():
 		data[i] = _heights[i] / _spacing
-	_body.add_child(_height_shape(_nx, _nz, data, _origin + Vector2(_nx - 1, _nz - 1) * _spacing * 0.5))
+	_whole_shape = _height_shape(_nx, _nz, data, _origin + Vector2(_nx - 1, _nz - 1) * _spacing * 0.5)
+	_body.add_child(_whole_shape)
 
 
 func _height_shape(w: int, d: int, data: PackedFloat32Array, centre: Vector2) -> CollisionShape3D:

@@ -14,14 +14,19 @@ enum Mode { RAISE, LOWER, SMOOTH, FLATTEN }
 
 const MODE_NAMES := ["Raise", "Lower", "Smooth", "Flatten"]
 
-## The editor's Sculpt tool (set by the GADSMeshInstance3D inspector, read by the plugin): whether it
-## is on, the node it paints, its mode, brush radius (m) and strength (m per dab for Raise and
-## Lower).
+## The editor's Sculpt tool (set by the GADSMeshInstance3D and GADSTerrain3D inspectors, read by
+## the plugin): whether it is on, the node it edits, its mode, brush radius (m) and strength (m per
+## dab for Raise and Lower). On a terrain [member tool_paint] >= 0 paints that layer instead
+## (0: back to the first layer).
 static var tool_active := false
-static var tool_node: GADSMeshInstance3D
+static var tool_node: Node3D
 static var tool_mode := Mode.RAISE
+static var tool_paint := -1
 static var tool_radius := 0.1
 static var tool_strength := 0.002
+## The terrain tool's brush radius (m) and strength (m per dab for Raise and Lower).
+static var terrain_radius := 4.0
+static var terrain_strength := 0.1
 
 
 ## A new, flat sculpt map of [param size] x [param size] texels (FORMAT_RF).
@@ -38,18 +43,27 @@ static func new_image(size := 512) -> Image:
 static func dab(image: Image, uv: Vector2, radius: float, mode: Mode, strength: float, flatten_to := NAN) -> Rect2i:
 	var w := image.get_width()
 	var h := image.get_height()
-	var cx := uv.x * w - 0.5
-	var cy := uv.y * h - 0.5
-	var rx := maxf(radius * w, 0.5)
-	var ry := maxf(radius * h, 0.5)
+	var data := image.get_data().to_float32_array()
+	var rect := dab_values(data, w, h, uv * Vector2(w, h), Vector2(radius * w, radius * h), mode, strength, flatten_to)
+	image.set_data(w, h, false, Image.FORMAT_RF, data.to_byte_array())
+	return rect
+
+
+## [method dab] on a row-major grid of [param w] x [param h] values, in texel units: texel (x, y)
+## has its centre at (x + 0.5, y + 0.5); [param radius] per axis. Edits [param data] in place.
+static func dab_values(data: PackedFloat32Array, w: int, h: int, centre: Vector2, radius: Vector2, mode: Mode, strength: float,
+		flatten_to := NAN) -> Rect2i:
+	var cx := centre.x - 0.5
+	var cy := centre.y - 0.5
+	var rx := maxf(radius.x, 0.5)
+	var ry := maxf(radius.y, 0.5)
 	var x0 := clampi(floori(cx - rx), 0, w - 1)
 	var x1 := clampi(ceili(cx + rx), 0, w - 1)
 	var y0 := clampi(floori(cy - ry), 0, h - 1)
 	var y1 := clampi(ceili(cy + ry), 0, h - 1)
-	var data := image.get_data().to_float32_array()
 	var target := flatten_to
 	if mode == Mode.FLATTEN and is_nan(target):
-		target = data[clampi(roundi(cy), 0, h - 1) * w + clampi(roundi(cx), 0, w - 1)]
+		target = value_at(data, w, h, centre)
 	var source := data if mode != Mode.SMOOTH else data.duplicate()
 	for y in range(y0, y1 + 1):
 		for x in range(x0, x1 + 1):
@@ -76,8 +90,12 @@ static func dab(image: Image, uv: Vector2, radius: float, mode: Mode, strength: 
 					data[i] = lerpf(source[i], sum / n, clampf(strength, 0.0, 1.0) * f)
 				Mode.FLATTEN:
 					data[i] = lerpf(data[i], target, clampf(strength, 0.0, 1.0) * f)
-	image.set_data(w, h, false, Image.FORMAT_RF, data.to_byte_array())
 	return Rect2i(x0, y0, x1 - x0 + 1, y1 - y0 + 1)
+
+
+## The value of the texel under [param centre] (texel units, as in [method dab_values]).
+static func value_at(data: PackedFloat32Array, w: int, h: int, centre: Vector2) -> float:
+	return data[clampi(floori(centre.y), 0, h - 1) * w + clampi(floori(centre.x), 0, w - 1)]
 
 
 ## Where the ray from [param origin] along [param direction] (both in the mesh's space) first hits

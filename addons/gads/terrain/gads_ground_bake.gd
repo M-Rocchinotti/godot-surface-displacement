@@ -132,9 +132,15 @@ static func from_arrays(size: Vector2i, heights: PackedFloat32Array, layers: Pac
 			var i := y * size.x + x
 			if layers[i] <= -2:
 				continue
-			var q := roundi((heights[i] - result.height_min) / result.height_range * 65535.0)
-			result.data.set_pixel(x, y, Color((q >> 8) / 255.0, (q & 255) / 255.0, (layers[i] + 1) / 8.0, 1.0))
+			result.data.set_pixel(x, y, result.encode(heights[i], layers[i]))
 	return result
+
+
+## A texel of [member data] for world height [param height] (clamped to the stored range) and
+## field layer [param layer] (-1: not displaced).
+func encode(height: float, layer: int) -> Color:
+	var q := clampi(roundi((height - height_min) / height_range * 65535.0), 0, 65535)
+	return Color((q >> 8) / 255.0, (q & 255) / 255.0, (layer + 1) / 8.0, 1.0)
 
 
 ## The MeshInstance3D nodes of [param group] in [param tree] (members and their descendants).

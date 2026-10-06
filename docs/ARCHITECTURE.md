@@ -409,6 +409,20 @@ is under twice the largest error, and skirts of that depth hang from every borde
 quads split along the (1, 0)-(0, 1) diagonal, the same triangulation the HeightMapShape3D of
 Jolt and Godot Physics uses, so collision is the drawn surface.
 
+**Editing.** `sculpt()` and `paint_splatmap()` work on maps of one texel per vertex (heights
+FORMAT_RF in 0..1 over `height_scale`, weights RG8), so a brush texel is a vertex and nothing is
+resampled: the first edit replaces `heightmap` / `splatmap` by such an ImageTexture holding the
+same values (the rules' weights frozen into it), and from then on the terrain's CPU copy of the
+map is edited in place by the brush (`GADSSculpt.dab_values`, the same falloff as the mesh
+sculpt). An edit updates the height array, the rules' weights a vertex beyond it (normals), the
+chunks it touches (arrays, LODs, occluders), the whole terrain's HeightMapShape3D in the edited
+rows (or the streamed chunks' shapes); the map's texture and the detail field's ground data
+(rewritten in place unless the new heights leave its 16-bit range) follow once per frame, so a
+drag of many dabs uploads them once a frame. Undo stores the stroke's rectangle before and after;
+the stroke that converted a map also swaps the property back, and a region written after such a
+swap first re-reads the maps. `intersect_ray()` clips the ray to the terrain's rectangle, steps
+at half the spacing until it passes below the triangles and bisects.
+
 **Layers.** Weights for the second and third layer per vertex (splat map, or smoothstep rules
 on slope and height) go to vertex colour R and G, which the layered material reads as its masks;
 `GADSMaterials.combine_layers()` copies the layer materials' textures, depths and texture sizes

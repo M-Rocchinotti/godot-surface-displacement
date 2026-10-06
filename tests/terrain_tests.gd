@@ -33,6 +33,7 @@ func _run() -> void:
 	await _test("paints_layers_at_runtime", test_painting)
 	await _test("navigation_mesh_follows_the_terrain", test_navigation)
 	await _test("occluders_stay_below_the_surface", test_occluders)
+	await _test("sculpts_and_paints", test_editing)
 	if DisplayServer.get_name() != "headless":
 		await _test("renders_front_faces_and_coarser_far_away", test_render)
 	print("\nterrain tests: %d passed, %d failed" % [_passed, _failed])
@@ -496,6 +497,160 @@ static func _chunks_within(t: GADSTerrain3D, xz: Vector2, radius: float) -> Arra
 				out.append(Vector2i(cx, cz))
 	out.sort()
 	return out
+
+
+## Editing: the ray query; sculpting changes the heights in the brush by its falloff and nowhere
+## else, and the chunks, collision, rules and ground data follow; regions go back (undo); a
+## rebuild keeps the edits; painting the splat map; a streamed terrain, also where no chunk is yet.
+func test_editing() -> void:
+	var grass := layer_material(2.0, Color(0.2, 0.6, 0.2))
+	var rock := layer_material(4.0, Color(0.5, 0.5, 0.5))
+	var t := make_terrain({"layers": [grass, rock] as Array[ShaderMaterial], "slope_range": Vector2(20, 30), "height_layer": 0,
+		"detail_field": true, "height_scale": 10.0})
+	root.add_child(t)
+	# The ray query.
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 11
+	var worst := 0.0
+	var bad := 0
+	for i in 60:
+		var target := Vector3(rng.randf_range(-30, 30), 0, rng.randf_range(-30, 30))
+		target.y = t.get_height(target)
+		var from := target + Vector3(rng.randf_range(-20, 20), 30, rng.randf_range(-20, 20))
+		var hit := t.intersect_ray(from, target - from)
+		if not hit.is_finite() or from.distance_to(hit) > from.distance_to(target) + 0.01 \
+				or (hit - from).normalized().dot((target - from).normalized()) < 0.9999:
+			bad += 1
+			continue
+		worst = maxf(worst, absf(hit.y - t.get_height(hit)))
+	print("  60 rays: %d wrong, largest height error %.3f mm" % [bad, worst * 1000.0])
+	check(bad == 0 and worst < 0.002, "intersect_ray() lands on the surface, on the ray, no farther than the point aimed at")
+	check(not t.intersect_ray(Vector3(0, 50, 0), Vector3.UP).is_finite() and not t.intersect_ray(Vector3(100, 50, 0), Vector3.DOWN).is_finite(),
+		"and misses rays that do not meet it")
+	# Making the heightmap editable keeps every height.
+	var original := t.heightmap
+	var c := Vector3(-8.0, 0, 4.0) # a vertex
+	var probes := [Vector3.ZERO, Vector3(1.5, 0, 0), Vector3(0, 0, 2.9), Vector3(3.5, 0, 0), Vector3(-6, 0, 3), Vector3(1.7, 0, 0)]
+	var before := []
+	for o: Vector3 in probes:
+		before.append(t.get_height(c + o))
+	var snapshot := t.get_height_image()
+	var same := true
+	for i in probes.size():
+		same = same and absf(t.get_height(c + probes[i]) - before[i]) < 1e-5
+	check(t.is_height_editable() and t.heightmap == original and snapshot.get_size() == t.get_grid_size() and same,
+		"a float heightmap of one texel per vertex is edited as it is")
+	# Another map is replaced by one with the same heights.
+	var coarse := make_terrain({"vertex_spacing": 1.0})
+	root.add_child(coarse)
+	var q := Vector3(3.0, 0, -5.0)
+	var hq := coarse.get_height(q)
+	coarse.make_heights_editable()
+	check(coarse.is_height_editable() and coarse.heightmap != original and coarse.heightmap.get_size() == Vector2(65, 65) and absf(coarse.get_height(q) - hq) < 1e-5,
+		"another heightmap becomes an editable map of one texel per vertex with the same heights")
+	coarse.queue_free()
+	var slope_before := t.get_layer_weights(c + probes[5]).x
+	var rect := t.sculpt(c, 3.0, GADSSculpt.Mode.RAISE, 2.0)
+	var rise: float = t.get_height(c) - before[0]
+	var half: float = t.get_height(c + probes[1]) - before[1]
+	var outside: float = absf(t.get_height(c + probes[3]) - before[3]) + absf(t.get_height(c + probes[4]) - before[4])
+	print("  raise 2 m: %.4f m in the middle, %.4f m at half the radius, %.6f m beyond" % [rise, half, outside])
+	check(rect.has_area() and absf(rise - 2.0) < 1e-4 and absf(half - 2.0 * 0.5625) < 1e-3 and outside == 0.0,
+		"raise: the strength in the middle, the falloff between, nothing beyond the radius")
+	var mesh_y := NAN
+	for chunk in t.get_chunks():
+		var v: PackedVector3Array = chunk.mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX]
+		for p in v:
+			if Vector2(p.x, p.z).is_equal_approx(Vector2(c.x, c.z)):
+				mesh_y = p.y
+	check(absf(mesh_y - t.get_height(c)) < 1e-4, "the chunk's vertices follow")
+	check(t.get_layer_weights(c + probes[5]).x > 0.8, "the slope rule puts rock on the new flank (%.2f, was %.2f)" % [t.get_layer_weights(c + probes[5]).x, slope_before])
+	await physics_frame
+	await physics_frame
+	var ray := t.get_world_3d().direct_space_state.intersect_ray(PhysicsRayQueryParameters3D.create(c + Vector3(0.2, 60, 0.1), c + Vector3(0.2, -60, 0.1)))
+	check(not ray.is_empty() and absf((ray["position"] as Vector3).y - t.get_height(c + Vector3(0.2, 0, 0.1))) < 0.005, "the collision follows")
+	await process_frame
+	var field := t.get_detail_field()
+	var s: Dictionary = field.ground_bake.sample(Vector2(c.x, c.z))
+	check(absf(float(s["height"]) - t.get_height(c)) < 1e-3, "the detail field's ground data follows (%.4f vs %.4f)" % [float(s["height"]), t.get_height(c)])
+	# A region goes back (the tool's undo); a rebuild keeps edits.
+	t.set_height_region(rect.position, snapshot.get_region(rect))
+	same = true
+	for i in probes.size():
+		same = same and absf(t.get_height(c + probes[i]) - before[i]) < 1e-5
+	check(same, "set_height_region() puts the heights back")
+	t.sculpt(c, 3.0, GADSSculpt.Mode.FLATTEN, 1.0, 5.0)
+	check(absf(t.get_height(c) - 5.0) < 1e-4, "flatten levels to a height (%.4f)" % t.get_height(c))
+	t.sculpt(c, 0.6, GADSSculpt.Mode.RAISE, 3.0)
+	var spike := t.get_height(c) - 5.0
+	t.sculpt(c, 2.0, GADSSculpt.Mode.SMOOTH, 1.0)
+	check(t.get_height(c) - 5.0 < spike * 0.5, "smooth takes a spike down (%.2f m to %.2f m)" % [spike, t.get_height(c) - 5.0])
+	var kept := t.get_height(c)
+	t.flush_edits()
+	t.rebuild()
+	check(t.is_height_editable() and absf(t.get_height(c) - kept) < 1e-5, "a rebuild keeps the edits")
+	# Painting the splat map.
+	var p := Vector3(10.0, 0, -10.0)
+	var far_point := Vector3(-20.0, 0, -20.0)
+	var far_before := t.get_layer_weights(far_point)
+	t.paint_splatmap(p, 2.0, 1, 1.0)
+	check(t.is_splat_editable() and t.get_layer_weights(p).x > 0.99, "paint_splatmap() paints the layer (%.2f)" % t.get_layer_weights(p).x)
+	check(t.get_layer_weights(far_point).distance_to(far_before) <= 1.0 / 255.0 + 1e-6, "the rules' weights are kept in the splat map elsewhere")
+	var colour := Color()
+	for chunk in t.get_chunks():
+		var arrays := chunk.mesh.surface_get_arrays(0)
+		var v: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+		for i in v.size():
+			if Vector2(v[i].x, v[i].z).is_equal_approx(Vector2(p.x, p.z)):
+				colour = (arrays[Mesh.ARRAY_COLOR] as PackedColorArray)[i]
+	check(colour.r > 0.99, "the chunks' vertex colours follow")
+	await process_frame
+	s = field.ground_bake.sample(Vector2(p.x, p.z))
+	check((s["weights"] as Color).g > 0.99, "the detail field shows the painted layer")
+	var painted := t.get_splat_image()
+	t.paint_splatmap(p, 2.0, 0, 1.0)
+	check(t.get_layer_weights(p).x < 0.01, "layer 0 paints the first layer back")
+	t.set_splat_region(Vector2i.ZERO, painted)
+	check(t.get_layer_weights(p).x > 0.99, "set_splat_region() puts the weights back")
+	t.queue_free()
+	await process_frame
+	# Streaming: a built chunk and one built after the edit.
+	var holder := Node3D.new()
+	root.add_child(holder)
+	var cam := Camera3D.new()
+	holder.add_child(cam)
+	cam.position = Vector3(-24, 30, -24)
+	var st := make_terrain({"stream_radius": 12.0, "height_scale": 10.0})
+	holder.add_child(st)
+	st.stream_camera = st.get_path_to(cam)
+	await _settle(st)
+	var near := Vector3(-24.0, 0, -24.0)
+	var far := Vector3(22.0, 0, 22.0)
+	var h_near := st.get_height(near)
+	var h_far := st.get_height(far)
+	st.sculpt(near, 2.0, GADSSculpt.Mode.RAISE, 1.5)
+	st.sculpt(far, 2.0, GADSSculpt.Mode.LOWER, 1.5)
+	check(absf(st.get_height(near) - h_near - 1.5) < 1e-4 and absf(h_far - st.get_height(far) - 1.5) < 1e-4, "a streamed terrain sculpts too")
+	var found_near := NAN
+	for chunk in st.get_chunks():
+		for v: Vector3 in chunk.mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX]:
+			if Vector2(v.x, v.z).is_equal_approx(Vector2(near.x, near.z)):
+				found_near = v.y
+	await physics_frame
+	await physics_frame
+	var hit := st.get_world_3d().direct_space_state.intersect_ray(PhysicsRayQueryParameters3D.create(near + Vector3(0, 60, 0), near - Vector3(0, 60, 0)))
+	check(absf(found_near - st.get_height(near)) < 1e-4 and not hit.is_empty() and absf((hit["position"] as Vector3).y - st.get_height(near)) < 0.005,
+		"its built chunk and the chunk's collision follow")
+	cam.position = Vector3(22, 30, 22)
+	await _settle(st)
+	var found_far := NAN
+	for chunk in st.get_chunks():
+		for v: Vector3 in chunk.mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX]:
+			if Vector2(v.x, v.z).is_equal_approx(Vector2(far.x, far.z)):
+				found_far = v.y
+	check(absf(found_far - st.get_height(far)) < 1e-4, "a chunk built after the edit has it")
+	holder.queue_free()
+	await process_frame
 
 
 ## Painting a layer at runtime: the weights, the chunks' vertex colours and the detail field's

@@ -151,6 +151,14 @@ All notable changes to this project are documented here. The format follows
   the materials' relief by the native tessellator (and refined where they change) and part of
   the bake key. `GADSSculpt` (`dab()`, `pick()`) and `get_sculpt_image()` / `sculpt_changed()` /
   `set_sculpt_image()` for scripts.
+- **Terrain sculpting and painting**: a Sculpt / Paint tool in the GADSTerrain3D inspector
+  raises, lowers, smooths, flattens or paints layers with left-drag in the viewport (the brush
+  outlined on the ground), one undoable step per stroke, rebuilding only the touched chunks, their
+  collision and the detail field's ground data. Edited maps are one texel per vertex, saved into
+  `data_directory`. Runtime API: `sculpt()`, `paint_splatmap()`, `set_height_region()` /
+  `set_splat_region()`, `intersect_ray()` (no physics needed), the `edited` signal.
+- **Clean Bake Cache** (Project > Tools): bakes, collision shapes and sculpt maps nothing refers
+  to or holds any more, moved to the trash (`GADSBakeCache`).
 - **Export baked meshes**: `GADSMeshInstance3D.export_baked()` and an Export button in the
   inspector write the bake (every cluster) as glTF binary, glTF or OBJ with a material library,
   GADS materials as plain PBR materials; `GADSMeshExporter` for any meshes.
