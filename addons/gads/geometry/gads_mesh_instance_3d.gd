@@ -732,7 +732,9 @@ const CLUSTER_SYNCED: Array[StringName] = [&"material_override", &"material_over
 
 ## The other clusters of a clustered bake (the first is [param m] itself), from its metadata.
 static func cluster_meshes_of(m: Mesh) -> Array:
-	return m.get_meta(&"gads_clusters", []) if m != null else []
+	# A copy: callers may change it without touching the mesh's metadata (a mesh put into its own
+	# list would keep itself alive).
+	return (m.get_meta(&"gads_clusters", []) as Array).duplicate() if m != null else []
 
 
 ## How many instances draw the mesh: 1, or the clusters of a clustered bake (see
