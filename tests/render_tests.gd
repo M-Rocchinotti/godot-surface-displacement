@@ -42,6 +42,8 @@ func _run() -> void:
 	await _test("mip_shimmer_at_distance", test_mip_shimmer)
 	await _test("relief_fades_with_distance", test_distance_fade)
 	await _test("surface_effects", test_surface_effects)
+	await _test("custom_shader_hooks", test_custom_hooks)
+	await _test("visual_shader_nodes", test_visual_shader_nodes)
 	print("\nrender tests: %d passed, %d failed" % [_passed, _failed])
 	h.clear_scene()
 	h.viewport.queue_free()
@@ -1224,3 +1226,106 @@ func test_surface_effects() -> void:
 	check(water > 0.1 and water < 0.9, "puddles fill the low relief")
 	var wall_puddles := await _render_wall(make.call({"puddle_level": 0.5}))
 	check(_relative_difference(wall_base, wall_puddles)["max"] < 1e-6, "and not on a wall")
+
+# --- Custom shaders --------------------------------------------------------------------------------
+
+## A custom shader built on the library with the hooks: without them active it draws exactly like
+## the GADS variant; the surface hook changes the shading; the height hook changes the relief (a
+## hook that flattens it draws like a flat height map).
+func test_custom_hooks() -> void:
+	var field := Harness.make_wave_field(128)
+	var tex := ImageTexture.create_from_image(field["image"])
+	# A checker albedo, so the relief's parallax shows.
+	var checker := Image.create(64, 64, true, Image.FORMAT_RGB8)
+	for y in 64:
+		for x in 64:
+			checker.set_pixel(x, y, Color(0.9, 0.9, 0.9) if (x / 8 + y / 8) % 2 == 0 else Color(0.2, 0.2, 0.2))
+	checker.generate_mipmaps()
+	var params := {"height_m": 0.04, "height_center": 1.0, "albedo_texture": ImageTexture.create_from_image(checker)}
+	var cam := Vector3(0.3, 1.0, 1.6)
+	var reference := await _render_lit_plane(GADSMaterials.create(GADSMaterials.Mapping.UV, {"height": tex}, params, GADSMaterials.Quality.POM), false, cam)
+	var custom := func(extra: Dictionary, height: Texture2D) -> ShaderMaterial:
+		var m := ShaderMaterial.new()
+		m.shader = load("res://tests/shaders/custom_hooks.gdshader")
+		m.set_shader_parameter("height_texture", height)
+		for k: String in params:
+			m.set_shader_parameter(k, params[k])
+		for k: String in extra:
+			m.set_shader_parameter(k, extra[k])
+		return m
+	var same := await _render_lit_plane(custom.call({}, tex), false, cam)
+	check(_relative_difference(reference, same)["max"] < 1e-6, "a custom shader on the library, its hooks idle, draws exactly like the GADS variant")
+	var painted := _mean_rgb(await _render_lit_plane(custom.call({"paint_amount": 1.0}, tex), false, cam))
+	check(painted.r > 3.0 * painted.g and painted.r > 3.0 * painted.b, "the surface hook paints it")
+	var white := Image.create(16, 16, true, Image.FORMAT_RF)
+	white.fill(Color(1, 0, 0))
+	white.generate_mipmaps()
+	var flat_ref := await _render_lit_plane(GADSMaterials.create(GADSMaterials.Mapping.UV, {"height": ImageTexture.create_from_image(white)}, params,
+		GADSMaterials.Quality.POM), false, cam)
+	var flattened := await _render_lit_plane(custom.call({"flatten": 1.0}, tex), false, cam)
+	var d := _relative_difference(flat_ref, flattened)
+	print("  flattened by the height hook against a flat height map: mean %.4f, max %.4f" % [d["mean"], d["max"]])
+	check(d["max"] < 0.002 and _relative_difference(reference, flattened)["mean"] > 0.01, "the height hook reshapes the relief (flattened: like a flat height map)")
+
+
+## The GADS visual shader nodes compile together in one visual shader and the parallax node shifts
+## what it samples.
+func test_visual_shader_nodes() -> void:
+	var field := Harness.make_wave_field(128)
+	var tex := ImageTexture.create_from_image(field["image"])
+	var build := func(depth: float) -> ShaderMaterial:
+		var vs := VisualShader.new()
+		var t := VisualShader.TYPE_FRAGMENT
+		var param := VisualShaderNodeTexture2DParameter.new()
+		param.parameter_name = "height_map"
+		vs.add_node(t, param, Vector2(), 2)
+		var parallax := GADSVisualShaderNodeParallax.new()
+		parallax.set_input_port_default_value(2, depth)
+		vs.add_node(t, parallax, Vector2(), 3)
+		vs.connect_nodes(t, 2, 0, 3, 0)
+		var cavity := GADSVisualShaderNodeCavity.new()
+		vs.add_node(t, cavity, Vector2(), 4)
+		vs.connect_nodes(t, 2, 0, 4, 0)
+		vs.connect_nodes(t, 3, 0, 4, 1)
+		var blend := GADSVisualShaderNodeHeightBlend.new()
+		vs.add_node(t, blend, Vector2(), 5)
+		vs.connect_nodes(t, 3, 1, 5, 0)
+		var slope := GADSVisualShaderNodeSlopeMask.new()
+		vs.add_node(t, slope, Vector2(), 6)
+		var tri := GADSVisualShaderNodeTriplanarWeights.new()
+		vs.add_node(t, tri, Vector2(), 7)
+		var detail := GADSVisualShaderNodeDetailNormal.new()
+		vs.add_node(t, detail, Vector2(), 8)
+		var expr := VisualShaderNodeExpression.new()
+		expr.add_input_port(0, VisualShaderNode.PORT_TYPE_SCALAR, "h")
+		expr.add_input_port(1, VisualShaderNode.PORT_TYPE_SCALAR, "cav")
+		expr.add_input_port(2, VisualShaderNode.PORT_TYPE_SCALAR, "w")
+		expr.add_input_port(3, VisualShaderNode.PORT_TYPE_SCALAR, "m")
+		expr.add_input_port(4, VisualShaderNode.PORT_TYPE_VECTOR_3D, "tw")
+		expr.add_input_port(5, VisualShaderNode.PORT_TYPE_VECTOR_3D, "dn")
+		expr.add_output_port(0, VisualShaderNode.PORT_TYPE_VECTOR_3D, "col")
+		expr.expression = "col = vec3(h, cav + 0.001 * w * m, 0.001 * (tw.y + dn.z));"
+		vs.add_node(t, expr, Vector2(), 9)
+		vs.connect_nodes(t, 3, 1, 9, 0)
+		vs.connect_nodes(t, 4, 0, 9, 1)
+		vs.connect_nodes(t, 5, 0, 9, 2)
+		vs.connect_nodes(t, 6, 0, 9, 3)
+		vs.connect_nodes(t, 7, 0, 9, 4)
+		vs.connect_nodes(t, 8, 0, 9, 5)
+		vs.connect_nodes(t, 9, 0, 0, 0) # -> ALBEDO
+		var m := ShaderMaterial.new()
+		m.shader = vs
+		m.set_shader_parameter("height_map", tex)
+		return m
+	var code := (build.call(0.05) as ShaderMaterial).shader.get_code()
+	var all := true
+	for fn in ["gads_vs_parallax", "gads_vs_cavity", "gads_vs_height_blend", "gads_vs_triplanar_weights", "gads_vs_detail_normal"]:
+		all = all and code.contains(fn)
+	check(all, "every GADS node adds its function to the visual shader")
+	var cam := Vector3(0.3, 1.0, 1.6)
+	var still := await _render_lit_plane(build.call(0.0), false, cam)
+	var shifted := await _render_lit_plane(build.call(0.05), false, cam)
+	var lit := _mean_rgb(still)
+	var d := _relative_difference(still, shifted)
+	print("  parallax 0 vs 5 cm: mean difference %.3f" % d["mean"])
+	check(lit.r > 0.02 and d["mean"] > 0.02, "they compile and draw; the parallax node shifts the height it returns")

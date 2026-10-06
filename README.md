@@ -70,6 +70,8 @@ what the engine allows:
 - Adaptive quality: the preset and the runtime tessellation step down while frames miss a
   target time and come back when there is room; one triangle budget shared by all runtime
   tessellated meshes by screen coverage and priority.
+- Custom shader hooks (height, surface, layer masks) and six visual shader nodes (parallax UV,
+  height blend, slope mask, triplanar weights, detail normal, cavity).
 - Surface effects on every material (snow / dust / sand cover, wetness, puddles in the relief's
   low parts, cavity and edge colours) and a global weather (rain, snow, puddles) that the
   near-camera geometry follows too.
@@ -273,6 +275,55 @@ diffuse_burley, specular_schlick_ggx;` (the `light()` reproduces these modes), `
 GADS_MAPPING_UV` (or `GADS_MAPPING_WORLD`, `GADS_MAPPING_TRIPLANAR`), optionally `GADS_POM`,
 `GADS_SELF_SHADOW`, `GADS_DEPTH_WRITE`, then `#include
 "res://addons/gads/render/shaders/gads_surface.gdshaderinc"`.
+
+#### Custom shaders: hooks
+
+Three hooks change a part of the GADS surface shader without replacing it. Define the macro and
+the function, in this order:
+
+```glsl
+shader_type spatial;
+render_mode diffuse_burley, specular_schlick_ggx;
+#define GADS_MAPPING_UV
+#define GADS_POM
+#define GADS_CUSTOM_HEIGHT
+#define GADS_CUSTOM_SURFACE
+
+uniform float erosion = 0.0;
+// Reshapes the remapped main height (0..1) wherever it is read: march, self-shadow, effects.
+// Before the library; it may use its own uniforms.
+float gads_custom_height(vec2 uv, float h) {
+	return h * (1.0 - erosion) + erosion * h * h;
+}
+
+#include "res://addons/gads/render/shaders/gads_core.gdshaderinc"
+
+uniform vec4 paint : source_color = vec4(0.6, 0.1, 0.1, 1.0);
+// After the textures and surface effects; it may use the library's uniforms and functions.
+void gads_custom_surface(vec2 uv, vec3 world_pos, vec3 world_normal, float height,
+		inout vec3 albedo, inout float roughness, inout float metallic, inout float ao) {
+	albedo = mix(albedo, paint.rgb, smoothstep(0.2, 0.0, height) * 0.8);   // paint in the gaps
+}
+
+#include "res://addons/gads/render/shaders/gads_surface.gdshaderinc"
+```
+
+`GADS_CUSTOM_LAYER_MASKS` with `vec2 gads_custom_layer_masks(vec2 masks, vec3 world_pos, vec3
+world_normal)` reshapes the layered variants' layer masks (procedural, world position, gameplay
+data). Hooks shape parallax and shading; a GADSMeshInstance3D bake reads the height texture
+itself, so a height hook does not reach baked geometry. With the hooks idle the shader draws
+exactly like the GADS variant (tests).
+
+#### Visual shaders
+
+The GADS category of the visual shader editor has six nodes: **GADSParallaxUV** (parallax
+occlusion mapping of a height map: the uv where the view ray hits the relief, and the height
+there; sample the other textures at that uv), **GADSHeightBlend** (the height-aware weight of a
+layer over the one below for a mask), **GADSSlopeMask** (how much the surface faces up, as a
+band), **GADSTriplanarWeights** (projection weights with negligible planes dropped),
+**GADSDetailNormal** (Reoriented Normal Mapping of a detail normal map onto a base one) and
+**GADSCavity** (cavity and edge masks from a height map). They are the same functions the GADS
+materials use.
 
 Depth write is a separate shader variant (`..._depth.gdshader`, or
 `GADSMaterials.set_depth_write(material, true)`): props then intersect the relief instead of the
@@ -670,18 +721,23 @@ Details in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). In short:
 addons/gads/                      the addon (all that is shipped)
   core/                           GADSManager (node), GADSSettings (presets), GADSGlobals,
                                   GADSProfiler, GADSStatsOverlay
-  materials/                      GADSMaterials (variants, parameters)
+  materials/                      GADSMaterials (variants, parameters), GADSProcedural
   render/shaders/                 the .gdshaderinc library, field / pebble / capture shaders
   render/shaders/variants/        the 30 surface and 3 field shaders (generated)
   render/textures/gads_dfg_lut.exr  Godot's DFG table, recomputed (for the energy compensation)
   terrain/                        GADSTerrain3D, GADSDisplacementField3D, GADSPebbleScatter3D,
                                   GADSGroundBake, GADSDeformationField, GADSDeformer3D
-  geometry/                       GADSMeshInstance3D, GADSMeshBaker (baked displacement)
-  native/                         gads.gdextension and the tessellator libraries (bin/)
-  editor/                         material converter, setup validator, bake inspector, profiler panel
-  import/                         GADSHeightTools
+  geometry/                       GADSMeshInstance3D, GADSMeshBaker (baked displacement),
+                                  GADSMeshDiagnostics, GADSMeshExporter
+  native/                         gads.gdextension and the native libraries (bin/): tessellator,
+                                  height generator
+  editor/                         material converter, setup validator, bake inspector, profiler
+                                  panel, scene import plugin
+  import/                         GADSHeightTools, GADSTextureSet, GADSImportTools
+  visual_shader/                  the GADS visual shader nodes
   plugin.gd, plugin.cfg, README.md, LICENSE.md
-native/                           the tessellator's C++ sources, SConstruct (not shipped)
+native/                           the native C++ sources (tessellator, height generator),
+                                  SConstruct (not shipped)
 demo/                             demo project: scenes, UI, fly camera, CC0 texture copies, models
 docs/                             ARCHITECTURE.md, RESEARCH.md, images/
 tests/                            test suites, harness, benchmark, mutation runner, log scanner
@@ -741,7 +797,7 @@ VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json xvfb-run -a -s "-screen 0 
 |---|---|
 | shader variants | The 33 variant files in the repository are what `tools/generate_variants.py` generates. |
 | logic tests (headless, 104 checks) | Variants parse back to their mapping / quality / depth write; preset table (Ultra keeps soft self-shadowing and at least Medium's parallax next to its geometry, omni and spot lights self-shadow from High up), budgets and feature switches (a switch never adds a feature); edits to a Custom preset's settings apply; presets reach GADS materials on mesh surfaces, overlays, next passes, CSG shapes, MultiMeshes, GridMaps and particles, also those added later; Validate Setup reports each mistake it knows (and nothing on a correct setup); the pebble scatter gets the field's parameters when they change and not when they do not; the ring mesh (vertex count, no triangles in the holes, every ring's outer edge collapsing exactly onto the next ring's inner edge, seam flags); morph bands inside their rings for Ultra's grid and a dense one, a new field's defaults equal Ultra's grid; the ground bake's CPU twin (`GADSGroundBake.sample()`): bilinear heights at 16-bit precision, the gradient normal, nothing displaceable at or beyond the bake's border, the edge continued smoothly beyond it, a 30-degree slope is ground and a 45-degree slope is not at 5 cm and at 20 cm texels, a 15 cm kerb is a step at 5 cm texels, a cell without ground, per-cell layers; every demo texture imported with mipmaps, heights as one-channel half float. |
-| render tests (headed, 104 checks) | **POM against a CPU ray / height-field intersection** (world floor with relief above and below, UV floor, UV wall, triplanar floor and two walls; steep, 45-degree and grazing views): median hit error under 0.2 mm and 90th percentile under 0.4 mm on a 50 mm relief (measured worst 90th percentile 0.13 mm; without the bisection 1.0 mm). **Inverted `height_remap`** (1, 0) on an inverted map draws the same relief (99th percentile 0.10 mm). **World-planar walls**: finite, lit pixels (a smoke test, see the file). **No swimming**: 190 relief markers over 24 camera positions stay within 0.19 mm of their traced position. **Triplanar** marches 1 plane on a floor and 2 on a 45-degree roof. **light() vs Godot's built-in lighting** (dielectric, metal, metal at a grazing view): 99th percentile at most 0.07 %, maximum 0.17 % (limits 0.12 % / 0.3 %); the flat variant equals ORMMaterial3D exactly. **LIGHT_VERTEX**: on the 2 041 pixels whose received shadow depends on where it is computed, 100 % are lit or shadowed as on the relief. **Self-shadow** against a CPU height-field shadow: 99.8 % of 4 929 pixels agree (limit 98 %); from an omni and a spot light, against the shadow towards the light's position: 99.5 % (limit 98 %), and nothing changes with the setting off. **Depth write**: with it, props are cut where the relief (not the plane) predicts on 100 % of the 1 397 pixels where the two disagree, and 4 of 318 484 wall pixels are empty; without it, as the plane predicts and none empty. **Mip shimmer** 10-60 m away: POM flickers 1.02 x as much as flat normal mapping (limit 1.3), and the march samples the mip level the hardware would pick (90th percentile 0.006 levels off). **Distance fade**: 136 mm parallax offset before the fade, 0 beyond it. Globals (the registered defaults and this project's are the Medium preset), parameter defaults equal to the shaders' own, emission pass-through. |
+| render tests (headed, 109 checks) | **POM against a CPU ray / height-field intersection** (world floor with relief above and below, UV floor, UV wall, triplanar floor and two walls; steep, 45-degree and grazing views): median hit error under 0.2 mm and 90th percentile under 0.4 mm on a 50 mm relief (measured worst 90th percentile 0.13 mm; without the bisection 1.0 mm). **Inverted `height_remap`** (1, 0) on an inverted map draws the same relief (99th percentile 0.10 mm). **World-planar walls**: finite, lit pixels (a smoke test, see the file). **No swimming**: 190 relief markers over 24 camera positions stay within 0.19 mm of their traced position. **Triplanar** marches 1 plane on a floor and 2 on a 45-degree roof. **light() vs Godot's built-in lighting** (dielectric, metal, metal at a grazing view): 99th percentile at most 0.07 %, maximum 0.17 % (limits 0.12 % / 0.3 %); the flat variant equals ORMMaterial3D exactly. **LIGHT_VERTEX**: on the 2 041 pixels whose received shadow depends on where it is computed, 100 % are lit or shadowed as on the relief. **Self-shadow** against a CPU height-field shadow: 99.8 % of 4 929 pixels agree (limit 98 %); from an omni and a spot light, against the shadow towards the light's position: 99.5 % (limit 98 %), and nothing changes with the setting off. **Depth write**: with it, props are cut where the relief (not the plane) predicts on 100 % of the 1 397 pixels where the two disagree, and 4 of 318 484 wall pixels are empty; without it, as the plane predicts and none empty. **Mip shimmer** 10-60 m away: POM flickers 1.02 x as much as flat normal mapping (limit 1.3), and the march samples the mip level the hardware would pick (90th percentile 0.006 levels off). **Distance fade**: 136 mm parallax offset before the fade, 0 beyond it. Globals (the registered defaults and this project's are the Medium preset), parameter defaults equal to the shaders' own, emission pass-through. |
 | field tests (headed, 47 checks) | **Vertex heights** against the height map: 1 539 vertices in all 4 rings, largest error 0.03 mm. **Over a baked ground** (slope, kerb, hole, other ground, the bake's edge): 12 966 vertices against `GADSGroundBake.sample()`, largest error 0.20 mm. **The field's own parallax** against the CPU ray tracer: 90th percentile 0.05 / 0.07 / 0.10 mm (steep / 45 degrees / grazing); its self-shadow agrees with the CPU height-field shadow on 99.8 % of pixels. **No cracks**: 0 background pixels inside the grid from 6 camera positions. **No swimming**: 0 mm height change in the inner ring while the camera walks; in the morph bands at most 0.96 mm per 1 cm camera step (limit 2 mm). **Field vs parallax ground**: 0.15 % mean luminance difference inside the grid (limit 1 %), 0.08 % in the last metre before the relief fades (limit 0.5 %), 0 beyond the grid. **Ground bake**: 1 698 points within 1.9 mm of the mesh surface. **Pebbles stay put**: 0 of 1 536 pebble pixels change when the camera moves 1.24 m across cell boundaries. Lifetime: presets, resizes, a second viewport, freeing the scene, a scene change during a bake. All four demo scenes render at every preset, their ground faces up, and their runtime bakes take about 0.3 s (printed by the test). The demo's fly camera flies. |
 | bake tests (headed, 146 checks; headless without the render comparison) | **Accuracy**: points inside the baked triangles of a 60 mm bump against the height field at the same uv: largest distance 0.47 mm at a 0.5 mm tolerance (736 triangles). **Adaptivity**: 107 times the triangle density on the bump as on the flat plane. **Vector displacement**: a plane with only a vector map (x 0.5, y -0.3, z 1 times a 50 mm bump) has its vertices within 0.001 mm of the rest position plus the map's vector in the tangent frame, points inside the triangles within 0.48 mm at a 0.5 mm tolerance; a purely sideways bump refines 32 times denser where it is and moves nothing off the plane; grey is no offset in an unsigned map; object space moves along the object's axes; a vector-displaced box stays closed; with a height map the two add up; a vector map at scale 0 bakes as before. **Closed meshes stay closed** (every edge in exactly two triangles after welding): a box with triplanar and with UV mapping (seams, hard edges), a UV sphere (seam, poles), a world-mapped cylinder (caps). Locked borders do not move (free ones by 22 mm); the budget caps the count exactly (3 000) and the statistics report the error left; identical results for repeated bakes and any thread count; scale 2 halves the object-space displacement (the tolerance is in world metres, the triangle count stays the same); a rotated plane moves along its own normal; a plane's 45-45-90 triangles stay 45-45-90 over 40 001 triangles; normals follow the slope, tangents along +u and perpendicular, `CUSTOM0` / `CUSTOM1` rest data, 7 LODs sharing the vertices; cancel stops a 5 M-triangle bake within milliseconds. **Node**: background bake with progress, the cache file the scene refers to, reuse of the cached file, Rebuild, Clear, the source untouched; staleness after a new relief depth, quality, source edit, scale, or (world mapping) position, not after moving a UV-mapped mesh; trimesh collision of its own resolution that a ray hits 0.4 mm from the relief's top, removed with collision None; a saved and reloaded scene refers to the bake and is not stale. **Render**: on the pixels where the relief shows, a baked mesh differs from the parallax render of the same material by 0.0065 (mean), the normal map applied on top of the geometry by 0.091; a baked mesh marches no parallax steps; the Tessellation view. |
 | terrain tests (headed, 48 checks) | **Heights**: every vertex is the heightmap's (0.003 mm), between vertices the triangles' plane, outside nothing. **Chunk LODs**: each halves the quads (skirts included), keys increase and equal each LOD's largest height error, and every chunk's skirts hang deeper than the widest gap two LODs can leave on its border. **Layers**: rock on an 80-degree flank, snow on the peak, the first layer alone on low gentle ground; the combined layered material keeps each layer's textures, texture size and vertex-colour mask; a splat map overrides the rules. **Collision**: 200 rays hit the HeightMapShape3D within 0.02 mm of the drawn surface. **Detail field**: its ground data has texel centres on the vertices and stays within the field's lift (1.6 mm of 4.3 mm) of the drawn surface on 378 displaced points, with the dominant layer right on all. Three property changes in a frame rebuild once. **Streaming**: exactly the chunks within the radius are built, each with its collision shape, identical to the whole terrain's; heights the same streamed or not; the ground window follows the camera, and after flying across the far old chunks are gone. **Painting**: the painted layer takes over in the middle and fades at the edge, the vertex colours and the field's ground data follow, erasing, saving and clearing work, and a chunk streamed in after the paint carries it. **Render**: the terrain draws from above and is culled from below (front faces wind right); the engine draws 14 times fewer primitives far away (its mesh LOD picks the coarser index LODs). |

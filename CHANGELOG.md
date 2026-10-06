@@ -106,6 +106,11 @@ All notable changes to this project are documented here. The format follows
   Project > Tools > **Make Selected Meshes GADSMeshInstance3D** and **Bake Selected
   GADSMeshInstance3D** (undoable); Validate Setup reports stale bakes, unbakeable meshes, a
   missing native library and bakes the budget cut short.
+- **Custom shader hooks and visual shader nodes**: `GADS_CUSTOM_HEIGHT`
+  (`gads_custom_height(uv, h)`, applied wherever the main height is read), `GADS_CUSTOM_SURFACE`
+  (`gads_custom_surface(...)` after textures and effects) and `GADS_CUSTOM_LAYER_MASKS` change a
+  part of the surface shader without replacing it. Visual shader nodes in a GADS category:
+  ParallaxUV, HeightBlend, SlopeMask, TriplanarWeights, DetailNormal, Cavity.
 - **Adaptive quality and runtime budgets**: `GADSManager.adaptive_quality` lowers the preset
   one step at a time (down to `adaptive_min_preset`) and coarsens runtime tessellation while the
   main viewport's GPU time misses `target_frame_ms`, and restores it when there is room again

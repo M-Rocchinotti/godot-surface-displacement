@@ -61,6 +61,9 @@ void fragment() {
 	float up = normalize(gads_world_normal).y;
 	GADS_RELIEF_ARG arg = vec3(gads_baked > 0.5 ? 0.0 : fade, gads_layer_masks.x * gads_slope_band(layer1_slope, up),
 			gads_layer_masks.y * gads_slope_band(layer2_slope, up));
+#ifdef GADS_CUSTOM_LAYER_MASKS
+	arg.yz = clamp(gads_custom_layer_masks(arg.yz, gads_world_pos, normalize(gads_world_normal)), 0.0, 1.0);
+#endif
 	// Masks for the texture blend, also on a baked mesh (whose relief scale is 0).
 	GADS_RELIEF_ARG sample_arg = vec3(1.0, arg.yz);
 #else
@@ -222,6 +225,10 @@ void fragment() {
 	float metallic_out = clamp(orm_sum.b * metallic_scale, 0.0, 1.0);
 	float normal_keep;
 	gads_surface_effects(main_uv, main_lod, normalize(gads_world_normal).y, COLOR, albedo_out, roughness_out, metallic_out, ao_out, normal_keep);
+#ifdef GADS_CUSTOM_SURFACE
+	gads_custom_surface(main_uv, gads_world_pos, normalize(gads_world_normal), gads_main_height(main_uv, main_lod), albedo_out, roughness_out,
+			metallic_out, ao_out);
+#endif
 	ALBEDO = albedo_out;
 	AO = ao_out;
 	ROUGHNESS = roughness_out;

@@ -21,6 +21,17 @@
 //     (the surface normal for UV mapping, world +Y for world-planar, the projection axis for
 //     triplanar). height_center = 1: relief below the surface (classic POM, good on walls);
 //     height_center = 0: relief above it (required for ground under a GADSDisplacementField3D).
+//   - Custom hooks (define the macro and the function; see README, Custom shaders):
+//       GADS_CUSTOM_HEIGHT       float gads_custom_height(vec2 uv, float h): reshapes the main
+//                                remapped height (0..1) wherever it is read (march, self-shadow,
+//                                effects). Define it before including this file. Parallax only: a
+//                                bake reads the height texture itself.
+//       GADS_CUSTOM_SURFACE      void gads_custom_surface(vec2 uv, vec3 world_pos, vec3 world_normal,
+//                                float height, inout vec3 albedo, inout float roughness,
+//                                inout float metallic, inout float ao): after the textures and
+//                                effects. Define it after this file, before gads_surface.
+//       GADS_CUSTOM_LAYER_MASKS  vec2 gads_custom_layer_masks(vec2 masks, vec3 world_pos,
+//                                vec3 world_normal): the layered variants' layer 1 / 2 masks.
 //   - A view ray that leaves the camera and hits the flat surface at P passes relief height z at
 //     uv(z) = uv(P) + duv_dz * z, duv_dz = (gu.V, gv.V) * (N.A) / (N.V), where gu/gv are the
 //     gradients of u/v along the surface, N the surface normal, A the relief axis and V the unit
@@ -199,6 +210,16 @@ float gads_remap(float h) {
 	return gads_remap_height(h, height_remap);
 }
 
+// The main height map's remapped height (0..1) at uv on mip level lod, through the custom height
+// hook when there is one.
+float gads_main_height(vec2 uv, float lod) {
+	float h = gads_remap(textureLod(height_texture, uv, max(lod, 0.0)).r);
+#ifdef GADS_CUSTOM_HEIGHT
+	h = clamp(gads_custom_height(uv, h), 0.0, 1.0);
+#endif
+	return h;
+}
+
 // The vertex colour channel a mask comes from (4 = everywhere).
 float gads_mask_channel(vec4 c, int channel) {
 	return channel == 0 ? c.r : channel == 1 ? c.g : channel == 2 ? c.b : channel == 3 ? c.a : 1.0;
@@ -221,8 +242,8 @@ void gads_surface_effects(vec2 uv, float lod, float up, vec4 vertex_color,
 		return;
 	}
 	float mask = effects_vertex_mask == 0 ? 1.0 : gads_mask_channel(vertex_color, effects_vertex_mask - 1);
-	float h = gads_remap(textureLod(height_texture, uv, max(lod, 0.0)).r);
-	float around = cavity_amount > 0.0 || edge_amount > 0.0 ? gads_remap(textureLod(height_texture, uv, max(lod, 0.0) + cavity_radius).r) : h;
+	float h = gads_main_height(uv, lod);
+	float around = cavity_amount > 0.0 || edge_amount > 0.0 ? gads_main_height(uv, max(lod, 0.0) + cavity_radius) : h;
 	gads_apply_effects(e, h, around, up, mask, albedo, roughness, metallic, ao, normal_keep);
 }
 
@@ -236,7 +257,7 @@ float gads_detail_ratio() {
 // main map (may be negative, see gads_march_lod; the detail map is sampled at the matching level
 // of its own texels).
 float gads_main_relief(vec2 uv, float lod, out float h) {
-	h = gads_remap(textureLod(height_texture, uv, max(lod, 0.0)).r);
+	h = gads_main_height(uv, lod);
 	float relief = height_m * (h - height_center);
 	if (detail_height_m > 0.0) {
 		float texels = detail_scale * float(textureSize(detail_height_texture, 0).x) / float(textureSize(height_texture, 0).x);
@@ -305,7 +326,7 @@ float gads_relief(vec2 uv, float lod, GADS_RELIEF_ARG arg) {
 	return arg.x * gads_layered_relief(uv, lod, arg, t);
 #else
 	// Kept as it was before the layers so the single-layer variants draw bit for bit the same.
-	float relief = arg * (gads_remap(textureLod(height_texture, uv, max(lod, 0.0)).r) - height_center);
+	float relief = arg * (gads_main_height(uv, lod) - height_center);
 	if (detail_height_m > 0.0) {
 		float texels = detail_scale * float(textureSize(detail_height_texture, 0).x) / float(textureSize(height_texture, 0).x);
 		float detail = textureLod(detail_height_texture, uv * detail_scale, max(lod + log2(texels), 0.0)).r;

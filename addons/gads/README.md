@@ -24,13 +24,22 @@ scattered stones, cobblestones as real stones, brick walls with deep joints.
   the near-camera displacement field on its own ground data.
 - **GADSManager** node: Low / Medium / High / Ultra presets (measured on a GTX 1080 at
   1080p: 0.47 / 1.15 / 1.58 / 2.86 ms added; near-camera geometry and pebbles only at Ultra),
-  feature switches, a script API for settings menus.
+  feature switches, adaptive quality against a frame-time target, a shared runtime triangle
+  budget, weather (rain, snow, puddles), a script API for settings menus.
+- **Materials**: detail layers, height-blended layered materials, surface effects (snow / dust /
+  sand cover, wetness, puddles, cavity and edge colours), vector displacement maps for bakes;
+  materials from downloaded texture sets or **procedural** ones (eleven tileable patterns with
+  normal, occlusion, albedo and ORM maps, generated natively).
+- **Baked meshes** (GADSMeshInstance3D) also re-tessellate for the camera at runtime, split into
+  clusters for culling and LOD, show their topology problems (Diagnose) and export to glTF / OBJ.
+- **Custom shaders**: the `.gdshaderinc` library with hooks (height, surface, layer masks) and
+  six visual shader nodes in a GADS category.
 
 ## Quick start
 
 1. Enable **GADS** in Project Settings > Plugins. It registers the shader
-   globals `gads_pom_steps`, `gads_pom_range`, `gads_shadow`, `gads_debug`, `gads_dfg` and the three
-   `gads_deform*` of runtime deformation; keep them.
+   globals `gads_pom_steps`, `gads_pom_range`, `gads_shadow`, `gads_debug`, `gads_dfg`, the three
+   `gads_deform*` of runtime deformation and `gads_weather`; keep them.
 2. Add a **GADSManager** node (Project > Tools > GADS: Add
    GADSManager Node) and pick a preset.
 3. **Create Material from Selected Textures** makes a GADS material from a downloaded texture set
@@ -48,7 +57,10 @@ scattered stones, cobblestones as real stones, brick walls with deep joints.
 Your own shaders: `render_mode diffuse_burley, specular_schlick_ggx;`, define `GADS_MAPPING_UV` /
 `GADS_MAPPING_WORLD` / `GADS_MAPPING_TRIPLANAR` and optionally `GADS_POM`, `GADS_SELF_SHADOW`,
 `GADS_DEPTH_WRITE`, then `#include "res://addons/gads/render/shaders/gads_surface.gdshaderinc"`
-(see the files in `render/shaders/variants/`).
+(see the files in `render/shaders/variants/`). Hooks: define `GADS_CUSTOM_HEIGHT` with
+`float gads_custom_height(vec2 uv, float h)` before the include, or `GADS_CUSTOM_SURFACE` with
+`gads_custom_surface(...)` between `gads_core.gdshaderinc` and `gads_surface.gdshaderinc` (the
+header of `gads_core.gdshaderinc` lists the signatures).
 
 Requirements: Godot 4.7+, Forward+ (Vulkan tested). Limitations: POM gives no silhouettes on
 walls and props (bake those); baking needs the native library (Linux, Windows x86_64) and static,
