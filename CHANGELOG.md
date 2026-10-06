@@ -164,6 +164,10 @@ All notable changes to this project are documented here. The format follows
   The grid's heights and layer weights, the detail field's ground data (and its encoding) and
   its error are native too: a 256 m terrain at 1 m spacing with its detail field rebuilds in
   about 0.16 s instead of 2 s, a sculpting dab with its ground data takes under 3 ms.
+- **Blend shapes bake**: a mesh's blend shapes (morph targets) are carried through the
+  tessellation: every corner is a blend of its source triangle's vertices, so each baked vertex
+  moves by the shape's offset interpolated from them (normals likewise); names and the mode are
+  kept, clusters too. They used to be dropped.
 - **Skinned meshes bake**: bone indices and weights are carried through the tessellation
   (interpolated at every split, the strongest 4 or 8 kept and normalised), so characters and
   creatures get baked displacement and still deform; clusters and the parallax fallback follow the

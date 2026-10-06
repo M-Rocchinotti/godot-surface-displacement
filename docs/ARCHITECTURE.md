@@ -332,6 +332,11 @@ adds up), keeps the strongest 4 or 8 (as the surface has; ties by bone index, so
 not depend on order) and normalises them, which is the linear blend wherever the ends share
 their bones.
 
+**Blend shapes.** When a surface has blend shapes, every corner also records itself as a blend
+of its source triangle's three vertices (a split averages both ends' blends; there are never
+more than three entries). The output gives each shape the baked vertex plus that blend of the
+source vertices' offsets, and the baked normal turned by theirs.
+
 **Bake pipeline** (`geometry/gads_mesh_baker.gd`): resolves each surface's material, turns the
 GADS parameters into the tessellator's displacement description, runs a render pass and an
 optional coarser collision pass on a worker thread, builds LODs with `ImporterMesh.generate_lods`

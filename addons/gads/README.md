@@ -67,8 +67,8 @@ Your own shaders: `render_mode diffuse_burley, specular_schlick_ggx;`, define `G
 header of `gads_core.gdshaderinc` lists the signatures).
 
 Requirements: Godot 4.7+, Forward+ (Vulkan tested). Limitations: POM gives no silhouettes on
-walls and props (bake those); baking needs the native library (Linux, Windows x86_64) and meshes
-without blend shapes (skinned ones bake in their rest pose); the near-camera geometry needs height-field ground (world-planar ground
+walls and props (bake those); baking needs the native library (Linux, Windows x86_64) (skinned and
+morphing meshes bake in their rest pose); the near-camera geometry needs height-field ground (world-planar ground
 materials); feet sink into the relief by up to its depth; depth write is opt-in and costs
 early-Z; omni and spot lights self-shadow only at High and Ultra (each one costs a march per
 pixel it lights); fields follow one camera. The project README on the repository page has the

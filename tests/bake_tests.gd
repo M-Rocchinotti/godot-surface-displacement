@@ -63,6 +63,7 @@ func _run() -> void:
 	await _test("sculpt", test_sculpt)
 	await _test("bake_cache", test_bake_cache)
 	await _test("skinned", test_skinned)
+	await _test("blend_shapes", test_blend_shapes)
 	await _test("import_options", test_import)
 	if DisplayServer.get_name() != "headless":
 		await _test("renders_like_parallax", test_render)
@@ -1453,6 +1454,48 @@ func test_runtime_budget() -> void:
 ## Sculpting: picking finds the uv under a ray; a sculpt map raises the baked surface by its
 ## offsets at the source uvs, on a mesh without any relief and on top of a relief; the bake key
 ## follows it; removing it bakes flat again.
+## Blend shapes: the bake keeps them (names, mode), each vertex moved by the shape's offset
+## interpolated from the source vertices (linear across the plane here), normals following.
+func test_blend_shapes() -> void:
+	var source := plane()
+	var arrays := source.get_mesh_arrays()
+	var v: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+	var lifted := v.duplicate()
+	for i in lifted.size():
+		lifted[i].y += 0.25 * (v[i].x + 1.0)
+	var shape := []
+	shape.resize(Mesh.ARRAY_MAX)
+	shape[Mesh.ARRAY_VERTEX] = lifted
+	shape[Mesh.ARRAY_NORMAL] = arrays[Mesh.ARRAY_NORMAL]
+	shape[Mesh.ARRAY_TANGENT] = arrays[Mesh.ARRAY_TANGENT]
+	var morph := ArrayMesh.new()
+	morph.add_blend_shape("lift")
+	morph.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays, [shape])
+	var baker := bake_with(morph, uv_material(bump_field(128, 0.1), 0.03), {"lods": true})
+	check(baker.mesh != null and baker.mesh.get_blend_shape_count() == 1 and baker.mesh.get_blend_shape_name(0) == &"lift", "a mesh with blend shapes bakes and keeps them")
+	if baker.mesh == null:
+		return
+	var base := baker.mesh.surface_get_arrays(0)
+	var shapes := baker.mesh.surface_get_blend_shape_arrays(0)
+	var bv: PackedVector3Array = base[Mesh.ARRAY_VERTEX]
+	var sv: PackedVector3Array = shapes[0][Mesh.ARRAY_VERTEX]
+	var rest: PackedFloat32Array = base[Mesh.ARRAY_CUSTOM0]
+	var worst := 0.0
+	for i in bv.size():
+		var expected := Vector3(0, 0.25 * (rest[i * 4] + 1.0), 0)
+		worst = maxf(worst, (sv[i] - bv[i]).distance_to(expected))
+	print("  %d vertices: the shape's offset within %.4f mm of the interpolated one" % [bv.size(), worst * 1000.0])
+	check(bv.size() > 100 and sv.size() == bv.size() and worst < 1e-4, "each baked vertex moves by the shape's offset interpolated from the source vertices")
+	var mesh_node := MeshInstance3D.new()
+	mesh_node.mesh = baker.mesh
+	root.add_child(mesh_node)
+	mesh_node.set_blend_shape_value(0, 1.0)
+	await process_frame
+	check(mesh_node.get_blend_shape_value(0) == 1.0, "the baked mesh's shape can be driven")
+	mesh_node.queue_free()
+	await process_frame
+
+
 ## Skinned meshes: the bake keeps the bone weights, interpolated between the source vertices
 ## (linear across the strip here), summing to 1; clusters deform with the node's skeleton.
 func test_skinned() -> void:

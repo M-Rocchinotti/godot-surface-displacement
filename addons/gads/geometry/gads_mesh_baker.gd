@@ -230,6 +230,8 @@ static func _resource_id(res: Resource) -> String:
 		var mesh := res as Mesh
 		for s in mesh.get_surface_count():
 			ctx.update(var_to_bytes(mesh.surface_get_arrays(s)))
+			if mesh is ArrayMesh and (mesh as ArrayMesh).get_blend_shape_count() > 0:
+				ctx.update(var_to_bytes(mesh.surface_get_blend_shape_arrays(s)))
 	elif res is Texture2D:
 		var img := (res as Texture2D).get_image()
 		if img != null:
@@ -421,6 +423,11 @@ func _make_tessellator(settings: Dictionary) -> RefCounted:
 				layers.append(l)
 			d["layers"] = layers
 		tess.call("add_surface", _source.surface_get_arrays(s), d)
+		var shaped := _source as ArrayMesh
+		if shaped != null and shaped.get_blend_shape_count() > 0:
+			# Shape arrays hold absolute positions in either mode (the mode only changes how weights
+			# combine).
+			tess.call("set_blend_shapes", s, shaped.surface_get_blend_shape_arrays(s), false)
 	tess.call("set_transform", _transform)
 	if sculpt_image != null:
 		tess.call("set_offset_map", sculpt_image)
@@ -458,24 +465,43 @@ func _work() -> void:
 	else:
 		groups = [_tess.call("get_surfaces")]
 	_importers.clear()
+	var shaped := _source as ArrayMesh
+	var shape_count := shaped.get_blend_shape_count() if shaped != null else 0
 	for surfaces: Array in groups:
 		var im := ImporterMesh.new()
+		# Blend shapes come back as absolute positions, after each surface's arrays.
+		for k in shape_count:
+			im.add_blend_shape(shaped.get_blend_shape_name(k))
+		if shape_count > 0:
+			im.set_blend_shape_mode(shaped.blend_shape_mode)
 		var anchor := _anchor_of(surfaces)
 		for s in surfaces.size():
-			var arrays: Array = surfaces[s]
+			var arrays: Array = (surfaces[s] as Array).duplicate()
+			var shapes: Array = arrays.pop_back() if arrays.size() > Mesh.ARRAY_MAX else []
 			if (arrays[Mesh.ARRAY_INDEX] as PackedInt32Array).is_empty():
 				if groups.size() == 1:
 					continue # A surface whose triangles were all degenerate.
 				# A cluster without this surface: a degenerate triangle keeps the surface indices
 				# (and so the node's surface material overrides) the same in every cluster.
 				arrays = _placeholder_surface(anchor)
+				shapes = []
+			if shapes.size() < shape_count:
+				# A surface without shapes of its own (a placeholder): it keeps its base in every shape.
+				shapes = []
+				for k in shape_count:
+					var a := []
+					a.resize(Mesh.ARRAY_MAX)
+					a[Mesh.ARRAY_VERTEX] = arrays[Mesh.ARRAY_VERTEX]
+					a[Mesh.ARRAY_NORMAL] = arrays[Mesh.ARRAY_NORMAL]
+					a[Mesh.ARRAY_TANGENT] = arrays[Mesh.ARRAY_TANGENT]
+					shapes.append(a)
 			# The mesh's own surface material: overrides on the node keep working on the baked mesh.
 			# Skinned surfaces keep their bones (4 or 8 influences a vertex, as the source).
 			var surface_flags := flags
 			var weights: Variant = arrays[Mesh.ARRAY_WEIGHTS]
 			if weights is PackedFloat32Array and (weights as PackedFloat32Array).size() == 8 * (arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array).size():
 				surface_flags |= Mesh.ARRAY_FLAG_USE_8_BONE_WEIGHTS
-			im.add_surface(Mesh.PRIMITIVE_TRIANGLES, arrays, [], {}, _source.surface_get_material(s),
+			im.add_surface(Mesh.PRIMITIVE_TRIANGLES, arrays, shapes, {}, _source.surface_get_material(s),
 				(_source as ArrayMesh).surface_get_name(s) if _source is ArrayMesh else "", surface_flags)
 		if im.get_surface_count() == 0:
 			_ok = false

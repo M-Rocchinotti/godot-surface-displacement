@@ -37,6 +37,7 @@ void GADSTessellator::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("add_height_map", "image"), &GADSTessellator::add_height_map);
 	ClassDB::bind_method(D_METHOD("add_vector_map", "image"), &GADSTessellator::add_vector_map);
 	ClassDB::bind_method(D_METHOD("set_offset_map", "image"), &GADSTessellator::set_offset_map);
+	ClassDB::bind_method(D_METHOD("set_blend_shapes", "surface", "shapes", "relative"), &GADSTessellator::set_blend_shapes);
 	ClassDB::bind_method(D_METHOD("add_surface", "arrays", "displacement"), &GADSTessellator::add_surface);
 	ClassDB::bind_method(D_METHOD("set_transform", "transform"), &GADSTessellator::set_transform);
 	ClassDB::bind_method(D_METHOD("set_settings", "settings"), &GADSTessellator::set_settings);
@@ -91,6 +92,35 @@ PackedInt32Array GADSTessellator::add_vector_map(const Ref<Image> &p_image) {
 		out.push_back(core_.add_height_map(img->get_width(), img->get_height(), std::move(data)));
 	}
 	return out;
+}
+
+// The blend shapes of surface p_surface (added before): Mesh blend shape arrays (ARRAY_VERTEX and
+// ARRAY_NORMAL per shape): absolute positions (as Mesh keeps them in either blend shape mode), or
+// with p_relative offsets from the base. The bake gives every
+// output surface the same shapes, so the baked mesh keeps them.
+void GADSTessellator::set_blend_shapes(int p_surface, const Array &p_shapes, bool p_relative) {
+	std::vector<std::vector<gads::V3>> positions, normals;
+	for (int64_t k = 0; k < p_shapes.size(); k++) {
+		Array a = p_shapes[k];
+		std::vector<gads::V3> sp, sn;
+		if (a.size() > ARRAY_NORMAL) {
+			if (a[ARRAY_VERTEX].get_type() == Variant::PACKED_VECTOR3_ARRAY) {
+				PackedVector3Array v = a[ARRAY_VERTEX];
+				for (int64_t i = 0; i < v.size(); i++) {
+					sp.push_back(gads::V3(v[i].x, v[i].y, v[i].z));
+				}
+			}
+			if (a[ARRAY_NORMAL].get_type() == Variant::PACKED_VECTOR3_ARRAY) {
+				PackedVector3Array v = a[ARRAY_NORMAL];
+				for (int64_t i = 0; i < v.size(); i++) {
+					sn.push_back(gads::V3(v[i].x, v[i].y, v[i].z));
+				}
+			}
+		}
+		positions.push_back(std::move(sp));
+		normals.push_back(std::move(sn));
+	}
+	core_.set_blend_shapes(p_surface, std::move(positions), std::move(normals), p_relative);
 }
 
 // Sculpt offsets (m, red channel) in the source mesh's own first UVs, added on every surface.
@@ -304,6 +334,26 @@ static Array surface_arrays(const gads::SurfaceOutput &o) {
 	}
 	arrays[ARRAY_CUSTOM0] = floats(o.custom0);
 	arrays[ARRAY_CUSTOM1] = floats(o.custom1);
+	if (!o.shape_positions.empty()) {
+		// The blend shapes, after the Mesh arrays (the caller passes them to add_surface).
+		Array shapes;
+		for (size_t sh = 0; sh < o.shape_positions.size(); sh++) {
+			Array a;
+			a.resize(ARRAY_MAX);
+			PackedVector3Array sv, sn;
+			sv.resize(int64_t(n));
+			sn.resize(int64_t(n));
+			for (size_t i = 0; i < n; i++) {
+				sv.set(int64_t(i), Vector3(o.shape_positions[sh][i * 3], o.shape_positions[sh][i * 3 + 1], o.shape_positions[sh][i * 3 + 2]));
+				sn.set(int64_t(i), Vector3(o.shape_normals[sh][i * 3], o.shape_normals[sh][i * 3 + 1], o.shape_normals[sh][i * 3 + 2]));
+			}
+			a[ARRAY_VERTEX] = sv;
+			a[ARRAY_NORMAL] = sn;
+			a[ARRAY_TANGENT] = floats(o.tangents);
+			shapes.push_back(a);
+		}
+		arrays.push_back(shapes);
+	}
 	if (o.bone_count > 0) {
 		PackedInt32Array bones;
 		bones.resize(int64_t(o.bones.size()));

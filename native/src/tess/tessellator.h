@@ -87,6 +87,8 @@ struct SurfaceInput {
 	std::vector<int> bones;
 	std::vector<float> weights;
 	int bone_count = 0;
+	// Blend shapes: per shape, each vertex's offset from the base (position and normal).
+	std::vector<std::vector<V3>> shape_positions, shape_normals;
 	std::vector<int> indices; // empty: unindexed triangles
 	int displacement = -1; // index into add_displacement(); -1 = not displaced
 };
@@ -97,6 +99,8 @@ struct SurfaceOutput {
 	std::vector<int> bones; // bone_count per vertex (skinned surfaces)
 	std::vector<float> weights;
 	int bone_count = 0;
+	// Per blend shape: each vertex's position and normal in that shape (3 floats each).
+	std::vector<std::vector<float>> shape_positions, shape_normals;
 	bool has_uv = false, has_uv2 = false, has_colors = false;
 };
 
@@ -148,6 +152,9 @@ public:
 	// `map` (from add_height_map) in the source mesh's own first UVs (0..1, clamped at the edges;
 	// no material transform), raw values in metres. -1 = none.
 	void set_offset_map(int map) { offset_map_ = map; }
+	// Blend shapes of surface `surface` (added before): per shape, every vertex's position and
+	// normal, absolute or (relative) offsets from the base.
+	void set_blend_shapes(int surface, std::vector<std::vector<V3>> positions, std::vector<std::vector<V3>> normals, bool relative);
 	int add_displacement(const Displacement &d);
 	void add_surface(SurfaceInput s);
 	void set_transform(const Xform &x) { xform_ = x; }
@@ -265,6 +272,15 @@ private:
 	};
 	std::vector<Skin> skins_;
 	static Skin mix_skins(const Skin &x, const Skin &y, int count);
+	// Each corner as a blend of its surface's source vertices (parallel to corners_ when a
+	// surface has blend shapes, else empty): every corner of a source triangle is one of its
+	// three vertices' blends, so three entries suffice.
+	struct Blend {
+		int v[3] = { -1, -1, -1 };
+		float w[3] = { 0, 0, 0 };
+	};
+	std::vector<Blend> blends_;
+	static Blend mix_blends(const Blend &x, const Blend &y);
 	std::vector<Tri> tris_;
 	EdgeTable edges_;
 	std::vector<std::vector<int>> extra_;

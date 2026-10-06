@@ -153,6 +153,31 @@ void Tessellator::add_surface(SurfaceInput s) {
 	inputs_.push_back(std::move(s));
 }
 
+void Tessellator::set_blend_shapes(int surface, std::vector<std::vector<V3>> positions, std::vector<std::vector<V3>> normals, bool relative) {
+	if (surface < 0 || size_t(surface) >= inputs_.size()) {
+		return;
+	}
+	SurfaceInput &s = inputs_[surface];
+	normals.resize(positions.size());
+	for (size_t k = 0; k < positions.size(); k++) {
+		positions[k].resize(s.positions.size());
+		normals[k].resize(s.positions.size());
+		if (!relative) {
+			// Offsets from the base (a shape without normals keeps the base's).
+			bool has_normals = false;
+			for (const V3 &v : normals[k]) {
+				has_normals = has_normals || v.length_squared() > 0.0;
+			}
+			for (size_t i = 0; i < s.positions.size(); i++) {
+				positions[k][i] = positions[k][i] - s.positions[i];
+				normals[k][i] = has_normals && i < s.normals.size() ? normals[k][i] - s.normals[i] : V3();
+			}
+		}
+	}
+	s.shape_positions = std::move(positions);
+	s.shape_normals = std::move(normals);
+}
+
 // --- Topology ----------------------------------------------------------------------------------
 
 namespace {
@@ -219,6 +244,11 @@ bool Tessellator::build_topology() {
 										   s.weights.size() >= s.positions.size() * size_t(s.bone_count));
 	}
 	skins_.clear();
+	bool shaped = false;
+	for (const SurfaceInput &s : inputs_) {
+		shaped = shaped || !s.shape_positions.empty();
+	}
+	blends_.clear();
 
 	// Corners (one per source vertex) and position groups (corners within eps share one).
 	std::unordered_map<CellKey, std::vector<int>, CellHash> cells;
@@ -282,6 +312,12 @@ bool Tessellator::build_topology() {
 					}
 				}
 				skins_.push_back(sk);
+			}
+			if (shaped) {
+				Blend b;
+				b.v[0] = int(vi);
+				b.w[0] = 1.0f;
+				blends_.push_back(b);
 			}
 		}
 	}
@@ -973,6 +1009,9 @@ void Tessellator::split_edge(int ga, int gb) {
 				int count = std::max(inputs_[x.surface].bone_count, 1);
 				skins_.push_back(mix_skins(skins_[ca], skins_[cb], count));
 			}
+			if (!blends_.empty()) {
+				blends_.push_back(mix_blends(blends_[ca], blends_[cb]));
+			}
 			mids.emplace_back(ck, cm);
 		}
 		int gc = corners_[cc].group;
@@ -1023,6 +1062,49 @@ Tessellator::Skin Tessellator::mix_skins(const Skin &x, const Skin &y, int count
 	}
 	for (int k = 0; k < keep; k++) {
 		out.b[k] = b[order[k]];
+		out.w[k] = total > 0.0f ? w[order[k]] / total : 0.0f;
+	}
+	return out;
+}
+
+// Halfway between two corners: both blends at half weight (a source vertex in both adds up); the
+// three strongest kept and normalised (there are never more within a source triangle).
+Tessellator::Blend Tessellator::mix_blends(const Blend &x, const Blend &y) {
+	int v[6];
+	float w[6];
+	int n = 0;
+	for (const Blend *b : { &x, &y }) {
+		for (int k = 0; k < 3; k++) {
+			if (b->v[k] < 0 || b->w[k] <= 0.0f) {
+				continue;
+			}
+			int at = -1;
+			for (int j = 0; j < n; j++) {
+				if (v[j] == b->v[k]) {
+					at = j;
+				}
+			}
+			if (at < 0) {
+				v[n] = b->v[k];
+				w[n] = 0.0f;
+				at = n++;
+			}
+			w[at] += 0.5f * b->w[k];
+		}
+	}
+	int order[6];
+	for (int i = 0; i < n; i++) {
+		order[i] = i;
+	}
+	std::sort(order, order + n, [&](int i, int j) { return w[i] != w[j] ? w[i] > w[j] : v[i] < v[j]; });
+	Blend out;
+	int keep = std::min(n, 3);
+	float total = 0.0f;
+	for (int k = 0; k < keep; k++) {
+		total += w[order[k]];
+	}
+	for (int k = 0; k < keep; k++) {
+		out.v[k] = v[order[k]];
 		out.w[k] = total > 0.0f ? w[order[k]] / total : 0.0f;
 	}
 	return out;
@@ -1346,6 +1428,10 @@ void Tessellator::build_outputs() {
 		o.has_uv2 = !inputs_[si].uv2.empty();
 		o.has_colors = !inputs_[si].colors.empty();
 		o.bone_count = skins_.empty() ? 0 : std::min(inputs_[si].bone_count, 8);
+		if (!blends_.empty()) {
+			o.shape_positions.resize(inputs_[si].shape_positions.size());
+			o.shape_normals.resize(inputs_[si].shape_positions.size());
+		}
 	}
 	for (const Tri &tr : tris_) {
 		if (!tr.alive) {
@@ -1378,6 +1464,25 @@ void Tessellator::build_outputs() {
 						o.bones.push_back(sk.b[k]);
 						o.weights.push_back(sk.w[k]);
 					}
+				}
+				// Each blend shape: the baked vertex moved by the shape's offset there (the blend of
+				// the source vertices' offsets), its normal turned by theirs.
+				const SurfaceInput &in = inputs_[c.surface];
+				for (size_t sh = 0; sh < o.shape_positions.size(); sh++) {
+					V3 dp, dn;
+					const Blend &b = blends_[ci];
+					for (int k = 0; k < 3; k++) {
+						if (b.v[k] >= 0 && size_t(b.v[k]) < in.shape_positions[sh].size()) {
+							dp = dp + in.shape_positions[sh][b.v[k]] * double(b.w[k]);
+							if (size_t(b.v[k]) < in.shape_normals[sh].size()) {
+								dn = dn + in.shape_normals[sh][b.v[k]] * double(b.w[k]);
+							}
+						}
+					}
+					V3 sp = p + dp;
+					V3 snrm = (n + dn).normalized(n);
+					o.shape_positions[sh].insert(o.shape_positions[sh].end(), { float(sp.x), float(sp.y), float(sp.z) });
+					o.shape_normals[sh].insert(o.shape_normals[sh].end(), { float(snrm.x), float(snrm.y), float(snrm.z) });
 				}
 				// For the shaders: where the vertex was (textures are mapped at the rest position) and
 				// the mip level of its footprint, the direction it moved in and the refinement level of
@@ -1504,6 +1609,8 @@ std::vector<std::vector<SurfaceOutput>> Tessellator::clusters(int max_triangles)
 			cluster[s].has_uv2 = outputs_[s].has_uv2;
 			cluster[s].has_colors = outputs_[s].has_colors;
 			cluster[s].bone_count = outputs_[s].bone_count;
+			cluster[s].shape_positions.resize(outputs_[s].shape_positions.size());
+			cluster[s].shape_normals.resize(outputs_[s].shape_normals.size());
 		}
 		std::vector<std::pair<int, int>> touched;
 		for (size_t i = leaf.first; i < leaf.second; i++) {
@@ -1528,6 +1635,10 @@ std::vector<std::vector<SurfaceOutput>> Tessellator::clusters(int max_triangles)
 							dst.bones.push_back(src.bones[size_t(v) * src.bone_count + k]);
 						}
 						copy_vertex(src.weights, dst.weights, v, src.bone_count);
+					}
+					for (size_t sh = 0; sh < src.shape_positions.size(); sh++) {
+						copy_vertex(src.shape_positions[sh], dst.shape_positions[sh], v, 3);
+						copy_vertex(src.shape_normals[sh], dst.shape_normals[sh], v, 3);
 					}
 					touched.emplace_back(t.surface, v);
 				}
