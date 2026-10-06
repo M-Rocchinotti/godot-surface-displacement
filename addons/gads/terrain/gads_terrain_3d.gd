@@ -168,6 +168,10 @@ var _w1 := PackedFloat32Array() # whole terrain only: the second layer's weight 
 var _w2 := PackedFloat32Array() # the third layer's
 var _chunks: Array[MeshInstance3D] = []
 var _chunk_nodes := {} # Vector2i -> MeshInstance3D
+var _chunk_data := {} # Vector2i -> its arrays and LODs (kept for repainting)
+var _paint := {} # vertex index -> painted Vector2 weights (overrides the splat map or rules)
+var _paint_version := 0
+var _pending_version := {} # Vector2i -> _paint_version when its build started
 var _shapes := {} # Vector2i -> CollisionShape3D (streaming)
 var _pending := {} # Vector2i -> WorkerThreadPool task (streaming)
 var _results := {} # Vector2i -> chunk data from a finished task
@@ -338,6 +342,117 @@ func get_build_seconds() -> float:
 ## Whether streamed chunks are being built on worker threads.
 func is_streaming_busy() -> bool:
 	return not _pending.is_empty() or _window_task >= 0
+
+
+# --- Painting -------------------------------------------------------------------------------------
+
+## Paints a layer onto the terrain while the game runs (or in the editor): within [param radius]
+## metres of [param world_position], [param layer] (1: the second layer, 2: the third, 0: back to
+## the first) takes over by [param strength] (0..1) in the middle, fading out over the outer
+## [param falloff] of the radius. Updates the chunks' vertex colours and the detail field's ground
+## data; [method get_painted_weights] keeps what was painted.
+func paint_layer(world_position: Vector3, radius: float, layer: int, strength := 1.0, falloff := 0.5) -> void:
+	if _nx < 2 or radius <= 0.0:
+		return
+	var local := to_local(world_position)
+	var centre := Vector2(local.x, local.z)
+	var g0 := Vector2i(((centre - Vector2.ONE * radius - _origin) / _spacing).floor()).clamp(Vector2i.ZERO, Vector2i(_nx - 1, _nz - 1))
+	var g1 := Vector2i(((centre + Vector2.ONE * radius - _origin) / _spacing).ceil()).clamp(Vector2i.ZERO, Vector2i(_nx - 1, _nz - 1))
+	var target := Vector2(1.0 if layer == 1 else 0.0, 1.0 if layer == 2 else 0.0)
+	# Worker threads read the painted weights while they build chunks: paint into a copy then.
+	var paint := _paint if _pending.is_empty() else _paint.duplicate()
+	var inner := radius * (1.0 - clampf(falloff, 0.0, 1.0))
+	var changed := false
+	for gz in range(g0.y, g1.y + 1):
+		for gx in range(g0.x, g1.x + 1):
+			var d := centre.distance_to(_origin + Vector2(gx, gz) * _spacing)
+			if d > radius:
+				continue
+			var amount := clampf(strength, 0.0, 1.0) * (1.0 - smoothstep(inner, radius, d) if radius > inner else 1.0)
+			if amount <= 0.0:
+				continue
+			var w := _grid_weights(gx, gz)
+			var painted := w.lerp(target, amount) if layer != 0 else w * (1.0 - amount)
+			if layer == 1:
+				painted.x = maxf(painted.x, w.x)
+			elif layer == 2:
+				painted.y = maxf(painted.y, w.y)
+			paint[gz * _nx + gx] = painted
+			changed = true
+	if changed:
+		_paint = paint
+		_paint_version += 1
+		_repaint(Rect2(_origin + Vector2(g0) * _spacing, Vector2(g1 - g0) * _spacing))
+
+
+## The painted weights: {vertex index: Vector2 (second, third layer)}; give them back with
+## [method set_painted_weights] (a save game, say) after the terrain is built.
+func get_painted_weights() -> Dictionary:
+	return _paint.duplicate()
+
+
+func set_painted_weights(weights: Dictionary) -> void:
+	_paint = weights.duplicate()
+	_paint_version += 1
+	_repaint(Rect2(_origin, get_extent()))
+
+
+## Clears what was painted.
+func clear_paint() -> void:
+	_paint = {}
+	_paint_version += 1
+	_repaint(Rect2(_origin, get_extent()))
+
+
+## Refreshes the vertex colours of the chunks within local [param rect] and the field's ground
+## data there.
+func _repaint(rect: Rect2) -> void:
+	var cq := chunk_quads
+	for key: Vector2i in _chunk_data.keys():
+		var r := _chunk_rect(key).grow(_spacing)
+		if not r.intersects(rect, true):
+			continue
+		var data: Dictionary = _chunk_data[key]
+		var arrays: Array = data["arrays"]
+		var colors: PackedColorArray = arrays[Mesh.ARRAY_COLOR]
+		var n := cq + 1
+		for z in n:
+			for x in n:
+				var wts := _grid_weights(key.x * cq + x, key.y * cq + z)
+				colors[z * n + x] = Color(wts.x, wts.y, 0.0, 1.0)
+		var ring := _ring(cq)
+		for i in ring.size():
+			colors[n * n + i] = colors[ring[i].y * n + ring[i].x]
+		arrays[Mesh.ARRAY_COLOR] = colors
+		var mesh := (_chunk_nodes[key] as MeshInstance3D).mesh as ArrayMesh
+		mesh.clear_surfaces()
+		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays, [], data["lods"])
+	_repaint_ground(rect)
+
+
+## Rewrites the layer codes of the field's ground data within local [param rect].
+func _repaint_ground(rect: Rect2) -> void:
+	if _field == null or _field.ground_bake == null:
+		return
+	var bake := _field.ground_bake
+	var gp := _ground_offset_cache
+	var size := bake.get_size()
+	var texel := bake.texel_size
+	var world := Rect2(rect.position + Vector2(gp.x, gp.z), rect.size).grow(texel)
+	var t0 := Vector2i(((world.position - bake.origin) / texel).floor()).clamp(Vector2i.ZERO, size - Vector2i.ONE)
+	var t1 := Vector2i(((world.end - bake.origin) / texel).ceil()).clamp(Vector2i.ZERO, size - Vector2i.ONE)
+	for ty in range(t0.y, t1.y + 1):
+		for tx in range(t0.x, t1.x + 1):
+			var p := bake.origin + (Vector2(tx, ty) + Vector2(0.5, 0.5)) * texel - Vector2(gp.x, gp.z)
+			var g := ((p - _origin) / _spacing).clamp(Vector2.ZERO, Vector2(_nx - 1, _nz - 1))
+			var wts := _weights_at(g)
+			var layer := 2 if wts.y >= 0.5 else (1 if wts.x >= 0.5 else 0)
+			var code := layer if layer < layers.size() else -1
+			var c := bake.data.get_pixel(tx, ty)
+			if c.a > 0.5:
+				c.b = (code + 1) / 8.0
+				bake.data.set_pixel(tx, ty, c)
+	_field.ground_bake = bake # uploads it again
 
 
 ## The texel of the ground data (m): the vertex spacing divided by [member detail_subdivision],
@@ -528,6 +643,10 @@ func _compute_weights(gx: int, gz: int) -> Vector2:
 func _grid_weights(gx: int, gz: int) -> Vector2:
 	gx = clampi(gx, 0, _nx - 1)
 	gz = clampi(gz, 0, _nz - 1)
+	if not _paint.is_empty():
+		var painted: Variant = _paint.get(gz * _nx + gx)
+		if painted != null:
+			return painted
 	if not _w1.is_empty():
 		var i := gz * _nx + gx
 		return Vector2(_w1[i], _w2[i])
@@ -594,6 +713,7 @@ func _free_chunks() -> void:
 		chunk.queue_free()
 	_chunks.clear()
 	_chunk_nodes.clear()
+	_chunk_data.clear()
 	for shape: CollisionShape3D in _shapes.values():
 		shape.queue_free()
 	_shapes.clear()
@@ -713,6 +833,7 @@ func _make_chunk(key: Vector2i, data: Dictionary) -> void:
 	add_child(mi, false, Node.INTERNAL_MODE_BACK)
 	_chunks.append(mi)
 	_chunk_nodes[key] = mi
+	_chunk_data[key] = data
 	if is_streaming() and _body != null:
 		_add_chunk_shape(key, data["heights"])
 
@@ -802,6 +923,7 @@ func _update_stream(xz: Vector2) -> void:
 			break
 		var key: Vector2i = item[1]
 		_pending[key] = WorkerThreadPool.add_task(_build_task.bind(key, levels), false, "GADS terrain chunk")
+		_pending_version[key] = _paint_version
 	# Hysteresis: a chunk goes only once well beyond the radius, so a camera on the edge does not
 	# rebuild it back and forth.
 	var drop := stream_radius * 1.25 + side
@@ -810,6 +932,7 @@ func _update_stream(xz: Vector2) -> void:
 			var mi: MeshInstance3D = _chunk_nodes[key]
 			_chunks.erase(mi)
 			_chunk_nodes.erase(key)
+			_chunk_data.erase(key)
 			mi.queue_free()
 			if _shapes.has(key):
 				(_shapes[key] as Node).queue_free()
@@ -836,12 +959,16 @@ func _collect_tasks() -> void:
 			continue
 		WorkerThreadPool.wait_for_task_completion(task)
 		_pending.erase(key)
+		var painted_since: bool = _pending_version.get(key, _paint_version) != _paint_version
+		_pending_version.erase(key)
 		_mutex.lock()
 		var data: Dictionary = _results.get(key, {})
 		_results.erase(key)
 		_mutex.unlock()
 		if not data.is_empty():
 			_make_chunk(key, data)
+			if painted_since:
+				_repaint(_chunk_rect(key)) # painted while it was being built
 			chunk_loaded.emit(key)
 			added += 1
 	if _window_task >= 0 and WorkerThreadPool.is_task_completed(_window_task):
@@ -861,6 +988,7 @@ func _wait_tasks() -> void:
 	for task: int in _pending.values():
 		WorkerThreadPool.wait_for_task_completion(task)
 	_pending.clear()
+	_pending_version.clear()
 	_results.clear()
 	if _window_task >= 0:
 		WorkerThreadPool.wait_for_task_completion(_window_task)

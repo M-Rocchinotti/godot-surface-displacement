@@ -30,6 +30,7 @@ func _run() -> void:
 	await _test("detail_field_ground_data", test_ground_data)
 	await _test("rebuilds_once_per_change", test_rebuild)
 	await _test("streams_chunks_around_the_camera", test_streaming)
+	await _test("paints_layers_at_runtime", test_painting)
 	if DisplayServer.get_name() != "headless":
 		await _test("renders_front_faces_and_coarser_far_away", test_render)
 	print("\nterrain tests: %d passed, %d failed" % [_passed, _failed])
@@ -479,3 +480,64 @@ static func _chunks_within(t: GADSTerrain3D, xz: Vector2, radius: float) -> Arra
 				out.append(Vector2i(cx, cz))
 	out.sort()
 	return out
+
+
+## Painting a layer at runtime: the weights, the chunks' vertex colours and the detail field's
+## ground data follow; erasing and saving the painted weights work; a streamed terrain builds
+## chunks with what was painted before they existed.
+func test_painting() -> void:
+	var grass := layer_material(2.0, Color(0.2, 0.6, 0.2))
+	var mud := layer_material(1.0, Color(0.4, 0.3, 0.2))
+	var t := make_terrain({"layers": [grass, mud] as Array[ShaderMaterial], "slope_layer": 0, "height_layer": 0, "detail_field": true, "height_scale": 5.0})
+	root.add_child(t)
+	var p := Vector3(-10.0, 0, 6.0)
+	check(t.get_layer_weights(p) == Vector2.ZERO, "before: the first layer only")
+	t.paint_layer(p, 3.0, 1, 1.0, 0.5)
+	var w := t.get_layer_weights(p)
+	var edge := t.get_layer_weights(p + Vector3(2.6, 0, 0))
+	var outside := t.get_layer_weights(p + Vector3(3.5, 0, 0))
+	print("  weights: centre %s, near the edge %s, outside %s" % [w, edge, outside])
+	check(w.is_equal_approx(Vector2(1, 0)) and edge.x > 0.0 and edge.x < 1.0 and outside == Vector2.ZERO, "the painted layer takes over in the middle and fades out at the edge")
+	# The vertex colour of the chunk under p.
+	var colour := Color()
+	for c in t.get_chunks():
+		var arrays := c.mesh.surface_get_arrays(0)
+		var v: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+		for i in v.size():
+			if Vector2(v[i].x, v[i].z).is_equal_approx(Vector2(p.x, p.z)):
+				colour = (arrays[Mesh.ARRAY_COLOR] as PackedColorArray)[i]
+	check(colour.r > 0.99, "the chunk's vertex colours follow (R %.2f)" % colour.r)
+	var s: Dictionary = t.get_detail_field().ground_bake.sample(Vector2(p.x, p.z))
+	check((s["weights"] as Color).g > 0.99, "the detail field shows the painted layer there")
+	var saved := t.get_painted_weights()
+	t.paint_layer(p, 5.0, 0, 1.0, 0.0)
+	check(t.get_layer_weights(p) == Vector2.ZERO, "painting layer 0 erases")
+	t.set_painted_weights(saved)
+	check(t.get_layer_weights(p).is_equal_approx(Vector2(1, 0)), "painted weights can be saved and given back")
+	t.clear_paint()
+	check(t.get_layer_weights(p) == Vector2.ZERO, "clear_paint() goes back to the rules")
+	t.queue_free()
+	# Streaming: paint where no chunk is yet, then fly there.
+	var holder := Node3D.new()
+	root.add_child(holder)
+	var cam := Camera3D.new()
+	holder.add_child(cam)
+	cam.position = Vector3(-24, 30, -24)
+	var st := make_terrain({"stream_radius": 12.0, "layers": [grass, mud] as Array[ShaderMaterial], "slope_layer": 0, "height_layer": 0, "detail_field": false})
+	holder.add_child(st)
+	st.stream_camera = st.get_path_to(cam)
+	await _settle(st)
+	var far := Vector3(20.0, 0, 20.0)
+	st.paint_layer(far, 2.0, 1)
+	cam.position = Vector3(20, 30, 20)
+	await _settle(st)
+	var found := Color()
+	for c in st.get_chunks():
+		var arrays := c.mesh.surface_get_arrays(0)
+		var v: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+		for i in v.size():
+			if Vector2(v[i].x, v[i].z).is_equal_approx(Vector2(far.x, far.z)):
+				found = (arrays[Mesh.ARRAY_COLOR] as PackedColorArray)[i]
+	check(found.r > 0.99, "a streamed chunk built later carries what was painted there")
+	holder.queue_free()
+	await process_frame

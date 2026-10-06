@@ -73,7 +73,9 @@ All notable changes to this project are documented here. The format follows
   built on worker threads (identical to the whole terrain's) and freed behind it with hysteresis,
   collision per chunk, heights read from the heightmap as needed, and the detail field's ground
   data in a window that follows the camera; under 3 ms of main-thread work per frame while
-  streaming a 2 km terrain.
+  streaming a 2 km terrain. **Runtime painting** (`paint_layer()`): layers painted with a soft
+  edge into the chunks' vertex colours and the field's ground data, kept for chunks streamed in
+  later, savable (`get_painted_weights()`).
 - **Clustered bakes** (`GADSMeshInstance3D.cluster_triangles`): the bake split into compact
   spatial clusters (C++, median splits of the triangles' centroids), each its own instance with its
   own LODs, so large meshes are culled and LOD-selected per cluster; the same triangles as the
