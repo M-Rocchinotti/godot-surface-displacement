@@ -119,6 +119,12 @@ static func from_arrays(size: Vector2i, heights: PackedFloat32Array, layers: Pac
 	result.origin = origin_xz
 	result.texel_size = texel
 	result.step_limit = step_slope * texel
+	if ClassDB.class_exists(&"GADSTerrainMesher"):
+		var encoded: Dictionary = ClassDB.class_call_static(&"GADSTerrainMesher", &"encode_ground", heights, layers, size)
+		result.data = encoded["data"]
+		result.height_min = encoded["height_min"]
+		result.height_range = encoded["height_range"]
+		return result
 	var lo := INF
 	var hi := -INF
 	for v in heights:

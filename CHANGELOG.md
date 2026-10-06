@@ -161,6 +161,9 @@ All notable changes to this project are documented here. The format follows
   LOD errors, skirts, index LODs, occluders) with the native `GADSTerrainMesher` when the library
   is loaded: the same arrays as the GDScript builder (kept as the fallback; tested equal), many
   times faster, so rebuilds, streaming and sculpting strokes cost a fraction of what they did.
+  The grid's heights and layer weights, the detail field's ground data (and its encoding) and
+  its error are native too: a 256 m terrain at 1 m spacing with its detail field rebuilds in
+  about 0.16 s instead of 2 s, a sculpting dab with its ground data takes under 3 ms.
 - **Skinned meshes bake**: bone indices and weights are carried through the tessellation
   (interpolated at every split, the strongest 4 or 8 kept and normalised), so characters and
   creatures get baked displacement and still deform; clusters and the parallax fallback follow the

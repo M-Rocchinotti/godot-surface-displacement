@@ -37,6 +37,7 @@ func _run() -> void:
 	await _test("erodes_and_generates", test_erosion)
 	await _test("roads_along_paths", test_roads)
 	await _test("native_chunks", test_native_chunks)
+	await _test("native_grid", test_native_grid)
 	if DisplayServer.get_name() != "headless":
 		await _test("renders_front_faces_and_coarser_far_away", test_render)
 	print("\nterrain tests: %d passed, %d failed" % [_passed, _failed])
@@ -814,6 +815,60 @@ func test_native_chunks() -> void:
 		check(worst < 1e-5 and same_indices, "%s: the native chunks are the GDScript ones" % c[0])
 		t.queue_free()
 		await process_frame
+
+
+## The native grid passes give what the GDScript would: heights at every vertex, the rules' and
+## the splat map's weights, the ground data's texels (heights and dominant layer) and its error.
+func test_native_grid() -> void:
+	if not ClassDB.class_exists(GADSTerrain3D.MESHER):
+		check(false, "the native library is loaded")
+		return
+	var grass := layer_material(2.0, Color(0.2, 0.6, 0.2))
+	var rock := layer_material(4.0, Color(0.5, 0.5, 0.5))
+	var t := make_terrain({"layers": [grass, rock] as Array[ShaderMaterial], "slope_range": Vector2(20, 30), "height_scale": 10.0})
+	var t0 := Time.get_ticks_usec()
+	root.add_child(t)
+	print("  64 m terrain built in %.0f ms" % ((Time.get_ticks_usec() - t0) / 1000.0))
+	var heights: PackedFloat32Array = t.get("_heights")
+	var w1: PackedFloat32Array = t.get("_w1")
+	var w2: PackedFloat32Array = t.get("_w2")
+	var g := t.get_grid_size()
+	var worst_h := 0.0
+	var worst_w := 0.0
+	for z in range(0, g.y, 3):
+		for x in range(0, g.x, 3):
+			worst_h = maxf(worst_h, absf(heights[z * g.x + x] - float(t.call("_sample_source", x, z))))
+			var w: Vector2 = t.call("_compute_weights", x, z)
+			worst_w = maxf(worst_w, maxf(absf(w1[z * g.x + x] - w.x), absf(w2[z * g.x + x] - w.y)))
+	check(worst_h < 1e-5 and worst_w < 1e-5, "heights and weights at the vertices are the GDScript ones (%.7f m, %.7f)" % [worst_h, worst_w])
+	var texel := t.get_ground_texel()
+	var part: Dictionary = ClassDB.class_call_static(GADSTerrain3D.MESHER, &"ground_arrays", t.call("_grid_state", 1), Vector2i(10, 20), Vector2i(60, 40), texel, 0.0, 2)
+	var ph: PackedFloat32Array = part["heights"]
+	var pc: PackedInt32Array = part["codes"]
+	var origin := -t.get_extent() * 0.5
+	var worst_g := 0.0
+	var codes_ok := true
+	for z in 40:
+		for x in 60:
+			var p := origin + Vector2(10 + x, 20 + z) * texel
+			worst_g = maxf(worst_g, absf(ph[z * 60 + x] - float(t.call("_height_local", p))))
+			var wts: Vector2 = t.call("_weights_at", ((p - origin) / t.get_vertex_spacing()).clamp(Vector2.ZERO, Vector2(g - Vector2i.ONE)))
+			codes_ok = codes_ok and pc[z * 60 + x] == (2 if wts.y >= 0.5 else (1 if wts.x >= 0.5 else 0))
+	check(worst_g < 1e-5 and codes_ok, "the ground data's texels are the GDScript ones (%.7f m)" % worst_g)
+	var crease := 0.0
+	var steep := GADSGroundBake.STEP_SLOPE * t.get_vertex_spacing()
+	for z in g.y - 1:
+		for x in g.x - 1:
+			var h00 := heights[z * g.x + x]
+			var h10 := heights[z * g.x + x + 1]
+			var h01 := heights[(z + 1) * g.x + x]
+			var h11 := heights[(z + 1) * g.x + x + 1]
+			if maxf(maxf(absf(h10 - h00), absf(h01 - h00)), maxf(absf(h11 - h10), absf(h11 - h01))) <= steep:
+				crease = maxf(crease, absf(h00 + h11 - h10 - h01))
+	var native_crease: float = ClassDB.class_call_static(GADSTerrain3D.MESHER, &"ground_error", t.call("_grid_state", 1), Rect2i(Vector2i.ZERO, g - Vector2i.ONE), steep)
+	check(absf(native_crease - crease) < 1e-5, "the ground data's error is the GDScript one (%.5f m)" % native_crease)
+	t.queue_free()
+	await process_frame
 
 
 ## Painting a layer at runtime: the weights, the chunks' vertex colours and the detail field's

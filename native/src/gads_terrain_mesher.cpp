@@ -4,6 +4,7 @@
 #include <godot_cpp/core/error_macros.hpp>
 #include <godot_cpp/variant/array.hpp>
 #include <godot_cpp/variant/color.hpp>
+#include <godot_cpp/variant/packed_byte_array.hpp>
 #include <godot_cpp/variant/packed_color_array.hpp>
 #include <godot_cpp/variant/packed_float32_array.hpp>
 #include <godot_cpp/variant/packed_int32_array.hpp>
@@ -14,6 +15,7 @@
 #include <godot_cpp/variant/vector3.hpp>
 
 #include <algorithm>
+#include <cstring>
 #include <cmath>
 #include <vector>
 
@@ -21,6 +23,12 @@ namespace godot {
 
 void GADSTerrainMesher::_bind_methods() {
 	ClassDB::bind_static_method("GADSTerrainMesher", D_METHOD("build_chunk", "grid", "cx", "cz"), &GADSTerrainMesher::build_chunk);
+	ClassDB::bind_static_method("GADSTerrainMesher", D_METHOD("grid_heights", "grid"), &GADSTerrainMesher::grid_heights);
+	ClassDB::bind_static_method("GADSTerrainMesher", D_METHOD("grid_weights", "grid"), &GADSTerrainMesher::grid_weights);
+	ClassDB::bind_static_method("GADSTerrainMesher", D_METHOD("ground_arrays", "grid", "first", "size", "texel", "ground_y", "layer_count"),
+			&GADSTerrainMesher::ground_arrays);
+	ClassDB::bind_static_method("GADSTerrainMesher", D_METHOD("ground_error", "grid", "vertices", "steep"), &GADSTerrainMesher::ground_error);
+	ClassDB::bind_static_method("GADSTerrainMesher", D_METHOD("encode_ground", "heights", "codes", "size"), &GADSTerrainMesher::encode_ground);
 }
 
 namespace {
@@ -210,18 +218,10 @@ Dictionary occluder_of(const PackedFloat32Array &heights, const PackedVector3Arr
 	return out;
 }
 
-} // namespace
-
-// A chunk's {"arrays", "lods", "heights" (and "occluder")}, as GADSTerrain3D._chunk_arrays builds
-// it. p_grid: "nx", "nz", "spacing", "origin", "cq", "levels", "occluder_quads" (< 1: none);
-// heights from "heights" (nx * nz) or "src" + "src_w", "src_h", "height_offset", "height_scale";
-// weights from "w1" + "w2" (nx * nz), or "splat" (RGBA) + "splat_w", "splat_h", or the rules
-// "slope_layer", "slope_range", "height_layer", "height_band".
-Dictionary GADSTerrainMesher::build_chunk(const Dictionary &p_grid, int p_cx, int p_cz) {
+Grid grid_of(const Dictionary &p_grid) {
 	Grid g;
 	g.nx = p_grid.get("nx", 0);
 	g.nz = p_grid.get("nz", 0);
-	ERR_FAIL_COND_V_MSG(g.nx < 2 || g.nz < 2, Dictionary(), "GADSTerrainMesher: the grid needs at least 2 x 2 vertices.");
 	g.spacing = p_grid.get("spacing", 1.0);
 	g.origin = p_grid.get("origin", Vector2());
 	g.heights = p_grid.get("heights", PackedFloat32Array());
@@ -245,6 +245,166 @@ Dictionary GADSTerrainMesher::build_chunk(const Dictionary &p_grid, int p_cx, in
 	if (!g.w1.is_empty() && (g.w1.size() < int64_t(g.nx) * g.nz || g.w2.size() < int64_t(g.nx) * g.nz)) {
 		g.w1 = PackedFloat32Array();
 	}
+	return g;
+}
+
+// Height of the finest LOD's triangles at local p (GADSTerrain3D._height_local; p inside).
+double height_local(const Grid &g, const Vector2 &p) {
+	Vector2 q = ((p - g.origin) / real_t(g.spacing)).clamp(Vector2(), Vector2(real_t(g.nx - 1), real_t(g.nz - 1)));
+	int x0 = std::min(int(std::floor(q.x)), g.nx - 2);
+	int z0 = std::min(int(std::floor(q.y)), g.nz - 2);
+	return tri_interp(g.h(x0, z0), g.h(x0 + 1, z0), g.h(x0, z0 + 1), g.h(x0 + 1, z0 + 1), double(q.x) - x0, double(q.y) - z0);
+}
+
+// Layer weights at fractional grid position q, bilinear between the vertices.
+Vector2 weights_at(const Grid &g, const Vector2 &q) {
+	int x0 = std::min(int(std::floor(q.x)), g.nx - 2);
+	int z0 = std::min(int(std::floor(q.y)), g.nz - 2);
+	real_t fx = real_t(double(q.x) - x0);
+	real_t fz = real_t(double(q.y) - z0);
+	Vector2 top = g.weights(x0, z0).lerp(g.weights(x0 + 1, z0), fx);
+	Vector2 bottom = g.weights(x0, z0 + 1).lerp(g.weights(x0 + 1, z0 + 1), fx);
+	return top.lerp(bottom, fz);
+}
+
+} // namespace
+
+// The heightmap at every vertex (GADSTerrain3D._build_heights): nx * nz local heights.
+PackedFloat32Array GADSTerrainMesher::grid_heights(const Dictionary &p_grid) {
+	Grid g = grid_of(p_grid);
+	g.heights = PackedFloat32Array();
+	PackedFloat32Array out;
+	ERR_FAIL_COND_V(g.nx < 2 || g.nz < 2, out);
+	out.resize(int64_t(g.nx) * g.nz);
+	float *o = out.ptrw();
+	for (int z = 0; z < g.nz; z++) {
+		for (int x = 0; x < g.nx; x++) {
+			o[int64_t(z) * g.nx + x] = float(g.h(x, z));
+		}
+	}
+	return out;
+}
+
+// The second and third layers' weights at every vertex from the splat map or the rules
+// (GADSTerrain3D._build_weights): {"w1", "w2"}.
+Dictionary GADSTerrainMesher::grid_weights(const Dictionary &p_grid) {
+	Grid g = grid_of(p_grid);
+	g.w1 = PackedFloat32Array();
+	g.w2 = PackedFloat32Array();
+	Dictionary out;
+	ERR_FAIL_COND_V(g.nx < 2 || g.nz < 2, out);
+	PackedFloat32Array w1, w2;
+	w1.resize(int64_t(g.nx) * g.nz);
+	w2.resize(int64_t(g.nx) * g.nz);
+	float *a = w1.ptrw();
+	float *b = w2.ptrw();
+	for (int z = 0; z < g.nz; z++) {
+		for (int x = 0; x < g.nx; x++) {
+			Vector2 w = g.weights(x, z);
+			a[int64_t(z) * g.nx + x] = w.x;
+			b[int64_t(z) * g.nx + x] = w.y;
+		}
+	}
+	out["w1"] = w1;
+	out["w2"] = w2;
+	return out;
+}
+
+// The detail field's ground data texels from p_first (on the terrain's texel grid, centres on
+// the vertices), p_size of them (GADSTerrain3D._ground_arrays): {"heights" (world: + p_ground_y),
+// "codes" (the dominant layer, -1 past p_layer_count)}.
+Dictionary GADSTerrainMesher::ground_arrays(const Dictionary &p_grid, const Vector2i &p_first, const Vector2i &p_size, float p_texel, float p_ground_y,
+		int p_layer_count) {
+	Grid g = grid_of(p_grid);
+	Dictionary out;
+	ERR_FAIL_COND_V(g.nx < 2 || g.nz < 2 || p_size.x < 1 || p_size.y < 1, out);
+	Vector2 extent = Vector2(real_t(g.nx - 1), real_t(g.nz - 1)) * real_t(g.spacing);
+	PackedFloat32Array heights;
+	PackedInt32Array codes;
+	heights.resize(int64_t(p_size.x) * p_size.y);
+	codes.resize(int64_t(p_size.x) * p_size.y);
+	float *hp = heights.ptrw();
+	int32_t *cp = codes.ptrw();
+	for (int z = 0; z < p_size.y; z++) {
+		for (int x = 0; x < p_size.x; x++) {
+			Vector2 p = g.origin + Vector2(real_t(p_first.x + x), real_t(p_first.y + z)) * p_texel;
+			int64_t i = int64_t(z) * p_size.x + x;
+			hp[i] = float(height_local(g, p.clamp(g.origin, g.origin + extent)) + p_ground_y);
+			Vector2 q = ((p - g.origin) / real_t(g.spacing)).clamp(Vector2(), Vector2(real_t(g.nx - 1), real_t(g.nz - 1)));
+			Vector2 w = weights_at(g, q);
+			int layer = w.y >= 0.5f ? 2 : (w.x >= 0.5f ? 1 : 0);
+			cp[i] = layer < p_layer_count ? layer : -1;
+		}
+	}
+	out["heights"] = heights;
+	out["codes"] = codes;
+	return out;
+}
+
+// How far the field's bilinear heights can fall from the triangles (GADSTerrain3D.ground_data_error,
+// before its factor): the largest crease of the quads in p_vertices not steeper than p_steep.
+float GADSTerrainMesher::ground_error(const Dictionary &p_grid, const Rect2i &p_vertices, float p_steep) {
+	Grid g = grid_of(p_grid);
+	ERR_FAIL_COND_V(g.nx < 2 || g.nz < 2, 0.0f);
+	double worst = 0.0;
+	for (int z = p_vertices.position.y; z < p_vertices.position.y + p_vertices.size.y; z++) {
+		for (int x = p_vertices.position.x; x < p_vertices.position.x + p_vertices.size.x; x++) {
+			double h00 = g.h(x, z), h10 = g.h(x + 1, z), h01 = g.h(x, z + 1), h11 = g.h(x + 1, z + 1);
+			if (std::max(std::max(std::fabs(h10 - h00), std::fabs(h01 - h00)), std::max(std::fabs(h11 - h10), std::fabs(h11 - h01))) > p_steep) {
+				continue;
+			}
+			worst = std::max(worst, std::fabs(h00 + h11 - h10 - h01));
+		}
+	}
+	return float(worst);
+}
+
+// The ground data image (FORMAT_RGBAH, as GADSGroundBake.from_arrays writes it) of heights and
+// layer codes: {"data", "height_min", "height_range"}; codes <= -2 leave a texel empty.
+Dictionary GADSTerrainMesher::encode_ground(const PackedFloat32Array &p_heights, const PackedInt32Array &p_codes, const Vector2i &p_size) {
+	Dictionary out;
+	int64_t n = int64_t(p_size.x) * p_size.y;
+	ERR_FAIL_COND_V(p_size.x < 1 || p_size.y < 1 || p_heights.size() < n || p_codes.size() < n, out);
+	double lo = 1e300, hi = -1e300;
+	for (int64_t i = 0; i < n; i++) {
+		lo = std::min(lo, double(p_heights[i]));
+		hi = std::max(hi, double(p_heights[i]));
+	}
+	double height_min = lo - 0.01;
+	double height_range = std::max(hi - lo + 0.02, 0.01);
+	PackedFloat32Array rgba;
+	rgba.resize(n * 4);
+	float *o = rgba.ptrw();
+	for (int64_t i = 0; i < n; i++) {
+		if (p_codes[i] <= -2) {
+			o[i * 4] = o[i * 4 + 1] = o[i * 4 + 2] = o[i * 4 + 3] = 0.0f;
+			continue;
+		}
+		int q = std::clamp(int(std::lround((p_heights[i] - height_min) / height_range * 65535.0)), 0, 65535);
+		o[i * 4] = float((q >> 8) / 255.0);
+		o[i * 4 + 1] = float((q & 255) / 255.0);
+		o[i * 4 + 2] = float((p_codes[i] + 1) / 8.0);
+		o[i * 4 + 3] = 1.0f;
+	}
+	PackedByteArray bytes;
+	bytes.resize(n * 4 * int64_t(sizeof(float)));
+	std::memcpy(bytes.ptrw(), o, size_t(n) * 4 * sizeof(float));
+	Ref<Image> img = Image::create_from_data(p_size.x, p_size.y, false, Image::FORMAT_RGBAF, bytes);
+	img->convert(Image::FORMAT_RGBAH);
+	out["data"] = img;
+	out["height_min"] = height_min;
+	out["height_range"] = height_range;
+	return out;
+}
+
+// A chunk's {"arrays", "lods", "heights" (and "occluder")}, as GADSTerrain3D._chunk_arrays builds
+// it. p_grid: "nx", "nz", "spacing", "origin", "cq", "levels", "occluder_quads" (< 1: none);
+// heights from "heights" (nx * nz) or "src" + "src_w", "src_h", "height_offset", "height_scale";
+// weights from "w1" + "w2" (nx * nz), or "splat" (RGBA) + "splat_w", "splat_h", or the rules
+// "slope_layer", "slope_range", "height_layer", "height_band".
+Dictionary GADSTerrainMesher::build_chunk(const Dictionary &p_grid, int p_cx, int p_cz) {
+	Grid g = grid_of(p_grid);
+	ERR_FAIL_COND_V_MSG(g.nx < 2 || g.nz < 2, Dictionary(), "GADSTerrainMesher: the grid needs at least 2 x 2 vertices.");
 	const int cq = p_grid.get("cq", 64);
 	const int levels = p_grid.get("levels", 1);
 	const int occluder_quads = p_grid.get("occluder_quads", 0);

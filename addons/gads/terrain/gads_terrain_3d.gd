@@ -563,6 +563,10 @@ func _ground_arrays(rect := Rect2()) -> Dictionary:
 	if OS.get_thread_caller_id() == OS.get_main_thread_id() and is_inside_tree():
 		_ground_offset_cache = global_position
 	var gp := _ground_offset_cache
+	if ClassDB.class_exists(MESHER) and _paint.is_empty():
+		var part: Dictionary = ClassDB.class_call_static(MESHER, &"ground_arrays", _grid_state(1), i0, Vector2i(w, d), texel, gp.y, layers.size())
+		part.merge({"first": i0, "size": Vector2i(w, d), "texel": texel})
+		return part
 	var heights := PackedFloat32Array()
 	heights.resize(w * d)
 	var codes := PackedInt32Array()
@@ -595,6 +599,8 @@ func ground_data_error(rect := Rect2()) -> float:
 	if rect.has_area():
 		g0 = Vector2i(((rect.position - _origin) / _spacing).floor()).clamp(Vector2i.ZERO, g1)
 		g1 = Vector2i(((rect.end - _origin) / _spacing).ceil()).clamp(Vector2i.ZERO, g1)
+	if ClassDB.class_exists(MESHER):
+		return float(ClassDB.class_call_static(MESHER, &"ground_error", _grid_state(1), Rect2i(g0, g1 - g0), steep)) * factor
 	var worst := 0.0
 	for z in range(g0.y, g1.y):
 		for x in range(g0.x, g1.x):
@@ -1201,6 +1207,10 @@ func _sample_source(gx: int, gz: int) -> float:
 
 
 func _build_heights() -> void:
+	if ClassDB.class_exists(MESHER):
+		_heights = PackedFloat32Array()
+		_heights = ClassDB.class_call_static(MESHER, &"grid_heights", _grid_state(1))
+		return
 	_heights.resize(_nx * _nz)
 	for z in _nz:
 		for x in _nx:
@@ -1274,6 +1284,11 @@ func _grid_weights(gx: int, gz: int) -> Vector2:
 
 
 func _build_weights() -> void:
+	if ClassDB.class_exists(MESHER):
+		var w: Dictionary = ClassDB.class_call_static(MESHER, &"grid_weights", _grid_state(1))
+		_w1 = w["w1"]
+		_w2 = w["w2"]
+		return
 	var n := _nx * _nz
 	_w1.resize(n)
 	_w2.resize(n)
