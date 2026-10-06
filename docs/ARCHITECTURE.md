@@ -290,6 +290,18 @@ The relief of the GADS materials made into real geometry, offline, for any trian
 - Everything runs on worker threads (`parallel_for` over triangles and groups); results do not
   depend on the thread count (bake tests).
 
+**Vector displacement.** A UV-mapped material can add a vector map: an XYZ offset per texel
+(three height maps inside the tessellator, one per channel; 0..1 around 0.5 unless signed) times
+`vector_displacement_m`. In tangent space the offset is `x * T + y * B + z * N`, where `N` is the
+group's displacement direction, `T` the direction of +u and `B` of the texture's up (-v), both
+from the area-weighted UV gradients of the source triangles around each corner, interpolated at
+split midpoints and made orthonormal around `N` (the convention of OpenGL normal maps and of the
+shaders' `gu` / `gv`); in object space it is the vector as it is, in the node's own units. The
+error measures the distance from the displaced point (height and vector) to the plane through
+the displaced corners' interpolation, and the mip-pyramid bound adds the vector's range on the
+triangle plus how far its frame turns over it. Every corner of a position group moves by the
+group's average offset, so UV seams, where the frames of the two sides differ, stay closed.
+
 **Bake pipeline** (`geometry/gads_mesh_baker.gd`): resolves each surface's material, turns the
 GADS parameters into the tessellator's displacement description, runs a render pass and an
 optional coarser collision pass on a worker thread, builds LODs with `ImporterMesh.generate_lods`

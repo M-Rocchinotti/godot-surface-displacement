@@ -376,6 +376,14 @@ func test_validator() -> void:
 	var empty_bake := GADSMeshInstance3D.new()
 	empty_bake.name = "EmptyBake"
 	bad.add_child(empty_bake)
+	# A signed vector map stored in 8 bits, on a node that does not bake.
+	var vdm := Image.create(4, 4, false, Image.FORMAT_RGB8)
+	var vector_only := MeshInstance3D.new()
+	vector_only.name = "VectorOnly"
+	vector_only.mesh = PlaneMesh.new()
+	vector_only.material_override = GADSMaterials.create(GADSMaterials.Mapping.UV, {"vector_displacement": ImageTexture.create_from_image(vdm)},
+		{"vector_displacement_m": 0.02, "vector_displacement_signed": true})
+	bad.add_child(vector_only)
 	root.add_child(bad)
 	var messages := "\n".join(GADSValidator.validate(bad).map(func(i: Dictionary) -> String: return i["message"]))
 	var expected := {
@@ -389,6 +397,9 @@ func test_validator() -> void:
 		"ground the field leaves flat": "ground material other_ground is not one of its layers",
 		"a detail depth without a detail map": "detail_height_m is set but there is no detail_height_texture",
 		"a GADSMeshInstance3D without a source mesh": "GADSMeshInstance3D EmptyBake cannot be baked: no source mesh",
+		"a vector map on a node that does not bake": "moves vertices only in a GADSMeshInstance3D bake; VectorOnly draws without it",
+		"a signed vector map in 8 bits": "vector_displacement_signed is on but the texture is 8-bit",
+		"a vector map without a height map": "its bake follows the vector map, the parallax fallback draws flat",
 	}
 	var missing: Array[String] = []
 	for what: String in expected:

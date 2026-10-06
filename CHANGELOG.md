@@ -106,9 +106,15 @@ All notable changes to this project are documented here. The format follows
   Project > Tools > **Make Selected Meshes GADSMeshInstance3D** and **Bake Selected
   GADSMeshInstance3D** (undoable); Validate Setup reports stale bakes, unbakeable meshes, a
   missing native library and bakes the budget cut short.
+- **Vector displacement in the bake**: UV-mapped materials take an optional
+  `vector_displacement_texture` (XYZ offsets per texel, tangent or object space, signed or
+  0..1 around 0.5) times `vector_displacement_m`. A `GADSMeshInstance3D` bake moves its vertices
+  by it, on top of or instead of the height map, refines where the offset changes (sideways
+  relief as well as height) and keeps seams closed. Validate Setup reports a vector map on a node
+  that does not bake and a signed map stored in 8 bits.
 - `GADSDeformationField.stroke()` ruts have softer walls than round marks; a field that follows a
   node not yet in the tree (a later sibling) centres on itself until it is.
-- `tests/bake_tests.gd` (64 checks) and editor-check steps for the new tools; CI builds the
+- `tests/bake_tests.gd` (132 checks) and editor-check steps for the new tools; CI builds the
   native library from source for Linux and Windows and runs the headless suites on Windows.
 
 ### Changed

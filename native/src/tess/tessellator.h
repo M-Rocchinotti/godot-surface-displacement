@@ -68,6 +68,14 @@ struct Displacement {
 	double detail_height_m = 0.0;
 	double detail_scale = 8.0;
 	Layer layers[2]; // layered materials: layers 1 and 2
+	// Optional vector displacement (UV mapping): an XYZ offset per texel, three maps (the x, y and z
+	// channels), times vector_m metres; in tangent space (x along +u, y along the image's up, z
+	// along the displacement direction, as OpenGL normal maps) or in object space. Signed values,
+	// or 0..1 around 0.5 when !vector_signed.
+	int vector_map[3] = { -1, -1, -1 };
+	double vector_m = 0.0;
+	int vector_space = 0; // 0: tangent, 1: object
+	bool vector_signed = false;
 };
 
 struct SurfaceInput {
@@ -160,6 +168,8 @@ private:
 		V2 uv, uv2;
 		float color[4] = { 1, 1, 1, 1 };
 		double h = 0.0; // the surface's own displacement here (m, mip 0)
+		V3 tu, tv; // world directions of +u and of the image's up (-v), for vector displacement
+		V3 vec; // the vector displacement here (world, m, mip 0)
 	};
 	struct Tri {
 		int c[3];
@@ -199,6 +209,10 @@ private:
 	double relief_at(const Displacement &d, const V2 &uv, double lod, const double masks[2]) const;
 	bool has_detail(const Displacement &d) const { return d.detail_map >= 0 && d.detail_height_m > 0.0; }
 	bool has_layer(const Displacement &d, int k) const { return d.layers[k].map >= 0 && d.layers[k].amount > 0.0; }
+	bool has_vector(const Displacement &d) const { return d.vector_map[0] >= 0 && d.vector_m != 0.0 && d.mapping == MAPPING_UV; }
+	double vector_texels(const Displacement &d) const;
+	V3 vector_displacement(int surface, const V2 &uv, const V3 &dir, const V3 &tu, const V3 &tv, double lod) const;
+	V3 corner_vec(const Corner &c) const;
 	double detail_texels(const Displacement &d) const;
 	double layer_texels(const Displacement &d, int k) const;
 	double finest_texels(const Displacement &d) const;

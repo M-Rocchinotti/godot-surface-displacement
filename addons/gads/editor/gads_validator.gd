@@ -79,7 +79,19 @@ static func _check_material(m: ShaderMaterial, node: Node) -> Array:
 	var label := "%s on %s" % [m.resource_name if not m.resource_name.is_empty() else "GADS material", node.name]
 	var info := GADSMaterials.parse(m.shader)
 	var height := m.get_shader_parameter("height_texture") as Texture2D
-	if height == null:
+	var vector := m.get_shader_parameter("vector_displacement_texture") as Texture2D if info.get("mapping", -1) == GADSMaterials.Mapping.UV else null
+	var vector_on := vector != null and float(GADSMaterials.get_param(m, "vector_displacement_m")) > 0.0
+	if vector_on:
+		if not node is GADSMeshInstance3D:
+			issues.append(_issue("info", "%s: the vector displacement map moves vertices only in a GADSMeshInstance3D bake; %s draws without it." % [label, node.name]))
+		var vimg := vector.get_image()
+		if vimg != null and vimg.is_compressed():
+			issues.append(_issue("warning", "%s: the vector displacement texture is VRAM compressed; block artefacts move the baked surface. Import it lossless." % label))
+		elif vimg != null and vimg.get_format() in [Image.FORMAT_RGB8, Image.FORMAT_RGBA8] and bool(GADSMaterials.get_param(m, "vector_displacement_signed")):
+			issues.append(_issue("warning", "%s: vector_displacement_signed is on but the texture is 8-bit (0..1): it can only push outwards. Use an EXR / HDR map or turn signed off." % label))
+	if height == null and vector_on:
+		issues.append(_issue("info", "%s has no height texture: its bake follows the vector map, the parallax fallback draws flat." % label))
+	elif height == null:
 		issues.append(_issue("warning", "%s has no height texture: it draws flat." % label))
 	elif float(GADSMaterials.get_param(m, "height_m")) <= 0.0:
 		issues.append(_issue("warning", "%s has height_m 0: it draws flat. Set the relief depth in metres." % label))

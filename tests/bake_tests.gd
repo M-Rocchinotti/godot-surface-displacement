@@ -40,6 +40,7 @@ func _run() -> void:
 	await _test("detail_layer_baked", test_detail_layer)
 	await _test("layered_material_baked", test_layered)
 	await _test("refines_only_where_the_relief_is", test_adaptivity)
+	await _test("vector_displacement", test_vector_displacement)
 	await _test("closed_meshes_stay_closed", test_watertight)
 	await _test("locked_borders_stay", test_locked_borders)
 	await _test("triangle_budget", test_budget)
@@ -1099,3 +1100,171 @@ func test_diagnostics() -> void:
 		"and goes away")
 	node.queue_free()
 	await process_frame
+
+
+## An RGBF vector displacement map: coefs (the x, y and z offsets per unit of field) times field.
+static func vector_map_of(field: Dictionary, coefs: Vector3) -> ImageTexture:
+	var size: int = field["size"]
+	var data: PackedFloat32Array = field["data"]
+	var rgb := PackedFloat32Array()
+	rgb.resize(size * size * 3)
+	for i in size * size:
+		rgb[i * 3] = coefs.x * data[i]
+		rgb[i * 3 + 1] = coefs.y * data[i]
+		rgb[i * 3 + 2] = coefs.z * data[i]
+	return ImageTexture.create_from_image(Image.create_from_data(size, size, false, Image.FORMAT_RGBF, rgb.to_byte_array()))
+
+
+## A vector-displaced material (no height map) with the vector map vec, scale m metres.
+func vector_material(vec: Texture2D, m: float, params := {}) -> ShaderMaterial:
+	var p := {"vector_displacement_texture": vec, "vector_displacement_m": m, "vector_displacement_signed": true}
+	p.merge(params, true)
+	return GADSMaterials.create(GADSMaterials.Mapping.UV, {}, p, GADSMaterials.Quality.POM)
+
+
+## The position on the flat source mesh's first triangle's plane at uv, and the tangent frame the
+## bake uses there: [rest(uv) callable, x (+u), y (the texture's up, -v), z (normal)].
+static func _uv_frame(mesh: Mesh) -> Array:
+	var arrays := mesh.surface_get_arrays(0)
+	var v: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+	var uv: PackedVector2Array = arrays[Mesh.ARRAY_TEX_UV]
+	var idx: PackedInt32Array = arrays[Mesh.ARRAY_INDEX]
+	var p0 := v[idx[0]]
+	var e1 := v[idx[1]] - p0
+	var e2 := v[idx[2]] - p0
+	var d1 := uv[idx[1]] - uv[idx[0]]
+	var d2 := uv[idx[2]] - uv[idx[0]]
+	var det := d1.x * d2.y - d1.y * d2.x
+	var dpdu := (e1 * d2.y - e2 * d1.y) / det
+	var dpdv := (e2 * d1.x - e1 * d2.x) / det
+	var uv0 := uv[idx[0]]
+	var rest := func(t: Vector2) -> Vector3: return p0 + dpdu * (t.x - uv0.x) + dpdv * (t.y - uv0.y)
+	var n := (arrays[Mesh.ARRAY_NORMAL] as PackedVector3Array)[idx[0]].normalized()
+	var x := dpdu.normalized()
+	var y := (-dpdv).normalized()
+	return [rest, x, y, n]
+
+
+## Vector displacement (a vector map, UV mapping): vertices move by the map's XYZ in the surface's
+## tangent frame (or in object space), refinement follows lateral relief as well as height, seams
+## stay closed, and a material whose vector map is off bakes as before.
+func test_vector_displacement() -> void:
+	var field := bump_field(256, 0.1)
+	var m := 0.05
+	var tolerance := 0.0005
+	# Tangent space, signed: x 0.5, y -0.3, z 1 per unit of the bump.
+	var coefs := Vector3(0.5, -0.3, 1.0)
+	var mesh := plane()
+	var baker := bake_with(mesh, vector_material(vector_map_of(field, coefs), m), {"max_error": tolerance})
+	check(baker.mesh != null, "a plane with a vector map and no height map bakes (%s)" % baker.error)
+	if baker.mesh == null:
+		return
+	var frame := _uv_frame(mesh)
+	var rest: Callable = frame[0]
+	var expect := func(t: Vector2) -> Vector3:
+		return rest.call(t) + ((frame[1] as Vector3) * coefs.x + (frame[2] as Vector3) * coefs.y + (frame[3] as Vector3) * coefs.z) * m * Harness.sample_field(field, t)
+	var arrays := baker.mesh.surface_get_arrays(0)
+	var v: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+	var uv: PackedVector2Array = arrays[Mesh.ARRAY_TEX_UV]
+	var idx: PackedInt32Array = arrays[Mesh.ARRAY_INDEX]
+	var worst_vertex := 0.0
+	var peak := 0.0
+	for i in v.size():
+		worst_vertex = maxf(worst_vertex, v[i].distance_to(expect.call(uv[i])))
+		peak = maxf(peak, v[i].distance_to(rest.call(uv[i])))
+	var worst := 0.0
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 5
+	for i in range(0, idx.size(), 3):
+		var a := rng.randf()
+		var b := rng.randf() * (1.0 - a)
+		var c := 1.0 - a - b
+		var p := v[idx[i]] * a + v[idx[i + 1]] * b + v[idx[i + 2]] * c
+		var t := uv[idx[i]] * a + uv[idx[i + 1]] * b + uv[idx[i + 2]] * c
+		worst = maxf(worst, p.distance_to(expect.call(t)))
+	print("  %d triangles; vertices within %.3f mm of rest + frame * map, points inside the triangles within %.3f mm (tolerance %.1f mm)" % [
+		idx.size() / 3, worst_vertex * 1000.0, worst * 1000.0, tolerance * 1000.0])
+	check(worst_vertex < tolerance and peak > 0.95 * m * coefs.length(),
+		"vertices move by the map's vector in the tangent frame (x +u, y the texture's up, z the normal; the peak by %.1f mm)" % (peak * 1000.0))
+	check(worst < 2.0 * tolerance, "and the surface stays within twice the tolerance of the displaced field")
+	# A purely sideways bump refines as a height bump does: where it is.
+	var lateral := bake_with(mesh, vector_material(vector_map_of(field, Vector3(1.0, 0.0, 0.0)), m), {"max_error": tolerance})
+	var near := 0
+	var far := 0
+	for tri: Array in triangles_of(lateral.mesh):
+		var centre: Vector3 = (tri[0] + tri[1] + tri[2]) / 3.0
+		var r := Vector2(centre.x, centre.z).length()
+		if r < 0.4:
+			near += 1
+		elif r > 0.8:
+			far += 1
+	var density_near := near / (PI * 0.16)
+	var density_far := far / (4.0 - PI * 0.64)
+	print("  sideways bump: %d triangles, density ratio near / far %.0f" % [triangle_count(lateral.mesh), density_near / maxf(density_far, 1e-6)])
+	check(density_near > 10.0 * density_far, "a sideways bump (no height change) refines where it is")
+	var heights := 0.0
+	for p in (lateral.mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX] as PackedVector3Array):
+		heights = maxf(heights, absf(p.y))
+	check(heights < 1e-6, "and moves nothing off the plane")
+	# Unsigned: 0.5 is no offset.
+	var grey := Image.create(16, 16, false, Image.FORMAT_RGB8)
+	grey.fill(Color8(128, 128, 128))
+	var flat := bake_with(mesh, vector_material(ImageTexture.create_from_image(grey), m, {"vector_displacement_signed": false}), {"max_error": tolerance})
+	var moved := 0.0
+	for p in (flat.mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX] as PackedVector3Array):
+		moved = maxf(moved, absf(p.y))
+	check(flat.mesh != null and triangle_count(flat.mesh) == 2 and moved < m * 0.01, "unsigned maps are centred on 0.5 (grey moves nothing: %d triangles, %.2f mm)" % [
+		triangle_count(flat.mesh) if flat.mesh != null else 0, moved * 1000.0])
+	# Object space: the map's z is the object's +Z, whatever the surface faces.
+	var object := bake_with(mesh, vector_material(vector_map_of(field, Vector3(0.0, 0.0, 1.0)), m, {"vector_displacement_space": 1}), {"max_error": tolerance})
+	var largest := Vector3.ZERO
+	var obj_arrays := object.mesh.surface_get_arrays(0)
+	var ov: PackedVector3Array = obj_arrays[Mesh.ARRAY_VERTEX]
+	var ouv: PackedVector2Array = obj_arrays[Mesh.ARRAY_TEX_UV]
+	var worst_object := 0.0
+	for i in ov.size():
+		var off: Vector3 = ov[i] - rest.call(ouv[i])
+		largest = largest.max(off.abs())
+		worst_object = maxf(worst_object, off.distance_to(Vector3(0.0, 0.0, m * Harness.sample_field(field, ouv[i]))))
+	check(worst_object < tolerance and largest.y < 1e-6 and largest.z > 0.9 * m, "object space: (0, 0, 1) moves the plane along +Z, not along its normal (%.1f mm)" % (largest.z * 1000.0))
+	# Closed meshes stay closed: welded positions move by the same vector across UV seams.
+	var waves := Harness.make_wave_field(128)
+	var box := BoxMesh.new()
+	var boxed := bake_with(box, vector_material(vector_map_of(waves, Vector3(0.6, 0.4, 0.8)), 0.04,
+		{"vector_displacement_signed": false}), {"max_error": 0.001, "max_triangles": 60000})
+	var edges := {}
+	if boxed.mesh != null:
+		for tri: Array in triangles_of(boxed.mesh):
+			var keys := [_weld(tri[0]), _weld(tri[1]), _weld(tri[2])]
+			if keys[0] == keys[1] or keys[1] == keys[2] or keys[0] == keys[2]:
+				continue
+			for k in 3:
+				var ka: Vector3i = keys[k]
+				var kb: Vector3i = keys[(k + 1) % 3]
+				var key := [ka, kb] if [ka.x, ka.y, ka.z] < [kb.x, kb.y, kb.z] else [kb, ka]
+				edges[key] = edges.get(key, 0) + 1
+	var open := 0
+	for key in edges:
+		if edges[key] != 2:
+			open += 1
+	check(boxed.mesh != null and not edges.is_empty() and open == 0, "a vector-displaced box stays closed (%d edges, %d open)" % [edges.size(), open])
+	# A vector map that is off (scale 0) changes nothing: the same cache key as without it.
+	var height_only := uv_material(field, 0.05)
+	var with_off := uv_material(field, 0.05, {"vector_displacement_texture": vector_map_of(field, coefs), "vector_displacement_m": 0.0})
+	var with_on := uv_material(field, 0.05, {"vector_displacement_texture": vector_map_of(field, coefs), "vector_displacement_m": 0.01})
+	var key_of := func(mat: Material) -> String:
+		var mats: Array[Material] = [mat]
+		return GADSMeshBaker.cache_key(mesh, mats, Transform3D.IDENTITY, {"max_error": tolerance})
+	check(key_of.call(height_only) == key_of.call(with_off) and key_of.call(with_on) != key_of.call(height_only),
+		"a vector map with scale 0 bakes as before (same cache key); with a scale it is a different bake")
+	# On top of a height map: both add up.
+	var both := bake_with(mesh, uv_material(field, 0.03, {"vector_displacement_texture": vector_map_of(field, coefs), "vector_displacement_m": m,
+		"vector_displacement_signed": true}), {"max_error": tolerance})
+	var both_arrays := both.mesh.surface_get_arrays(0)
+	var bv: PackedVector3Array = both_arrays[Mesh.ARRAY_VERTEX]
+	var buv: PackedVector2Array = both_arrays[Mesh.ARRAY_TEX_UV]
+	var worst_both := 0.0
+	for i in bv.size():
+		var want: Vector3 = expect.call(buv[i]) + (frame[3] as Vector3) * 0.03 * Harness.sample_field(field, buv[i])
+		worst_both = maxf(worst_both, bv[i].distance_to(want))
+	check(worst_both < tolerance, "with a height map as well, the two add up (%.3f mm)" % (worst_both * 1000.0))

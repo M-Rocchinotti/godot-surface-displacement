@@ -41,6 +41,10 @@ const PARAMETER_DEFAULTS := {
 	"detail_height_m": 0.0,
 	"detail_scale": 8.0,
 	"detail_normal_strength": 0.0,
+	# UV-mapped variants only.
+	"vector_displacement_m": 0.0,
+	"vector_displacement_space": 0,
+	"vector_displacement_signed": false,
 }
 ## The defaults of the layered variants' layer parameters (layerN_<name>, N = 1, 2).
 const LAYER_PARAMETER_DEFAULTS := {

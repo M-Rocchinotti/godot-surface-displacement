@@ -456,10 +456,12 @@ func test_globals_and_defaults() -> void:
 		medium_ok = medium_ok and ProjectSettings.get_setting("shader_globals/" + String(name))["value"] == GADSGlobals.get_value(name)
 	check(medium_ok, "the registered defaults and this project's shader globals are the Medium preset")
 	var shader := GADSMaterials.get_shader(GADSMaterials.Mapping.WORLD, GADSMaterials.Quality.POM)
+	var uv_shader := GADSMaterials.get_shader(GADSMaterials.Mapping.UV, GADSMaterials.Quality.POM)
 	var mismatches := []
 	for name: String in GADSMaterials.PARAMETER_DEFAULTS:
 		var want: Variant = GADSMaterials.PARAMETER_DEFAULTS[name]
-		var got: Variant = RenderingServer.shader_get_parameter_default(shader.get_rid(), name)
+		var from := uv_shader if name.begins_with("vector_displacement") else shader
+		var got: Variant = RenderingServer.shader_get_parameter_default(from.get_rid(), name)
 		if not _same_value(got, want):
 			mismatches.append("%s: shader %s, GADSMaterials %s" % [name, got, want])
 	for m: String in mismatches:

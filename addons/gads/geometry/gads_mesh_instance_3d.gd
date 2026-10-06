@@ -357,8 +357,8 @@ func _bake_transform() -> Transform3D:
 	return global_transform if is_inside_tree() else transform
 
 
-## The deepest relief (m) the materials give the source mesh: the main depth or a deeper layer's
-## (0: nothing to displace).
+## The deepest relief (m) the materials give the source mesh: the main depth, a deeper layer's or
+## the vector displacement's scale (0: nothing to displace).
 func get_relief_depth() -> float:
 	return _max_depth()
 
@@ -369,7 +369,7 @@ func _max_depth() -> float:
 	for m in _materials():
 		var d := GADSMeshBaker.displacement_of(m)
 		if not d.is_empty():
-			depth = maxf(depth, d["height_m"])
+			depth = maxf(depth, maxf(d["height_m"], d.get("vector_m", 0.0)))
 			for layer: Dictionary in d["layers"]:
 				if layer["amount"] > 0.0:
 					depth = maxf(depth, layer["height_m"])

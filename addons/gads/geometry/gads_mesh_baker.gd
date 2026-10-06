@@ -76,14 +76,19 @@ static func displacement_of(material: Material) -> Dictionary:
 	if not GADSMaterials.is_gads_material(material):
 		return {}
 	var sm := material as ShaderMaterial
+	var mapping: int = GADSMaterials.parse(sm.shader)["mapping"]
 	var height := sm.get_shader_parameter("height_texture") as Texture2D
 	var height_m: float = GADSMaterials.get_param(sm, "height_m")
-	if height == null or height_m <= 0.0:
+	var vector := sm.get_shader_parameter("vector_displacement_texture") as Texture2D if mapping == GADSMaterials.Mapping.UV else null
+	var vector_m: float = GADSMaterials.get_param(sm, "vector_displacement_m") if vector != null else 0.0
+	var has_height := height != null and height_m > 0.0
+	if not has_height and vector_m <= 0.0:
 		return {}
-	return {
-		"texture": height,
-		"mapping": GADSMaterials.parse(sm.shader)["mapping"],
-		"height_m": height_m,
+	var out := {
+		# Without a height map (a vector map alone) the height is flat: "texture" null, height 0.
+		"texture": height if has_height else null,
+		"mapping": mapping,
+		"height_m": height_m if has_height else 0.0,
 		"center": GADSMaterials.get_param(sm, "height_center"),
 		"remap": GADSMaterials.get_param(sm, "height_remap"),
 		"uv_scale": GADSMaterials.get_param(sm, "uv_scale"),
@@ -97,6 +102,12 @@ static func displacement_of(material: Material) -> Dictionary:
 		"detail_scale": GADSMaterials.get_param(sm, "detail_scale"),
 		"layers": _layers_of(sm),
 	}
+	if vector_m > 0.0:
+		out["vector_texture"] = vector
+		out["vector_m"] = vector_m
+		out["vector_space"] = GADSMaterials.get_param(sm, "vector_displacement_space")
+		out["vector_signed"] = GADSMaterials.get_param(sm, "vector_displacement_signed")
+	return out
 
 
 ## The layers of a layered GADS material, as the tessellator takes them (with "texture").
@@ -158,6 +169,8 @@ static func cache_key(mesh: Mesh, materials: Array[Material], xform: Transform3D
 			planar = planar or d["mapping"] != GADSMaterials.Mapping.UV
 			d["texture"] = _resource_id(d["texture"])
 			d["detail_texture"] = _resource_id(d["detail_texture"])
+			if d.has("vector_texture"):
+				d["vector_texture"] = _resource_id(d["vector_texture"])
 			var layer_ids := []
 			for layer: Dictionary in d["layers"]:
 				var l := layer.duplicate()
@@ -363,6 +376,23 @@ func _make_tessellator(settings: Dictionary) -> RefCounted:
 	for s in _source.get_surface_count():
 		var d := displacement_of(_materials[s] if s < _materials.size() else null)
 		if not d.is_empty():
+			var vector_tex: Texture2D = d.get("vector_texture")
+			d.erase("vector_texture")
+			if vector_tex != null:
+				var key := [vector_tex, "vector"]
+				if not maps.has(key):
+					var img := _image_of(vector_tex)
+					if img == null or img.is_empty():
+						error = "cannot read the vector displacement map %s" % vector_tex.resource_path
+						return null
+					maps[key] = tess.call("add_vector_map", img)
+				d["vector_map"] = Array(maps[key])
+				if d["texture"] == null:
+					# A vector map alone: a flat height map of its size (texel sizes follow it).
+					var size := Vector2i(vector_tex.get_width(), vector_tex.get_height())
+					if not maps.has(size):
+						maps[size] = tess.call("add_height_map", Image.create_empty(size.x, size.y, false, Image.FORMAT_RF))
+					d["height_map"] = maps[size]
 			for key: String in ["texture", "detail_texture"]:
 				var tex: Texture2D = d[key]
 				d.erase(key)

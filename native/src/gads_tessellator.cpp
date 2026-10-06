@@ -15,7 +15,7 @@ namespace godot {
 
 // Bumped whenever the tessellator's output for the same input changes: it is part of the bake
 // cache key, so stale bakes are rebuilt.
-static constexpr int ALGORITHM_VERSION = 3; // 2: detail layer, heights filtered only where refinement stopped early; 3: layered materials
+static constexpr int ALGORITHM_VERSION = 4; // 2: detail layer, heights filtered only where refinement stopped early; 3: layered materials; 4: vector displacement
 
 // Mesh.ArrayType
 enum {
@@ -33,6 +33,7 @@ enum {
 
 void GADSTessellator::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("add_height_map", "image"), &GADSTessellator::add_height_map);
+	ClassDB::bind_method(D_METHOD("add_vector_map", "image"), &GADSTessellator::add_vector_map);
 	ClassDB::bind_method(D_METHOD("add_surface", "arrays", "displacement"), &GADSTessellator::add_surface);
 	ClassDB::bind_method(D_METHOD("set_transform", "transform"), &GADSTessellator::set_transform);
 	ClassDB::bind_method(D_METHOD("set_settings", "settings"), &GADSTessellator::set_settings);
@@ -62,6 +63,31 @@ int GADSTessellator::add_height_map(const Ref<Image> &p_image) {
 	ERR_FAIL_COND_V(size_t(bytes.size()) < data.size() * sizeof(float), -1);
 	std::memcpy(data.data(), bytes.ptr(), data.size() * sizeof(float));
 	return core_.add_height_map(img->get_width(), img->get_height(), std::move(data));
+}
+
+// A vector displacement map: its red, green and blue channels as three height maps, whose indices
+// it returns (for "vector_map").
+PackedInt32Array GADSTessellator::add_vector_map(const Ref<Image> &p_image) {
+	PackedInt32Array out;
+	ERR_FAIL_COND_V_MSG(p_image.is_null() || p_image->is_empty(), out, "GADSTessellator: empty vector displacement map.");
+	Ref<Image> img = Image::create_from_data(p_image->get_width(), p_image->get_height(), p_image->has_mipmaps(), p_image->get_format(), p_image->get_data());
+	if (img->is_compressed()) {
+		img->decompress();
+	}
+	img->clear_mipmaps();
+	img->convert(Image::FORMAT_RGBF);
+	PackedByteArray bytes = img->get_data();
+	size_t texels = size_t(img->get_width()) * img->get_height();
+	ERR_FAIL_COND_V(size_t(bytes.size()) < texels * 3 * sizeof(float), out);
+	const float *rgb = reinterpret_cast<const float *>(bytes.ptr());
+	for (int k = 0; k < 3; k++) {
+		std::vector<float> data(texels);
+		for (size_t i = 0; i < texels; i++) {
+			data[i] = rgb[i * 3 + k];
+		}
+		out.push_back(core_.add_height_map(img->get_width(), img->get_height(), std::move(data)));
+	}
+	return out;
 }
 
 static gads::V2 v2(const Variant &v, gads::V2 fallback) {
@@ -132,6 +158,15 @@ void GADSTessellator::add_surface(const Array &p_arrays, const Dictionary &p_dis
 			layer.amount = l.get("amount", 0.0);
 			layer.slope = v2(l.get("slope", Variant()), gads::V2());
 			layer.blend_width = l.get("blend_width", 0.1);
+		}
+		Array vector_map = p_displacement.get("vector_map", Array());
+		if (vector_map.size() == 3) {
+			for (int k = 0; k < 3; k++) {
+				d.vector_map[k] = vector_map[k];
+			}
+			d.vector_m = p_displacement.get("vector_m", 0.0);
+			d.vector_space = p_displacement.get("vector_space", 0);
+			d.vector_signed = p_displacement.get("vector_signed", false);
 		}
 		s.displacement = core_.add_displacement(d);
 	}

@@ -181,6 +181,9 @@ bool Tessellator::build_topology() {
 		for (const Layer &l : d.layers) {
 			detail_ok = detail_ok && (l.map < 0 || size_t(l.map) < maps_.size());
 		}
+		for (int k = 0; k < 3; k++) {
+			detail_ok = detail_ok && (d.vector_map[0] < 0 || (d.vector_map[k] >= 0 && size_t(d.vector_map[k]) < maps_.size()));
+		}
 		if (!main_ok || !detail_ok) {
 			error_ = "a displacement refers to a height map that was not added";
 			return false;
@@ -270,6 +273,7 @@ bool Tessellator::build_topology() {
 	// position, so every corner there moves the same way: no cracks at hard edges or seams).
 	std::vector<V3> group_normal(groups_.size());
 	std::vector<V3> corner_face_normal(corners_.size());
+	std::vector<V3> corner_du(corners_.size()), corner_dv(corners_.size());
 	size_t tri_count = 0;
 	for (const SurfaceInput &s : inputs_) {
 		tri_count += (s.indices.empty() ? s.positions.size() : s.indices.size()) / 3;
@@ -304,6 +308,23 @@ bool Tessellator::build_topology() {
 			corner_face_normal[c0] += fn;
 			corner_face_normal[c1] += fn;
 			corner_face_normal[c2] += fn;
+			// World directions of +u and +v on this triangle (area-weighted at its corners).
+			{
+				const V3 &wa = groups_[g0].world, &wb = groups_[g1].world, &wc = groups_[g2].world;
+				V2 ua = corners_[c0].uv, ub = corners_[c1].uv, uc = corners_[c2].uv;
+				V3 e1 = wb - wa, e2 = wc - wa;
+				double du1 = ub.x - ua.x, dv1 = ub.y - ua.y, du2 = uc.x - ua.x, dv2 = uc.y - ua.y;
+				double det = du1 * dv2 - du2 * dv1;
+				if (std::fabs(det) > 1e-20) {
+					double area = e1.cross(e2).length();
+					V3 dpdu = ((e1 * dv2 - e2 * dv1) * (1.0 / det)).normalized(V3()) * area;
+					V3 dpdv = ((e2 * du1 - e1 * du2) * (1.0 / det)).normalized(V3()) * area;
+					for (int cc : { c0, c1, c2 }) {
+						corner_du[cc] += dpdu;
+						corner_dv[cc] += dpdv;
+					}
+				}
+			}
 			new_tri(c0, c1, c2, int(si), 0);
 		}
 	}
@@ -315,6 +336,8 @@ bool Tessellator::build_topology() {
 		if (corners_[ci].normal.length_squared() < 1e-20) {
 			corners_[ci].normal = corner_face_normal[ci].normalized();
 		}
+		corners_[ci].tu = corner_du[ci].normalized(V3(1.0, 0.0, 0.0));
+		corners_[ci].tv = (corner_dv[ci] * -1.0).normalized(V3(0.0, 0.0, -1.0));
 	}
 	V3 axis = settings_.direction.normalized();
 	for (size_t g = 0; g < groups_.size(); g++) {
@@ -336,6 +359,7 @@ bool Tessellator::build_topology() {
 	}
 	for (Corner &c : corners_) {
 		c.h = corner_h(c);
+		c.vec = corner_vec(c);
 	}
 	stats_.source_triangles = int(tris_.size());
 	return true;
@@ -429,6 +453,9 @@ double Tessellator::layer_texels(const Displacement &d, int k) const {
 // The finest texels the displacement samples, per main-map texel (at least 1).
 double Tessellator::finest_texels(const Displacement &d) const {
 	double finest = std::max(1.0, detail_texels(d));
+	if (has_vector(d)) {
+		finest = std::max(finest, vector_texels(d));
+	}
 	for (int k = 0; k < 2; k++) {
 		if (has_layer(d, k)) {
 			finest = std::max(finest, layer_texels(d, k));
@@ -525,6 +552,46 @@ double Tessellator::sample_displacement(int surface, const V3 &world, const V3 &
 double Tessellator::corner_h(const Corner &c) const {
 	const Group &g = groups_[c.group];
 	return sample_displacement(c.surface, g.world, g.dir, c.uv, 0.0, c.color);
+}
+
+// Texels of the vector map per main-map texel.
+double Tessellator::vector_texels(const Displacement &d) const {
+	return maps_[d.vector_map[0]]->width() / double(maps_[d.height_map]->width());
+}
+
+// The vector displacement (world, m) at uv on a surface moving along dir, whose +u and image-up
+// directions are tu and tv, sampled at `lod` (log2 of finest texels, as relief_at()).
+V3 Tessellator::vector_displacement(int surface, const V2 &uv, const V3 &dir, const V3 &tu, const V3 &tv, double lod) const {
+	int di = inputs_[surface].displacement;
+	if (di < 0 || !has_vector(displacements_[di])) {
+		return V3();
+	}
+	const Displacement &d = displacements_[di];
+	V2 t = uv_transform(d, uv);
+	double vlod = std::max(lod - std::log2(finest_texels(d)) + std::log2(vector_texels(d)), 0.0);
+	double v[3];
+	for (int k = 0; k < 3; k++) {
+		v[k] = maps_[d.vector_map[k]]->sample_lod(t, vlod);
+		if (!d.vector_signed) {
+			v[k] = 2.0 * v[k] - 1.0;
+		}
+	}
+	V3 off;
+	if (d.vector_space == 1) {
+		off = xform_.basis.xform(V3(v[0], v[1], v[2]));
+	} else {
+		V3 n = dir;
+		V3 x = (tu - n * n.dot(tu)).normalized(tu);
+		V3 y = tv - n * n.dot(tv);
+		y = (y - x * x.dot(y)).normalized(n.cross(x));
+		off = x * v[0] + y * v[1] + n * v[2];
+	}
+	return off * d.vector_m;
+}
+
+V3 Tessellator::corner_vec(const Corner &c) const {
+	const Group &g = groups_[c.group];
+	return vector_displacement(c.surface, c.uv, g.dir, c.tu, c.tv, 0.0);
 }
 
 // --- Error -------------------------------------------------------------------------------------
@@ -662,6 +729,37 @@ float Tessellator::tri_error(int t, double tol) const {
 	z_lo = std::min(z_lo, d.height_m * (lo - d.center));
 	z_hi = std::max(z_hi, d.height_m * (hi - d.center));
 	double bound = (z_hi - z_lo) + (has_detail(d) ? d.detail_height_m * std::max(0.0, detail_hi - detail_lo) : 0.0);
+	bool vector = has_vector(d);
+	if (vector) {
+		// Each channel stays within its range over the triangle's uvs; the frame turns by up to the
+		// corners' differences. Both bound how far the offsets can leave their interpolation.
+		V2 uv[3];
+		for (int k = 0; k < 3; k++) {
+			uv[k] = uv_transform(d, c[k]->uv);
+		}
+		V2 uv_min(std::min({ uv[0].x, uv[1].x, uv[2].x }), std::min({ uv[0].y, uv[1].y, uv[2].y }));
+		V2 uv_max(std::max({ uv[0].x, uv[1].x, uv[2].x }), std::max({ uv[0].y, uv[1].y, uv[2].y }));
+		double span2 = 0.0, reach2 = 0.0;
+		const HeightMap &vm = *maps_[d.vector_map[0]];
+		for (int k = 0; k < 3; k++) {
+			double r_lo, r_hi;
+			maps_[d.vector_map[k]]->range(uv_min, uv_max, r_lo, r_hi);
+			double scale = d.vector_signed ? 1.0 : 2.0;
+			double lo_k = d.vector_signed ? r_lo : 2.0 * r_lo - 1.0, hi_k = d.vector_signed ? r_hi : 2.0 * r_hi - 1.0;
+			span2 += (r_hi - r_lo) * scale * (r_hi - r_lo) * scale;
+			reach2 += std::max(lo_k * lo_k, hi_k * hi_k);
+		}
+		double turn = 0.0;
+		for (int k = 0; k < 3; k++) {
+			const Corner *p = c[k], *q = c[(k + 1) % 3];
+			turn = std::max(turn, (p->tu - q->tu).length() + (p->tv - q->tv).length() + (g[k]->dir - g[(k + 1) % 3]->dir).length());
+		}
+		bound += std::fabs(d.vector_m) * (std::sqrt(span2) + std::sqrt(reach2) * turn);
+		for (int k = 0; k < 3; k++) {
+			V2 e = uv[(k + 1) % 3] - uv[k];
+			longest_texels = std::max(longest_texels, std::hypot(e.x * vm.width(), e.y * vm.height()));
+		}
+	}
 	if (bound <= tol || longest_texels > SCAN_LIMIT_TEXELS) {
 		return float(bound);
 	}
@@ -680,7 +778,14 @@ float Tessellator::tri_error(int t, double tol) const {
 			}
 			double h = sample_displacement(tr.surface, world, dir, uv, 0.0, color);
 			double lin = c[0]->h * w0 + c[1]->h * a + c[2]->h * b;
-			err = std::max(err, std::fabs(h - lin));
+			double e = std::fabs(h - lin);
+			if (vector) {
+				V3 tu = c[0]->tu * w0 + c[1]->tu * a + c[2]->tu * b;
+				V3 tv = c[0]->tv * w0 + c[1]->tv * a + c[2]->tv * b;
+				V3 v = vector_displacement(tr.surface, uv, dir, tu, tv, 0.0);
+				e += (v - (c[0]->vec * w0 + c[1]->vec * a + c[2]->vec * b)).length();
+			}
+			err = std::max(err, e);
 		}
 	}
 	return float(err);
@@ -784,7 +889,10 @@ void Tessellator::split_edge(int ga, int gb) {
 			for (int k = 0; k < 4; k++) {
 				n.color[k] = 0.5f * (x.color[k] + y.color[k]);
 			}
+			n.tu = (x.tu + y.tu).normalized(x.tu);
+			n.tv = (x.tv + y.tv).normalized(x.tv);
 			n.h = corner_h(n);
+			n.vec = corner_vec(n);
 			cm = int(corners_.size());
 			corners_.push_back(n);
 			mids.emplace_back(ck, cm);
@@ -1043,6 +1151,7 @@ void Tessellator::build_outputs() {
 		}
 	}
 	std::vector<double> value(groups_.size(), 0.0);
+	std::vector<V3> vector_value(groups_.size());
 	std::vector<float> corner_lod(corners_.size(), 0.0f);
 	parallel_for(groups_.size(), settings_.threads, [&](size_t g) {
 		const std::vector<int> &cs = group_corners[g];
@@ -1056,15 +1165,20 @@ void Tessellator::build_outputs() {
 			return;
 		}
 		double sum = 0.0;
+		V3 vsum;
 		for (int ci : cs) {
 			double lod = settings_.filter_heights && coarse[g] ? corner_lod[ci] : 0.0;
-			sum += sample_displacement(corners_[ci].surface, groups_[g].world, groups_[g].dir, corners_[ci].uv, lod, corners_[ci].color);
+			const Corner &c = corners_[ci];
+			sum += sample_displacement(c.surface, groups_[g].world, groups_[g].dir, c.uv, lod, c.color);
+			vsum += vector_displacement(c.surface, c.uv, groups_[g].dir, c.tu, c.tv, lod);
 		}
 		value[g] = sum / double(cs.size());
+		// Corners of a group differ at seams: they all move by the mean (no crack).
+		vector_value[g] = vsum * (1.0 / double(cs.size()));
 	});
 	std::vector<V3> moved(groups_.size());
 	for (size_t g = 0; g < groups_.size(); g++) {
-		moved[g] = groups_[g].rest + world_to_object_.xform(groups_[g].dir * value[g]);
+		moved[g] = groups_[g].rest + world_to_object_.xform(groups_[g].dir * value[g] + vector_value[g]);
 	}
 	// Normal clusters: corners of a group whose source normals point the same way (within
 	// hard_angle_deg) share a shading normal; hard edges stay hard.

@@ -9,6 +9,7 @@
 #include <godot_cpp/classes/ref_counted.hpp>
 #include <godot_cpp/variant/array.hpp>
 #include <godot_cpp/variant/dictionary.hpp>
+#include <godot_cpp/variant/packed_int32_array.hpp>
 #include <godot_cpp/variant/string.hpp>
 #include <godot_cpp/variant/transform3d.hpp>
 
@@ -31,6 +32,7 @@ protected:
 
 public:
 	int add_height_map(const Ref<Image> &p_image);
+	PackedInt32Array add_vector_map(const Ref<Image> &p_image);
 	void add_surface(const Array &p_arrays, const Dictionary &p_displacement);
 	void set_transform(const Transform3D &p_transform);
 	void set_settings(const Dictionary &p_settings);

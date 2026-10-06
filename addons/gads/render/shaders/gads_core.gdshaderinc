@@ -69,6 +69,18 @@ uniform float detail_height_m : hint_range(0.0, 0.1, 0.0001) = 0.0;
 uniform float detail_scale : hint_range(1.0, 64.0) = 8.0;
 uniform sampler2D detail_normal_texture : hint_normal, filter_linear_mipmap_anisotropic, repeat_enable;
 uniform float detail_normal_strength : hint_range(0.0, 4.0) = 0.0;
+#ifdef GADS_MAPPING_UV
+group_uniforms vector_displacement;
+// Vector displacement: an XYZ offset per texel, for baked meshes only. A GADSMeshInstance3D bake
+// moves vertices by it (tangent space: x along +u, y along the texture's up (-v), z along the
+// normal; or object space), on top of the height map. Shading does not use it (the bake's normals
+// carry it). Off while vector_displacement_m is 0.
+uniform sampler2D vector_displacement_texture : hint_default_black, filter_linear_mipmap, repeat_enable;
+uniform float vector_displacement_m : hint_range(0.0, 1.0, 0.0005) = 0.0;
+uniform int vector_displacement_space : hint_enum("Tangent", "Object") = 0;
+// Signed: texel values are offsets as they are (an EXR or HDR); unsigned: 0..1 maps to -1..1.
+uniform bool vector_displacement_signed = false;
+#endif
 #ifdef GADS_LAYERED
 // Layers 1 and 2 cover the layer below where their mask is: a vertex colour channel (or
 // everywhere) times layerN_amount, times a band of the surface's up-facing when layerN_slope.y >
