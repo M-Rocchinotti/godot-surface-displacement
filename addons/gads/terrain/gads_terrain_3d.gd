@@ -38,6 +38,8 @@ signal chunk_loaded(chunk: Vector2i)
 signal edited(rect: Rect2i)
 
 const MAX_LAYERS := 3
+## The native chunk builder (when the GADS library is loaded; else the GDScript one).
+const MESHER := &"GADSTerrainMesher"
 ## Streamed chunks built on worker threads at once.
 const MAX_STREAM_TASKS := 4
 
@@ -1352,8 +1354,60 @@ static func _ring(cq: int) -> Array[Vector2i]:
 
 
 ## A chunk's mesh arrays and LODs: {"arrays", "lods", "heights" (its vertices' heights, for its
-## collision)}. Reads no node: runs on worker threads while streaming.
+## collision)} (and "occluder"). Natively when the library is loaded (the same arrays as
+## [method _chunk_arrays_gd], about thirty times faster). Reads no node: runs on worker threads
+## while streaming.
 func _chunk_arrays(cx: int, cz: int, levels: int) -> Dictionary:
+	if not ClassDB.class_exists(MESHER):
+		return _chunk_arrays_gd(cx, cz, levels)
+	var out: Dictionary = ClassDB.class_call_static(MESHER, &"build_chunk", _grid_state(levels), cx, cz)
+	if not _paint.is_empty():
+		_paint_chunk_colors(out, cx, cz)
+	return out
+
+
+## What the native chunk builder needs of the grid: the heights (the whole terrain's, or the
+## heightmap's to sample) and the weights (per vertex, the splat map or the rules).
+func _grid_state(levels: int) -> Dictionary:
+	var g := {"nx": _nx, "nz": _nz, "spacing": _spacing, "origin": _origin, "cq": chunk_quads, "levels": levels,
+		"occluder_quads": occluder_quads if occluders else 0, "height_offset": height_offset, "height_scale": height_scale,
+		"slope_layer": slope_layer, "slope_range": slope_range, "height_layer": height_layer, "height_band": height_band}
+	if not _heights.is_empty():
+		g["heights"] = _heights
+	elif not _src.is_empty():
+		g["src"] = _src["data"]
+		g["src_w"] = _src["width"]
+		g["src_h"] = _src["height"]
+	if not _w1.is_empty():
+		g["w1"] = _w1
+		g["w2"] = _w2
+	elif not _splat.is_empty():
+		g["splat"] = _splat["data"]
+		g["splat_w"] = _splat["width"]
+		g["splat_h"] = _splat["height"]
+	return g
+
+
+## The painted weights (paint_layer()) on a natively built chunk's vertex colours.
+func _paint_chunk_colors(out: Dictionary, cx: int, cz: int) -> void:
+	var cq := chunk_quads
+	var n := cq + 1
+	var arrays: Array = out["arrays"]
+	var colors: PackedColorArray = arrays[Mesh.ARRAY_COLOR]
+	var paint := _paint
+	for z in n:
+		for x in n:
+			var painted: Variant = paint.get((cz * cq + z) * _nx + cx * cq + x)
+			if painted != null:
+				colors[z * n + x] = Color(painted.x, painted.y, 0.0, 1.0)
+	var ring := _ring(cq)
+	for i in ring.size():
+		colors[n * n + i] = colors[ring[i].y * n + ring[i].x]
+	arrays[Mesh.ARRAY_COLOR] = colors
+
+
+## [method _chunk_arrays] in GDScript (without the native library).
+func _chunk_arrays_gd(cx: int, cz: int, levels: int) -> Dictionary:
 	var cq := chunk_quads
 	var n := cq + 1
 	var gx0 := cx * cq

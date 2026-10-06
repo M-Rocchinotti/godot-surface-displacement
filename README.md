@@ -478,7 +478,8 @@ A heightmap terrain built from GADS pieces. Add the node, give it a `heightmap` 
   picks the coarsest one that stays under a pixel (`rendering/mesh_lod/lod_change/threshold_pixels`).
   Skirts as deep as twice the largest error hang from every chunk's border and hide the seams
   between chunks at different LODs. The chunks are internal children built when the node enters
-  the tree (64 m at 0.5 m spacing: about 0.3 s in GDScript), never saved with the scene.
+  the tree, natively when the GADS library is loaded (the GDScript builder otherwise), never saved
+  with the scene.
 - **Layers**: combined into one layered GADS material (`GADSMaterials.combine_layers()`, or your
   own `material`): the first everywhere, the second and third on top where `splatmap` (R, G) puts
   them, else by rules: `slope_layer` on slopes steeper than `slope_range` (degrees; rock on

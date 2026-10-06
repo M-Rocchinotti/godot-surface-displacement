@@ -36,6 +36,7 @@ func _run() -> void:
 	await _test("sculpts_and_paints", test_editing)
 	await _test("erodes_and_generates", test_erosion)
 	await _test("roads_along_paths", test_roads)
+	await _test("native_chunks", test_native_chunks)
 	if DisplayServer.get_name() != "headless":
 		await _test("renders_front_faces_and_coarser_far_away", test_render)
 	print("\nterrain tests: %d passed, %d failed" % [_passed, _failed])
@@ -746,6 +747,73 @@ func test_roads() -> void:
 	check(points.size() > 50 and road_bump < ground_bump * 0.5 and off < 0.005, "a conforming path smooths the ground's heights and the terrain takes them (between vertices within the grid's interpolation)")
 	hills.queue_free()
 	await process_frame
+
+
+## The native chunk builder makes the same chunks as the GDScript one: a whole terrain (weights
+## per vertex), a streamed one (heights sampled from the heightmap, the rules), a splat map, the
+## painted weights and occluders.
+func test_native_chunks() -> void:
+	if not ClassDB.class_exists(GADSTerrain3D.MESHER):
+		check(false, "the native library is loaded")
+		return
+	var splat := Image.create(40, 40, false, Image.FORMAT_RGBA8)
+	for y in 40:
+		for x in 40:
+			splat.set_pixel(x, y, Color(float(x) / 39.0, float(y) / 39.0, 0, 1))
+	var cases := [
+		["whole terrain", {}],
+		["streamed (sampled heights, rules)", {"stream_radius": 1.0}],
+		["splat map, occluders", {"splatmap": ImageTexture.create_from_image(splat), "occluders": true}],
+	]
+	for c: Array in cases:
+		var t := make_terrain(c[1])
+		t.stream_camera = NodePath("..") # nothing streams in during the comparison
+		root.add_child(t)
+		if c[0] == "whole terrain":
+			t.paint_layer(Vector3(-20, 0, -20), 3.0, 1)
+		var worst := 0.0
+		var same_indices := true
+		var native_ms := 0.0
+		var script_ms := 0.0
+		for key in [Vector2i(0, 0), Vector2i(1, 2), Vector2i(3, 3)]:
+			var t0 := Time.get_ticks_usec()
+			var a: Dictionary = t.call("_chunk_arrays", key.x, key.y, 5)
+			native_ms += (Time.get_ticks_usec() - t0) / 1000.0
+			t0 = Time.get_ticks_usec()
+			var b: Dictionary = t.call("_chunk_arrays_gd", key.x, key.y, 5)
+			script_ms += (Time.get_ticks_usec() - t0) / 1000.0
+			for ch in [Mesh.ARRAY_VERTEX, Mesh.ARRAY_NORMAL]:
+				var va: PackedVector3Array = a["arrays"][ch]
+				var vb: PackedVector3Array = b["arrays"][ch]
+				same_indices = same_indices and va.size() == vb.size()
+				for i in mini(va.size(), vb.size()):
+					worst = maxf(worst, va[i].distance_to(vb[i]))
+			var ca: PackedColorArray = a["arrays"][Mesh.ARRAY_COLOR]
+			var cb: PackedColorArray = b["arrays"][Mesh.ARRAY_COLOR]
+			for i in mini(ca.size(), cb.size()):
+				worst = maxf(worst, maxf(absf(ca[i].r - cb[i].r), absf(ca[i].g - cb[i].g)))
+			var ua: PackedVector2Array = a["arrays"][Mesh.ARRAY_TEX_UV]
+			var ub: PackedVector2Array = b["arrays"][Mesh.ARRAY_TEX_UV]
+			for i in mini(ua.size(), ub.size()):
+				worst = maxf(worst, ua[i].distance_to(ub[i]))
+			same_indices = same_indices and a["arrays"][Mesh.ARRAY_INDEX] == b["arrays"][Mesh.ARRAY_INDEX]
+			var la: Dictionary = a["lods"]
+			var lb: Dictionary = b["lods"]
+			same_indices = same_indices and la.size() == lb.size()
+			for k in mini(la.size(), lb.size()):
+				worst = maxf(worst, absf(float(la.keys()[k]) - float(lb.keys()[k])))
+				same_indices = same_indices and la.values()[k] == lb.values()[k]
+			same_indices = same_indices and a.has("occluder") == b.has("occluder")
+			if a.has("occluder") and b.has("occluder"):
+				var oa: PackedVector3Array = a["occluder"]["vertices"]
+				var ob: PackedVector3Array = b["occluder"]["vertices"]
+				for i in mini(oa.size(), ob.size()):
+					worst = maxf(worst, oa[i].distance_to(ob[i]))
+				same_indices = same_indices and oa.size() == ob.size() and a["occluder"]["indices"] == b["occluder"]["indices"]
+		print("  %s: largest difference %.7f; native %.1f ms, GDScript %.1f ms for 3 chunks" % [c[0], worst, native_ms, script_ms])
+		check(worst < 1e-5 and same_indices, "%s: the native chunks are the GDScript ones" % c[0])
+		t.queue_free()
+		await process_frame
 
 
 ## Painting a layer at runtime: the weights, the chunks' vertex colours and the detail field's

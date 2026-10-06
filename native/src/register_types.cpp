@@ -1,4 +1,5 @@
 #include "gads_height_generator.h"
+#include "gads_terrain_mesher.h"
 #include "gads_tessellator.h"
 
 #include <gdextension_interface.h>
@@ -14,6 +15,7 @@ static void initialize_gads(ModuleInitializationLevel p_level) {
 	}
 	GDREGISTER_CLASS(GADSTessellator);
 	GDREGISTER_CLASS(GADSHeightGenerator);
+	GDREGISTER_CLASS(GADSTerrainMesher);
 }
 
 static void uninitialize_gads(ModuleInitializationLevel p_level) {

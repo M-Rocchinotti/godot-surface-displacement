@@ -157,6 +157,10 @@ All notable changes to this project are documented here. The format follows
   collision and the detail field's ground data. Edited maps are one texel per vertex, saved into
   `data_directory`. Runtime API: `sculpt()`, `paint_splatmap()`, `set_height_region()` /
   `set_splat_region()`, `intersect_ray()` (no physics needed), the `edited` signal.
+- **Native terrain chunks**: GADSTerrain3D builds its chunks (heights, normals, layer weights,
+  LOD errors, skirts, index LODs, occluders) with the native `GADSTerrainMesher` when the library
+  is loaded: the same arrays as the GDScript builder (kept as the fallback; tested equal), many
+  times faster, so rebuilds, streaming and sculpting strokes cost a fraction of what they did.
 - **Skinned meshes bake**: bone indices and weights are carried through the tessellation
   (interpolated at every split, the strongest 4 or 8 kept and normalised), so characters and
   creatures get baked displacement and still deform; clusters and the parallax fallback follow the
