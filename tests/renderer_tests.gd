@@ -95,7 +95,7 @@ func _test_variants() -> void:
 		if info.is_empty():
 			continue
 		var m := GADSMaterials.create(info["mapping"], {"height": height}, {"height_m": 0.03}, info["quality"], info["depth_write"])
-		m.shader = GADSMaterials.get_shader(info["mapping"], info["quality"], info["depth_write"], info["layered"])
+		m.shader = GADSMaterials.get_shader(info["mapping"], info["quality"], info["depth_write"], info["layered"], info["silhouette"])
 		var mi := MeshInstance3D.new()
 		mi.mesh = BoxMesh.new()
 		mi.mesh.size = Vector3(0.3, 0.3, 0.3)
@@ -112,7 +112,7 @@ func _test_variants() -> void:
 		var c := img.get_pixel(px, SIZE.y / 2)
 		if c.r + c.g + c.b > 0.05:
 			lit += 1
-	check(count == 30 and lit > 20, "all %d surface variants draw (%d lit samples across the row)" % [count, lit])
+	check(count == 34 and lit > 20, "all %d surface variants draw (%d lit samples across the row)" % [count, lit])
 
 
 ## A depth-write wall without relief at 5 m and an unshaded red box 0.5 m in front of it: the box
