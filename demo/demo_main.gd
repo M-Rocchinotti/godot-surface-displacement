@@ -11,7 +11,7 @@ const PRESETS: Array[String] = ["Off", "Low", "Medium", "High", "Ultra"]
 const COMPARE: Array[String] = ["Flat (normal map)", "POM", "POM + geometry"]
 ## Weather states (R): name, rain wetness, snow cover, puddle level.
 const WEATHER := [["Dry", 0.0, 0.0, 0.0], ["Rain", 0.7, 0.0, 0.25], ["Snow", 0.0, 0.55, 0.0], ["Thaw", 0.4, 0.25, 0.2]]
-const DEBUG_VIEWS := [["Final", 0], ["Hit offset", 1], ["Cost (steps)", 2], ["Relief height", 3], ["Normals", 4], ["Self-shadow", 5], ["Field levels", 8], ["Tessellation", 9], ["Before / after", 10]]
+const DEBUG_VIEWS := [["Final", 0], ["Hit offset", 1], ["Cost (steps)", 2], ["Relief height", 3], ["Normals", 4], ["Self-shadow", 5], ["Field levels", 8], ["Tessellation", 9], ["Before / after", 10], ["Mip level", 11], ["Clusters", 12]]
 const PANEL_WIDTH := 300.0
 
 var scene: Node3D

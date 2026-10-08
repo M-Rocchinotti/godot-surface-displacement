@@ -49,6 +49,8 @@ const QUALITY_PRESETS := {
 	Quality.ULTRA: [0.003, 1500000],
 }
 const BAKED_PARAMETER := &"gads_baked"
+## The instance shader parameter numbering the clusters (the Clusters debug view).
+const CLUSTER_PARAMETER := &"gads_cluster"
 ## Seconds between a streamed bake's distance checks.
 const STREAM_INTERVAL := 0.1
 
@@ -990,8 +992,12 @@ func _sync_clusters() -> void:
 		for s in mini(get_surface_override_material_count(), mi.get_surface_override_material_count()):
 			mi.set_surface_override_material(s, get_surface_override_material(s))
 		mi.set_instance_shader_parameter(BAKED_PARAMETER, 1.0)
+		mi.set_instance_shader_parameter(CLUSTER_PARAMETER, float(i + 2))
 		GADSMaterials.copy_variation(self, mi)
 		_share_skin(mi)
+	# The node itself draws the first cluster.
+	if not meshes.is_empty() or float(get_instance_shader_parameter(CLUSTER_PARAMETER) if get_instance_shader_parameter(CLUSTER_PARAMETER) != null else 0.0) > 0.0:
+		set_instance_shader_parameter(CLUSTER_PARAMETER, 1.0 if not meshes.is_empty() else 0.0)
 	_update_cluster_visibility()
 	if not _cluster_nodes.is_empty() and is_inside_tree():
 		set_process(true)

@@ -45,6 +45,7 @@ func _run() -> void:
 	await _test("before_after_split_view", test_before_after)
 	await _test("per_node_relief_scale_and_tint", test_variation)
 	await _test("displacement_mask", test_relief_mask)
+	await _test("mip_level_view", test_mip_view)
 	await _test("surface_effects", test_surface_effects)
 	await _test("custom_shader_hooks", test_custom_hooks)
 	await _test("visual_shader_nodes", test_visual_shader_nodes)
@@ -1222,6 +1223,31 @@ func test_relief_mask() -> void:
 	check(d_ref > 0.01, "the relief shows")
 	check(d_left < 0.2 * d_ref, "where the mask is 0: plain normal mapping")
 	check(d_right < 0.2 * d_ref, "where it is 1: the full relief")
+
+
+## Mip level view: the plane's near part samples the height map's finest mips (blue), its far
+## part coarser ones (towards green and yellow).
+func test_mip_view() -> void:
+	var field := Harness.make_stone_field(256, 40, 2)
+	var mat := GADSMaterials.create(GADSMaterials.Mapping.UV, {"height": ImageTexture.create_from_image(field["image"])},
+			{"height_m": 0.06, "height_center": 1.0, "uv_scale": Vector2(8, 8)}, GADSMaterials.Quality.POM)
+	GADSGlobals.set_value(GADSGlobals.DEBUG, Vector4(GADSManager.DebugView.MIP_LEVEL, 0.1, 0, 0))
+	# The tests' globals bias the march to mip 0; the view shows the hardware's choice here.
+	GADSGlobals.set_value(GADSGlobals.POM_RANGE, Vector4(1000, 2000, 0, 99))
+	var img := await _render_lit_plane(mat, false, Vector3(0.0, 0.6, 2.0))
+	_reset_globals()
+	var near := img.get_pixel(SIZE.x / 2, SIZE.y - 10)
+	# The farthest plane row: the topmost one that is not background.
+	var far := near
+	for py in range(0, SIZE.y):
+		var c := img.get_pixel(SIZE.x / 2, py)
+		if c.g + c.b > 0.3 and absf(c.r - 0.15) + absf(c.g - 0.17) + absf(c.b - 0.2) > 0.05:
+			far = c
+			break
+	var warmth := func(c: Color) -> float: return c.r + c.g - c.b
+	print("  near %s, far %s" % [near, far])
+	check(near.b > near.r, "near: fine mips (blue end)")
+	check(warmth.call(far) > warmth.call(near) + 0.3, "far: coarser mips (towards green and red)")
 
 
 func _mean_difference(a: Image, b: Image) -> float:

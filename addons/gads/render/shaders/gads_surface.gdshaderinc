@@ -362,7 +362,9 @@ void fragment() {
 	// 2 = cost (steps / 64, planes marched / 3, LOD / 8), 3 = relief height in the slab,
 	// 4 = world normal, 5 = self-shadow factor of directional lights (written by light()),
 	// 9 = tessellation of a baked mesh (refinement level: blue 0, green 8, yellow 16, red 24+),
-	// 10 = before / after (normal shading, the relief off left of the split, a line at it).
+	// 10 = before / after (normal shading, the relief off left of the split, a line at it),
+	// 11 = mip level of the height map the march samples (blue 0, green 2.7, yellow 5.3, red 8+),
+	// 12 = clusters of a clustered bake (a colour each; grey: not clustered).
 	// Output through EMISSION with black, non-reflective ALBEDO/SPECULAR; view 5 through a white,
 	// non-reflective ALBEDO that light() fills.
 	int debug_view = int(gads_debug.x + 0.5);
@@ -384,10 +386,11 @@ void fragment() {
 		} else if (debug_view == 3) {
 			debug_color = vec3(amp > 0.0 ? main_z / amp + height_center : 0.0);
 		} else if (debug_view == 9) {
-			float t = clamp(gads_tess.x / 24.0, 0.0, 1.0) * 3.0;
-			debug_color = t < 1.0 ? mix(vec3(0.1, 0.25, 1.0), vec3(0.1, 0.9, 0.2), t)
-					: t < 2.0 ? mix(vec3(0.1, 0.9, 0.2), vec3(1.0, 0.9, 0.1), t - 1.0)
-					: mix(vec3(1.0, 0.9, 0.1), vec3(1.0, 0.15, 0.1), t - 2.0);
+			debug_color = gads_heat(gads_tess.x / 24.0);
+		} else if (debug_view == 11) {
+			debug_color = gads_heat(max(main_lod, 0.0) / 8.0);
+		} else if (debug_view == 12) {
+			debug_color = (gads_cluster > 0.5 ? gads_id_color(gads_cluster) : vec3(0.45)) * (0.35 + 0.65 * max(normal_world.y, 0.0) + 0.3 * abs(normal_world.x));
 		} else {
 			debug_color = normal_world * 0.5 + 0.5;
 		}

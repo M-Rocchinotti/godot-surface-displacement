@@ -42,6 +42,20 @@ float gads_split(float screen_x) {
 }
 
 // The divider of the before / after view: light on the pixels at the split.
+// Heat-map colour of t in 0..1: blue, green, yellow, red (the debug views' scale).
+vec3 gads_heat(float t) {
+	t = clamp(t, 0.0, 1.0) * 3.0;
+	return t < 1.0 ? mix(vec3(0.1, 0.25, 1.0), vec3(0.1, 0.9, 0.2), t)
+			: t < 2.0 ? mix(vec3(0.1, 0.9, 0.2), vec3(1.0, 0.9, 0.1), t - 1.0)
+			: mix(vec3(1.0, 0.9, 0.1), vec3(1.0, 0.15, 0.1), t - 2.0);
+}
+
+// A distinct colour for an id (debug views): golden-ratio hues, full saturation.
+vec3 gads_id_color(float id) {
+	float h = fract(id * 0.618034);
+	return clamp(abs(fract(h + vec3(0.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0) - 1.0, 0.0, 1.0) * 0.8 + 0.1;
+}
+
 vec3 gads_split_line(vec2 frag, vec2 viewport) {
 	return int(gads_debug.x + 0.5) == 10 && abs(frag.x - gads_debug.y * viewport.x) < 1.0 ? vec3(2.0) : vec3(0.0);
 }

@@ -22,7 +22,8 @@ signal settings_changed
 signal quality_adapted(level: int)
 
 enum Feature { POM, SELF_SHADOW, NEAR_FIELD, SCATTER }
-enum DebugView { OFF = 0, HIT_OFFSET = 1, COST = 2, RELIEF = 3, NORMALS = 4, SELF_SHADOW = 5, FIELD_LEVELS = 8, TESSELLATION = 9, BEFORE_AFTER = 10 }
+enum DebugView { OFF = 0, HIT_OFFSET = 1, COST = 2, RELIEF = 3, NORMALS = 4, SELF_SHADOW = 5, FIELD_LEVELS = 8, TESSELLATION = 9, BEFORE_AFTER = 10,
+	MIP_LEVEL = 11, CLUSTERS = 12 }
 
 ## Off: every GADS material draws as plain normal mapping, no field, no scatter.
 @export var enabled := true:

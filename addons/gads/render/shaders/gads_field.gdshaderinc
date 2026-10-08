@@ -429,6 +429,10 @@ void fragment() {
 			debug_color = vec3((hit.y - gads_debug.z) / max(gads_debug.y, 1e-6), fract(f_level), f_level / 8.0);
 		} else if (debug_view == 7) {
 			debug_color = vec3(1.0);
+		} else if (debug_view == 11) {
+			debug_color = gads_heat(max(lod, 0.0) / 8.0);
+		} else if (debug_view == 12) {
+			debug_color = vec3(0.45) * (0.35 + 0.65 * normal_world.y);
 		} else if (debug_view == 8) {
 			// Rings: a colour per level (level + morph blends between them).
 			int l0 = int(floor(f_level));

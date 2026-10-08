@@ -1273,6 +1273,10 @@ func test_cluster_node() -> void:
 		and node.get_children(true).has(children[0]), "the other clusters are internal children")
 	check(children.all(func(c: MeshInstance3D) -> bool: return c.get_instance_shader_parameter(&"gads_baked") == 1.0 and c.material_override == node.material_override),
 		"they draw with the node's materials, as baked meshes")
+	var numbers := [node.get_instance_shader_parameter(&"gads_cluster")]
+	for c in children:
+		numbers.append(c.get_instance_shader_parameter(&"gads_cluster"))
+	check(numbers == range(1, node.get_cluster_count() + 1).map(func(i: int) -> float: return float(i)), "each is numbered for the Clusters view (%s)" % str(numbers))
 	var other := uv_material(field, 0.02)
 	node.material_override = other
 	node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
@@ -1297,6 +1301,19 @@ func test_cluster_node() -> void:
 		print("  centre at 6 m %s, at 20 m %s" % [colors[6.0], colors[20.0]])
 		check(colors[6.0].r > colors[6.0].b and colors[20.0].b > 0.9 and colors[20.0].r < 0.2,
 			"near the clustered geometry (refined), far the source mesh with parallax")
+		# Clusters view: a colour per cluster.
+		GADSGlobals.set_value(GADSGlobals.DEBUG, Vector4(GADSManager.DebugView.CLUSTERS, 0.1, 0, 0))
+		cam.look_at_from_position(Vector3(0, 1, 1).normalized() * 3.0, Vector3.ZERO)
+		await h.frames(4)
+		var shot := await h.capture()
+		var hues := {}
+		for py in range(0, SIZE.y, 8):
+			for px in range(0, SIZE.x, 8):
+				var c := shot.get_pixel(px, py)
+				if c.s > 0.3 and c.v > 0.1:
+					hues[int(c.h * 24.0)] = true
+		print("  Clusters view: %d distinct hues" % hues.size())
+		check(hues.size() >= 3, "the Clusters view gives the clusters different colours")
 		GADSGlobals.set_value(GADSGlobals.DEBUG, Vector4(0, 0.1, 0, 0))
 	node.geometry_range = 0.0
 	await process_frame

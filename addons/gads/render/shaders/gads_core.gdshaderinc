@@ -181,6 +181,9 @@ instance uniform float gads_baked = 0.0;
 // relief's depth times gads_relief_scale (a GADSMeshInstance3D bakes with it) and the albedo
 // times gads_tint, so many props can share one material, and its batching, and still differ.
 instance uniform float gads_relief_scale = 1.0;
+// The cluster a GADSMeshInstance3D's internal node draws (1, 2, ...; 0: not clustered), for the
+// Clusters debug view.
+instance uniform float gads_cluster = 0.0;
 instance uniform vec4 gads_tint : source_color = vec4(1.0);
 
 // How far the maps have moved (texture tiles) and the relief's depth factor now (see flow_speed,
