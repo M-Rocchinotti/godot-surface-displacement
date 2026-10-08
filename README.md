@@ -83,7 +83,10 @@ what the engine allows:
 - Sculpt baked meshes by hand in the viewport: raise, lower, smooth and flatten strokes on top of
   the materials' relief, undoable and baked again per stroke.
 - Paint the layered materials' layers onto any mesh in the viewport (vertex colours, on a copy of
-  the mesh so the asset stays untouched): the parallax and the bake follow the paint.
+  the mesh so the asset stays untouched): the parallax and the bake follow the paint, and so does
+  a displacement mask that fades a material's relief where it is painted out.
+- One material, many looks: per-node relief depth and tint (instance parameters) keep shared
+  materials batching, in parallax and in the bake.
 - Procedural relief without texture files: thirteen tileable patterns (noise, ridged, billow, rock,
   stones, cracks, bricks, tiles, waves, ripples, craters, scales, dunes) and normal, occlusion, curvature,
   albedo and ORM maps from any height map, as a complete material in one click.
@@ -91,17 +94,24 @@ what the engine allows:
   proposed depth, height converted to 16-bit EXR, ORM packed, DirectX normals converted), add
   nodes, convert StandardMaterial3D / ORMMaterial3D with a height map (undoable),
   make meshes GADSMeshInstance3D and bake them (undoable, with progress and cancel), bake the
-  ground under a field, turn 8-bit height maps into 16-bit EXR, validate the setup.
+  ground under a field, turn 8-bit height maps into 16-bit EXR, validate the setup; texture sets
+  dropped into the project are offered their material.
+- Global illumination: SDFGI, SSAO and SSIL draw GADS surfaces as they are; VoxelGI bakes with
+  their colours (the engine's own bake takes custom shaders as white).
+- Bakes everywhere: the native tessellator where it ships, a GDScript one elsewhere.
 - Runtime: view-dependent re-tessellation of baked meshes around the camera, and deformation
   (footprints, tracks, craters) of the near-camera geometry and the ground's parallax.
 - `GADSTerrain3D`: a heightmap terrain with chunk LODs chosen by screen-space error, up to three
   height-blended GADS layers painted by a splat map or slope and height rules, HeightMapShape3D
-  collision and the near-camera displacement field on its own ground data.
+  collision, holes for cave entrances, sculpting, painting, roads, erosion, streaming and the
+  near-camera displacement field on its own ground data.
 - A demo with seven scenes (gravel path, cobblestone street, rocky ground, brick wall and props,
   hills with a rover leaving tracks, a cliff tessellated for the camera, a material lab of
   procedural materials, surface effects and vector displacement), a flat / POM / POM + geometry
-  comparison, a before / after view, runtime prop geometry, impacts (C), weather and a
-  frame-time overlay.
+  comparison, a before / after view, mip level and cluster views, runtime prop geometry, impacts
+  (C), weather and a frame-time overlay.
+- Tests: about 740 checks in 14 suites, among them POM against a CPU ray tracer, visual
+  regression against reference images and the editor tools driven in a real editor.
 
 ## Requirements
 
