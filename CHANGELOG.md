@@ -175,6 +175,10 @@ All notable changes to this project are documented here. The format follows
   triangle budget) while the camera is within `prop_geometry_range`, and draw their parallax again
   beyond it; no conversion or bake needed. Roadmap item (runtime geometry for non-planar surfaces
   near the camera) done.
+- **Global illumination**: `GADSGI.bake_voxel_gi()` and **GADS: Bake Selected VoxelGI (GADS
+  Colours)** bake a VoxelGI with GADS surfaces in their colours (the engine's bake takes them as
+  white); `GADSGI.proxy_material()`. README section on how SDFGI, VoxelGI, LightmapGI, reflection
+  probes, SSAO and SSIL see GADS surfaces; a render test for VoxelGI, SDFGI, SSAO and SSIL.
 - **Terrain holes** (cave and tunnel entrances): `GADSTerrain3D.holes` (a map), the inspector's
   Cut holes / Fill holes brushes (undoable, saved next to the other edited maps) and
   `cut_holes()` at runtime. The chunks (every LOD, skirts, occluders), the collision (trimesh

@@ -46,6 +46,7 @@ func _run() -> void:
 	await _test("per_node_relief_scale_and_tint", test_variation)
 	await _test("displacement_mask", test_relief_mask)
 	await _test("mip_level_view", test_mip_view)
+	await _test("global_illumination", test_gi)
 	await _test("surface_effects", test_surface_effects)
 	await _test("custom_shader_hooks", test_custom_hooks)
 	await _test("visual_shader_nodes", test_visual_shader_nodes)
@@ -1248,6 +1249,75 @@ func test_mip_view() -> void:
 	print("  near %s, far %s" % [near, far])
 	check(near.b > near.r, "near: fine mips (blue end)")
 	check(warmth.call(far) > warmth.call(near) + 0.3, "far: coarser mips (towards green and red)")
+
+
+## Global illumination: VoxelGI's bake reads standard materials only; GADSGI.bake_voxel_gi() has a
+## red GADS floor bounce red light onto a white wall that no light reaches directly, where a
+## plain bake bounces white. With SDFGI, SSAO and SSIL on as well, GADS surfaces draw (no shader
+## error, nothing black or NaN). (A ReflectionProbe would leak seven textures at exit, with any
+## material: an engine matter, so none here.)
+func test_gi() -> void:
+	var red := Image.create(16, 16, false, Image.FORMAT_RGB8)
+	red.fill(Color(0.9, 0.08, 0.05))
+	var field := Harness.make_stone_field(128, 20, 2)
+	var floor_mat := GADSMaterials.create(GADSMaterials.Mapping.WORLD, {"albedo": ImageTexture.create_from_image(red),
+		"height": ImageTexture.create_from_image(field["image"])}, {"height_m": 0.03, "height_center": 1.0}, GADSMaterials.Quality.POM_SELF_SHADOW)
+	var proxy := GADSGI.proxy_material(floor_mat)
+	check(proxy.albedo_color.r > 0.85 and proxy.albedo_color.g < 0.1, "the stand-in has the albedo texture's colour (%s)" % proxy.albedo_color)
+	h.new_lit_scene(Color(0, 0, 0))
+	var s := 3.0
+	h.add_quad(Vector3(-s, 0, s), Vector3(s, 0, s), Vector3(s, 0, -s), Vector3(-s, 0, -s),
+		[Vector2(0, 1), Vector2(1, 1), Vector2(1, 0), Vector2(0, 0)], floor_mat)
+	var white := StandardMaterial3D.new()
+	white.albedo_color = Color(0.9, 0.9, 0.9)
+	# A wall at z = -1.5 facing +Z; the sun shines straight down, so only bounced light reaches it.
+	h.add_quad(Vector3(-s, 0, -1.5), Vector3(s, 0, -1.5), Vector3(s, 3, -1.5), Vector3(-s, 3, -1.5),
+		[Vector2(0, 1), Vector2(1, 1), Vector2(1, 0), Vector2(0, 0)], white)
+	var sun := h.add_sun(89.0, 0.0, false)
+	sun.light_energy = 2.0
+	var gi := VoxelGI.new()
+	gi.size = Vector3(8, 5, 8)
+	gi.position = Vector3(0, 2, 0)
+	h.scene.add_child(gi)
+	h.add_camera(Vector3(0, 1.2, 3.0), Vector3(0, 1.0, -1.5))
+	var wall_colour := func() -> Color:
+		await h.frames(6)
+		var img := await h.capture()
+		var c := Color(0, 0, 0)
+		for y in range(SIZE.y / 4, SIZE.y / 2, 4):
+			for x in range(SIZE.x / 3, SIZE.x * 2 / 3, 4):
+				c += img.get_pixel(x, y)
+		return c / c.a if c.a > 0.0 else c
+	await h.frames(2)
+	var swapped := GADSGI.bake_voxel_gi(gi, h.scene)
+	var with_proxies: Color = await wall_colour.call()
+	check(swapped == 1 and h.scene.get_child(1).get("material_override") == floor_mat, "one GADS surface stood in during the bake, and has its material back")
+	gi.bake(h.scene)
+	var plain: Color = await wall_colour.call()
+	print("  wall lit by bounce only: %s with GADSGI.bake_voxel_gi(), %s with a plain bake" % [with_proxies, plain])
+	check(with_proxies.r > 0.02 and with_proxies.r > 2.0 * with_proxies.g, "baked with GADSGI the GADS floor bounces red")
+	check(plain.r < 1.5 * plain.g, "a plain bake bounces white (VoxelGI reads standard materials only)")
+	# SDFGI, SSAO and SSIL on top.
+	var env := (h.scene.get_child(0) as WorldEnvironment).environment
+	env.sdfgi_enabled = true
+	env.ssao_enabled = true
+	env.ssil_enabled = true
+	await h.frames(10)
+	var img := await h.capture()
+	var finite := true
+	var floor_lit := 0.0
+	for y in range(SIZE.y * 3 / 4, SIZE.y, 4):
+		for x in range(0, SIZE.x, 4):
+			var c := img.get_pixel(x, y)
+			finite = finite and is_finite(c.r) and is_finite(c.g) and is_finite(c.b)
+			floor_lit = maxf(floor_lit, c.r)
+	check(finite and floor_lit > 0.2, "with SDFGI, SSAO and SSIL too, the GADS floor draws (brightest red %.2f)" % floor_lit)
+	env.sdfgi_enabled = false
+	env.ssao_enabled = false
+	env.ssil_enabled = false
+	gi.queue_free()
+	h.clear_scene()
+	await h.frames(4)
 
 
 func _mean_difference(a: Image, b: Image) -> float:

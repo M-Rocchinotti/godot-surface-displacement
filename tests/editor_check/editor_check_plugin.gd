@@ -542,6 +542,25 @@ func _run() -> void:
 		and sil_path.ends_with("gads_uv_pom_ss_sil.gdshader") and undone_path == ss_path and mat.shader == pom_shader,
 		"the material inspector switches quality and silhouette, undoable (%s, %s)" % [ss_path.get_file(), sil_path.get_file()])
 	panel.queue_free()
+
+	# 18. Bake Selected VoxelGI (GADS Colours): the data saved next to the scene, undoable.
+	var gi := VoxelGI.new()
+	gi.name = "GI"
+	gi.size = Vector3(6, 4, 6)
+	root.add_child(gi)
+	gi.owner = root
+	await _frames_wait(2)
+	EditorInterface.get_selection().clear()
+	EditorInterface.get_selection().add_node(gi)
+	_sd_plugin.bake_selected_voxel_gi()
+	var gi_path := gi.data.resource_path if gi.data != null else ""
+	_check(gi.data != null and gi_path == "res://check_scene_gi_voxelgi.res" and FileAccess.file_exists(gi_path),
+		"Bake Selected VoxelGI (GADS Colours) bakes and saves the data next to the scene (%s)" % gi_path)
+	ur.undo()
+	_check(gi.data == null, "undo takes the bake back")
+	ur.redo()
+	_check(gi.data != null and gi.data.resource_path == gi_path, "redo gives it again")
+	EditorInterface.get_selection().clear()
 	_finish()
 
 

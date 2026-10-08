@@ -20,8 +20,9 @@ const MENU_VALIDATE := "GADS: Validate Setup"
 const MENU_TEXTURE_SET := "GADS: Create Material from Selected Textures"
 const MENU_PROCEDURAL := "GADS: Generate Procedural Material..."
 const MENU_CLEAN_CACHE := "GADS: Clean Bake Cache..."
+const MENU_VOXEL_GI := "GADS: Bake Selected VoxelGI (GADS Colours)"
 const MENUS: Array[String] = [MENU_ADD_NODE, MENU_ADD_FIELD, MENU_CONVERT, MENU_MESH_CONVERT, MENU_MESH_BAKE, MENU_BAKE,
-	MENU_HEIGHT, MENU_TEXTURE_SET, MENU_PROCEDURAL, MENU_CLEAN_CACHE, MENU_VALIDATE]
+	MENU_HEIGHT, MENU_TEXTURE_SET, MENU_PROCEDURAL, MENU_CLEAN_CACHE, MENU_VOXEL_GI, MENU_VALIDATE]
 const MeshInspector := preload("res://addons/gads/editor/gads_mesh_inspector.gd")
 const TerrainInspector := preload("res://addons/gads/editor/gads_terrain_inspector.gd")
 const PaintInspector := preload("res://addons/gads/editor/gads_paint_inspector.gd")
@@ -74,6 +75,7 @@ func _enter_tree() -> void:
 	add_tool_menu_item(MENU_TEXTURE_SET, create_materials_from_selection)
 	add_tool_menu_item(MENU_PROCEDURAL, generate_procedural_dialog)
 	add_tool_menu_item(MENU_CLEAN_CACHE, clean_bake_cache_dialog)
+	add_tool_menu_item(MENU_VOXEL_GI, bake_selected_voxel_gi)
 	add_tool_menu_item(MENU_VALIDATE, validate)
 	_mesh_inspector = MeshInspector.new()
 	_mesh_inspector.undo_redo = get_undo_redo()
@@ -290,6 +292,35 @@ func bake_selected_meshes() -> void:
 	for mi: GADSMeshInstance3D in after:
 		ur.add_do_method(mi, "set_bake_state", after[mi])
 		ur.add_undo_method(mi, "set_bake_state", before[mi])
+	ur.commit_action(false)
+
+
+## Bakes the selected VoxelGI nodes with GADSGI (GADS surfaces bounce their colours, where the
+## engine's own Bake makes them white), saves each one's data next to the scene
+## (<scene>_<node>_voxelgi.res) and makes it one undoable action.
+func bake_selected_voxel_gi() -> void:
+	var gis: Array[VoxelGI] = []
+	for node in EditorInterface.get_selection().get_selected_nodes():
+		if node is VoxelGI:
+			gis.append(node)
+	if gis.is_empty():
+		push_warning("GADS: select VoxelGI nodes.")
+		return
+	var scene_path := EditorInterface.get_edited_scene_root().scene_file_path if EditorInterface.get_edited_scene_root() != null else ""
+	var ur := get_undo_redo()
+	ur.create_action("Bake VoxelGI (GADS colours)")
+	for gi in gis:
+		var before: VoxelGIData = gi.data
+		var swapped := GADSGI.bake_voxel_gi(gi)
+		var data := gi.data
+		if data != null and not scene_path.is_empty():
+			var path := "%s_%s_voxelgi.res" % [scene_path.get_basename(), String(gi.name).to_snake_case()]
+			if ResourceSaver.save(data, path) == OK:
+				data.take_over_path(path)
+				EditorInterface.get_resource_filesystem().update_file(path)
+		print("GADS: baked %s (%d GADS surfaces in their colours)" % [gi.name, swapped])
+		ur.add_do_property(gi, "data", data)
+		ur.add_undo_property(gi, "data", before)
 	ur.commit_action(false)
 
 
