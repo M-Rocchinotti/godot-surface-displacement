@@ -175,6 +175,8 @@ All notable changes to this project are documented here. The format follows
   triangle budget) while the camera is within `prop_geometry_range`, and draw their parallax again
   beyond it; no conversion or bake needed. Roadmap item (runtime geometry for non-planar surfaces
   near the camera) done.
+- **Optimize for a custom GPU budget** (milliseconds per frame) in the GADS panel:
+  `GADSProfiler.target_for_budget()` picks the target with the highest preset that fits.
 - **Visual regression suite** (`tests/visual_regression.gd`, in `run_all.py`): nine fixed shots
   of the demo scenes and two debug views compared with reference images in `tests/reference/`;
   failing shots and difference images go to `build/visual/`, `--update` writes new references.

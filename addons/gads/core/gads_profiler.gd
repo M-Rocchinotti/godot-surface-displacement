@@ -171,6 +171,17 @@ static func optimize_for(target: Target, root: Node) -> Array:
 	return fixes
 
 
+## The target for a custom GPU budget: the one with the highest preset whose measured added GPU
+## time ([method GADSSettings.get_budget_ms]) fits in [param budget_ms] milliseconds per frame.
+static func target_for_budget(budget_ms: float) -> Target:
+	var best := Target.MOBILE
+	for t: Target in TARGETS:
+		var cost := GADSSettings.get_budget_ms(TARGETS[t]["preset"])
+		if cost <= budget_ms and cost > GADSSettings.get_budget_ms(TARGETS[best]["preset"]):
+			best = t
+	return best
+
+
 ## Applies fixes from [method recommend] or [method optimize_for] directly (no undo).
 static func apply_fixes(fixes: Array) -> void:
 	for fix: Dictionary in fixes:

@@ -932,6 +932,9 @@ func test_profiler() -> void:
 	check(manager.preset == GADSSettings.Preset.LOW and is_equal_approx(dense.geometry_range, snappedf(dense.suggest_geometry_range(3.0), 0.1)),
 			"Optimize for Handheld sets the Low preset and a range for three pixels of relief")
 	check(not dense.is_bake_stale(), "optimizing changes settings only (the bake stays current)")
+	var by_budget := [0.2, 0.5, 1.5, 2.5, 10.0].map(func(ms: float) -> int: return GADSProfiler.target_for_budget(ms))
+	check(by_budget == [GADSProfiler.Target.MOBILE, GADSProfiler.Target.HANDHELD, GADSProfiler.Target.MAINSTREAM, GADSProfiler.Target.HIGH_END,
+			GADSProfiler.Target.CINEMATIC], "a custom GPU budget picks the highest preset that fits (%s)" % str(by_budget))
 	GADSProfiler.dense_triangles = 200000
 	GADSProfiler.range_triangles = 50000
 	var overlay := GADSStatsOverlay.new()

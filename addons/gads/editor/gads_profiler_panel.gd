@@ -4,12 +4,16 @@ extends VBoxContainer
 ## object, the recommendations with a Fix button each, and Optimize for a hardware target. Every
 ## change is undoable.
 
+## The Target list's item for a custom GPU budget (after the hardware targets).
+const CUSTOM_BUDGET := 100
+
 var undo_redo: EditorUndoRedoManager
 
 var _summary: Label
 var _tree: Tree
 var _recs: VBoxContainer
 var _target: OptionButton
+var _budget: SpinBox
 var _report := {}
 
 
@@ -30,8 +34,19 @@ func _ready() -> void:
 	_target = OptionButton.new()
 	for t in GADSProfiler.TARGETS:
 		_target.add_item(GADSProfiler.TARGETS[t]["name"], t)
+	_target.add_item("Custom GPU budget", CUSTOM_BUDGET)
 	_target.select(GADSProfiler.Target.MAINSTREAM)
 	bar.add_child(_target)
+	_budget = SpinBox.new()
+	_budget.min_value = 0.0
+	_budget.max_value = 20.0
+	_budget.step = 0.1
+	_budget.value = 1.5
+	_budget.suffix = "ms"
+	_budget.tooltip_text = "The GPU time per frame GADS may add: the highest preset whose measured cost fits."
+	_budget.visible = false
+	_target.item_selected.connect(func(i: int) -> void: _budget.visible = _target.get_item_id(i) == CUSTOM_BUDGET)
+	bar.add_child(_budget)
 	var optimize := Button.new()
 	optimize.text = "Optimize for Target"
 	optimize.tooltip_text = "Set the GADSManager preset and each baked mesh's geometry_range for the target (settings only; undoable)."
@@ -142,7 +157,8 @@ func _on_optimize() -> void:
 	var root := EditorInterface.get_edited_scene_root()
 	if root == null:
 		return
-	var target: GADSProfiler.Target = _target.get_selected_id()
+	var id := _target.get_selected_id()
+	var target: GADSProfiler.Target = GADSProfiler.target_for_budget(_budget.value) if id == CUSTOM_BUDGET else id as GADSProfiler.Target
 	apply_fixes(GADSProfiler.optimize_for(target, root), "GADS: optimize for %s" % GADSProfiler.TARGETS[target]["name"])
 
 
