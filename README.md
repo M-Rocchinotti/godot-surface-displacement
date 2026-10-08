@@ -152,6 +152,10 @@ what the engine allows:
 1. Add a **GADSManager** node to your scene (Project > Tools > GADS: Add
    GADSManager Node). Pick a preset.
 2. Give your surfaces GADS materials:
+   - Drop a downloaded texture set (`Rock_BaseColor.png`, `Rock_Normal.png`, `Rock_Height.png`,
+     ...) into the FileSystem dock: GADS offers to make it a material, with a proposed size and
+     depth (or select the files and run **Create Material from Selected Textures**; see
+     [From a downloaded texture set](#from-a-downloaded-texture-set)).
    - **Convert Materials** turns every StandardMaterial3D / ORMMaterial3D with a height map in
      the selection (or scene), on meshes and CSG shapes, into the matching UV or triplanar GADS
      material (undoable). Then
