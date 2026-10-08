@@ -107,6 +107,32 @@ enum DebugView { OFF = 0, HIT_OFFSET = 1, COST = 2, RELIEF = 3, NORMALS = 4, SEL
 	set(value):
 		runtime_triangle_budget = value
 		_update_processing()
+@export_group("Prop geometry")
+## Real geometry near the camera for props that only have parallax: the nearest MeshInstance3D
+## nodes drawing a UV-mapped or triplanar GADS material with relief get a runtime, view-dependent
+## tessellation while the camera is within [member prop_geometry_range] (see [GADSPropGeometry]);
+## further away they draw their parallax again. Needs the native library; runs in the game only.
+@export var prop_geometry := false:
+	set(value):
+		prop_geometry = value
+		if not value:
+			_props.release_all()
+		_update_processing()
+## How close (m, to a prop's bounds) the camera must come for it to get geometry.
+@export_range(0.5, 100.0, 0.5, "or_greater", "suffix:m") var prop_geometry_range := 6.0:
+	set(value):
+		prop_geometry_range = value
+		_props.range_m = value
+## How many props at most have geometry at once (the nearest).
+@export_range(1, 64) var prop_geometry_max := 4:
+	set(value):
+		prop_geometry_max = value
+		_props.max_props = value
+## The error on screen the props' tessellation keeps (pixels).
+@export_range(0.1, 16.0, 0.1, "suffix:px") var prop_pixel_error := 1.0:
+	set(value):
+		prop_pixel_error = value
+		_props.pixel_error = value
 @export_group("Weather")
 ## Surface effects on every GADS material at once (each scaled by its weather_response): rain
 ## darkens and glosses surfaces, snow covers what faces up, puddles fill low relief on level
@@ -137,6 +163,8 @@ enum DebugView { OFF = 0, HIT_OFFSET = 1, COST = 2, RELIEF = 3, NORMALS = 4, SEL
 		_queue_apply()
 
 var _materials := {} # instance id -> WeakRef(ShaderMaterial)
+var _props := GADSPropGeometry.new()
+var _props_timer := 0.0
 var _apply_queued := false
 var _adapt_level := 0
 var _over_s := 0.0
@@ -178,6 +206,7 @@ func _ready() -> void:
 
 func _exit_tree() -> void:
 	remove_from_group(&"gads_manager")
+	_props.release_all()
 	if get_tree().node_added.is_connected(_on_node_added):
 		get_tree().node_added.disconnect(_on_node_added)
 
@@ -423,6 +452,11 @@ func _process(delta: float) -> void:
 		return
 	if adaptive_quality:
 		adapt_to(_measure_frame_ms(delta), delta)
+	if prop_geometry:
+		_props_timer -= delta
+		if _props_timer <= 0.0:
+			_props_timer = 0.25
+			update_prop_geometry()
 	if runtime_triangle_budget > 0 or _adapt_level > 0 or _limits_pushed:
 		_budget_timer -= delta
 		if _budget_timer <= 0.0:
@@ -442,7 +476,8 @@ func _measure_frame_ms(delta: float) -> float:
 
 
 func _update_processing() -> void:
-	set_process(not Engine.is_editor_hint() and (adaptive_quality or runtime_triangle_budget > 0 or _adapt_level > 0 or _limits_pushed))
+	set_process(not Engine.is_editor_hint() and (adaptive_quality or runtime_triangle_budget > 0 or _adapt_level > 0 or _limits_pushed
+		or prop_geometry))
 
 
 ## Sets the weather: [member rain_wetness], [member snow_cover] and [member puddle_level] (0..1).
@@ -538,6 +573,22 @@ func _on_node_added(node: Node) -> void:
 func _register_node(node: Node) -> void:
 	if node is GeometryInstance3D or node.is_class("GridMap"):
 		_register_materials(GADSMaterials.materials_of(node))
+	if node is MeshInstance3D and not Engine.is_editor_hint():
+		_props.consider(node as MeshInstance3D)
+
+
+## The props that draw with prop geometry now (see [member prop_geometry]).
+func get_prop_geometry_nodes() -> Array[MeshInstance3D]:
+	return _props.get_nodes()
+
+
+## Picks the props within range of the camera now (it runs four times a second by itself).
+func update_prop_geometry() -> void:
+	if not prop_geometry or not is_inside_tree():
+		return
+	# Without relief (a preset that draws flat) the props stay flat too.
+	var relief := enabled and get_effective_settings().get_quality() != GADSMaterials.Quality.FLAT
+	_props.update(get_viewport().get_camera_3d() if relief and get_viewport() != null else null)
 
 
 func _register_materials(materials: Array) -> void:

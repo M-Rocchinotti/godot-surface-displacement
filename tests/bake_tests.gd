@@ -73,6 +73,7 @@ func _run() -> void:
 		await _test("geometry_to_parallax_by_distance", test_geometry_range)
 		await _test("runtime_tessellation_follows_the_camera", test_runtime_tessellation)
 		await _test("runtime_budget_and_adaptive_quality", test_runtime_budget)
+		await _test("prop_geometry_near_the_camera", test_prop_geometry)
 	print("\nbake tests: %d passed, %d failed" % [_passed, _failed])
 	h.clear_scene()
 	h.viewport.queue_free()
@@ -1839,6 +1840,70 @@ func test_vertex_paint() -> void:
 		"the bake raises the layer where it is painted")
 	check(absf(top.get(Vector3(0, 0, 0.75), 1.0)) < 0.002, "and not where it is not")
 	node.queue_free()
+	await process_frame
+
+
+## GADSManager.prop_geometry: the nearest plain MeshInstance3D props with UV or triplanar relief
+## get a runtime tessellation drawing in their place while the camera is near, and draw their
+## parallax again when it leaves; world-planar ground, opted-out and far props do not.
+func test_prop_geometry() -> void:
+	var s := h.new_debug_scene()
+	var field := bump_field(128, 0.1)
+	var make := func(node_name: String, pos: Vector3, mat: Material) -> MeshInstance3D:
+		var mi := MeshInstance3D.new()
+		mi.name = node_name
+		mi.mesh = plane()
+		mi.material_override = mat
+		mi.position = pos
+		s.add_child(mi)
+		return mi
+	var near := make.call("Near", Vector3(0, 0, 0), uv_material(field, 0.08)) as MeshInstance3D
+	var second := make.call("Second", Vector3(3, 0, 0), uv_material(field, 0.08)) as MeshInstance3D
+	var third := make.call("Third", Vector3(-3, 0, 0), uv_material(field, 0.08)) as MeshInstance3D
+	var far := make.call("Far", Vector3(0, 0, -40), uv_material(field, 0.08)) as MeshInstance3D
+	var ground := make.call("Ground", Vector3(0, 0, 3), GADSMaterials.create(GADSMaterials.Mapping.WORLD,
+		{"height": ImageTexture.create_from_image(field["image"])}, {"height_m": 0.05, "height_center": 0.0}, GADSMaterials.Quality.POM)) as MeshInstance3D
+	var opted := make.call("OptedOut", Vector3(0, 0, -3), uv_material(field, 0.08)) as MeshInstance3D
+	opted.add_to_group(GADSPropGeometry.OPT_OUT_GROUP)
+	check(not GADSPropGeometry.is_candidate(ground) and not GADSPropGeometry.is_candidate(opted) and GADSPropGeometry.is_candidate(near),
+		"world-planar ground and opted-out props are not candidates")
+	var manager := GADSManager.new()
+	manager.preset = GADSSettings.Preset.HIGH
+	manager.prop_geometry_range = 5.0
+	manager.prop_geometry_max = 2
+	manager.prop_geometry = true
+	s.add_child(manager)
+	var cam := h.add_camera(Vector3(0.5, 2.0, 2.5), Vector3(0, 0, 0), 60.0)
+	var waited := 0
+	while manager.get_prop_geometry_nodes().size() < 2 and waited < 900:
+		await process_frame
+		waited += 1
+	var nodes := manager.get_prop_geometry_nodes()
+	print("  props with geometry after %d frames: %s" % [waited, nodes.map(func(n: Node) -> String: return String(n.name))])
+	check(nodes.size() == 2 and near in nodes and not far in nodes and not ground in nodes and not opted in nodes,
+		"the two nearest props get geometry (max 2), not the far one, the ground or the opted-out one")
+	var proxy := manager._props.get_proxy(near)
+	var tris := GADSProfiler.mesh_triangles(proxy.mesh) if proxy != null else 0
+	check(proxy != null and proxy.visible and proxy.mesh is ArrayMesh and tris > 10 * GADSProfiler.mesh_triangles(near.mesh) and near.get_child_count() == 0,
+		"an internal, view-dependent tessellation (%d triangles) draws in its place" % tris)
+	GADSGlobals.set_value(GADSGlobals.DEBUG, Vector4(GADSManager.DebugView.TESSELLATION, 0.1, 0, 0))
+	await h.frames(3)
+	var px := cam.unproject_position(Vector3(0, 0.05, 0))
+	var c_near := (await h.capture()).get_pixelv(Vector2i(px))
+	cam.global_position = Vector3(0.5, 30.0, 30.0)
+	manager.update_prop_geometry()
+	await h.frames(3)
+	var px_far := cam.unproject_position(Vector3(0, 0.05, 0))
+	var c_far := (await h.capture()).get_pixelv(Vector2i(px_far))
+	GADSGlobals.set_value(GADSGlobals.DEBUG, Vector4(0, 0.1, 0, 0))
+	print("  the near prop in the Tessellation view: %s near, %s far" % [c_near, c_far])
+	check(maxf(c_near.r, c_near.g) > c_near.b, "near, the prop draws refined geometry (green and warmer)")
+	check(manager.get_prop_geometry_nodes().is_empty() and c_far.b > c_far.r, "far away it draws its parallax again")
+	cam.global_position = Vector3(0.5, 2.0, 2.5)
+	manager.update_prop_geometry()
+	manager.prop_geometry = false
+	check(manager.get_prop_geometry_nodes().is_empty(), "turning it off lets them go")
+	h.clear_scene()
 	await process_frame
 
 

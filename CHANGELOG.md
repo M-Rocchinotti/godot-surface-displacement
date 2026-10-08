@@ -157,6 +157,12 @@ All notable changes to this project are documented here. The format follows
   collision and the detail field's ground data. Edited maps are one texel per vertex, saved into
   `data_directory`. Runtime API: `sculpt()`, `paint_splatmap()`, `set_height_region()` /
   `set_splat_region()`, `intersect_ray()` (no physics needed), the `edited` signal.
+- **Prop geometry** (`GADSManager.prop_geometry`): the nearest plain MeshInstance3D props
+  drawing a UV-mapped or triplanar GADS material get a runtime, view-dependent tessellation
+  (`GADSPropGeometry`: an internal GADSMeshInstance3D drawing in their place, sharing the runtime
+  triangle budget) while the camera is within `prop_geometry_range`, and draw their parallax again
+  beyond it; no conversion or bake needed. Roadmap item (runtime geometry for non-planar surfaces
+  near the camera) done.
 - **Before / after view** (`GADSManager.DebugView.BEFORE_AFTER`, `debug_split`): left of the
   split GADS surfaces draw without their relief and the near-camera field lies flat, right of it
   as usual, with a line at the split; also in the demo's View menu.

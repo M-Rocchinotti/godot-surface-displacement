@@ -439,6 +439,16 @@ them per path. Because a scene does not list a streamed bake among its dependenc
 `GADSBakeCache.paths_in_file()` also reads the paths stored in a scene's bytes (text and binary
 formats both store a path as its UTF-8 text), for Clean Bake Cache and the export plugin.
 
+**Prop geometry.** `GADSManager.prop_geometry` gives plain meshes the runtime tessellation
+without converting them: `GADSPropGeometry` keeps the MeshInstance3D nodes that draw a UV or
+triplanar GADS material with relief (seen as they enter the tree), four times a second picks the
+nearest within range, and gives each an internal view-dependent GADSMeshInstance3D child (same
+mesh, materials and draw settings). The child stays hidden until its first tessellation is ready,
+then the original's rendering instance is hidden (`RenderingServer.instance_set_visible`, so
+nothing about the node changes and nothing is saved); out of range (with a quarter of slack)
+the child is freed and the original shown again. World-planar materials are left to the
+near-camera field, which already covers the ground.
+
 **Runtime (view-dependent) tessellation.** The same tessellator with a view position: a
 triangle's tolerance becomes `max(max_error, pixel_error * distance / focal_px)`, where distance
 is from the eye to the triangle's bounding sphere and `focal_px` the pixels per radian of the
