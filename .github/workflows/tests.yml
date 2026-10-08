@@ -52,6 +52,14 @@ jobs:
           name: godot-logs
           path: build/logs/
 
+      - name: Upload the shots that differ from their reference images
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: visual-regression
+          path: build/visual/
+          if-no-files-found: ignore
+
   native:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
