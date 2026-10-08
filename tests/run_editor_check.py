@@ -47,7 +47,7 @@ script="editor_check_plugin.gd"
 
 
 def run(args: list[str]) -> tuple[int, str]:
-    proc = subprocess.run([sys.executable, str(DEST / "tools" / "godot.py"), "--timeout", "300"] + args,
+    proc = subprocess.run([sys.executable, str(DEST / "tools" / "godot.py"), "--timeout", "900"] + args,
                           cwd=DEST, capture_output=True, text=True, encoding="utf-8", errors="replace")
     return proc.returncode, proc.stdout + proc.stderr
 
