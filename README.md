@@ -100,7 +100,8 @@ what the engine allows:
 - A demo with seven scenes (gravel path, cobblestone street, rocky ground, brick wall and props,
   hills with a rover leaving tracks, a cliff tessellated for the camera, a material lab of
   procedural materials, surface effects and vector displacement), a flat / POM / POM + geometry
-  comparison, weather and a frame-time overlay.
+  comparison, a before / after view, runtime prop geometry, impacts (C), weather and a
+  frame-time overlay.
 
 ## Requirements
 

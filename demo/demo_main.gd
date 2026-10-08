@@ -63,6 +63,7 @@ func load_scene(index: int) -> void:
 		gads.near_field = old_gads.near_field
 		gads.scatter = old_gads.scatter
 		gads.debug_view = old_gads.debug_view
+		gads.prop_geometry = old_gads.prop_geometry
 	else:
 		gads.preset = _preset
 	cam.current = true
@@ -216,6 +217,11 @@ func _build_ui() -> void:
 			_sync_ui())
 		box.add_child(check)
 		_feature_checks[feature] = check
+	var props := CheckButton.new()
+	props.text = "Prop geometry (runtime)"
+	props.tooltip_text = "Props drawn with parallax get a runtime tessellation near the camera (GADSManager.prop_geometry)."
+	props.toggled.connect(func(on: bool) -> void: gads.prop_geometry = on)
+	box.add_child(props)
 	_section(box, "Compare  (B)")
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 4)
