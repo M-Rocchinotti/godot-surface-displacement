@@ -72,6 +72,7 @@ func _run() -> void:
 	await _test("skinned", test_skinned)
 	await _test("blend_shapes", test_blend_shapes)
 	await _test("import_options", test_import)
+	await _test("import_profiles", test_import_profiles)
 	if DisplayServer.get_name() != "headless":
 		await _test("renders_like_parallax", test_render)
 		await _test("silhouette", test_silhouette)
@@ -1289,6 +1290,47 @@ func test_import() -> void:
 	report = GADSImportTools.process(scene, {"meshes": GADSImportTools.Meshes.ALL_GADS, "bake": false})
 	check(report["meshes"] == 1 and scene.get_node("Floor") is GADSMeshInstance3D and not (scene.get_node("Floor") as GADSMeshInstance3D).baked,
 		"Every Mesh With a GADS Material picks the rest (unbaked when bake is off)")
+	scene.free()
+
+
+## GADS profiles on import: a mesh named <name>-gads-<id> takes that built-in profile's settings
+## (rock: High, rounded, collision; wall: locked borders), a character surface stays a
+## MeshInstance3D, the scene's profile (a GADSProfile of one's own, with its material) applies to
+## plain *-gads meshes; the import plugin's options map to the profile.
+func test_import_profiles() -> void:
+	var field := bump_field(64, 0.08)
+	var mat := uv_material(field, 0.03)
+	var scene := Node3D.new()
+	scene.name = "Kit"
+	for n: String in ["Boulder-gads-rock", "Panel-gads-wall", "Hero-gads-character", "Crate-gads"]:
+		var mi := MeshInstance3D.new()
+		mi.name = n
+		mi.mesh = plane()
+		if n != "Crate-gads":
+			mi.material_override = mat
+		scene.add_child(mi)
+		mi.owner = scene
+	var own := GADSProfile.new()
+	own.material = mat
+	own.quality = GADSMeshInstance3D.Quality.LOW
+	var report := GADSImportTools.process(scene, {"profile": own})
+	print("  %s" % report)
+	var boulder := scene.get_node_or_null("Boulder") as GADSMeshInstance3D
+	var panel := scene.get_node_or_null("Panel") as GADSMeshInstance3D
+	var crate := scene.get_node_or_null("Crate") as GADSMeshInstance3D
+	var hero := scene.get_node_or_null("Hero")
+	check(boulder != null and boulder.quality == GADSMeshInstance3D.Quality.HIGH and is_equal_approx(boulder.smooth_shape, 0.5)
+		and boulder.collision == GADSMeshBaker.Collision.TRIMESH and boulder.baked and boulder.collision_shape != null,
+		"Boulder-gads-rock: the rock profile (High, rounded, its collision), baked")
+	check(panel != null and panel.lock_borders and is_equal_approx(panel.hard_angle, 20.0) and panel.baked, "Panel-gads-wall: locked borders (a modular kit piece)")
+	check(hero is MeshInstance3D and not (hero is GADSMeshInstance3D) and hero.material_override == mat, "Hero-gads-character stays a MeshInstance3D (parallax only)")
+	check(crate != null and crate.quality == GADSMeshInstance3D.Quality.LOW and crate.material_override == mat and crate.baked,
+		"Crate-gads: the scene's own profile, its material and quality")
+	check(report["meshes"] == 3 and report["baked"] == 3, "three GADSMeshInstance3D, all baked")
+	var plugin_script: Script = load("res://addons/gads/editor/gads_import_plugin.gd")
+	check(plugin_script.profile_option(2, "") == "rock" and plugin_script.profile_option(0, "") == "" and plugin_script.profile_option(3, "res://kit.tres") == "res://kit.tres"
+		and GADSImportTools.profile_of("wall").lock_borders and GADSImportTools.profile_of("none") == null and GADSProfile.builtin("castle") == null,
+		"the import options name a built-in profile or a resource of one's own")
 	scene.free()
 
 

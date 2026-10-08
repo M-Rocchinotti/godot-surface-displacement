@@ -183,6 +183,11 @@ All notable changes to this project are documented here. The format follows
   mappings, detail, layers, masks and sculpt maps; vector displacement, blend shapes, skinning,
   clusters and runtime tessellation still need the native library. Its bakes have their own
   cache key.
+- **GADS profiles** (`GADSProfile`): the bake settings for a kind of asset in one resource,
+  built in as prop, rock (High, rounded, collision), wall (modular kit: locked borders), terrain
+  (locked borders, along +Y, collision) and character (parallax only), or saved as a .tres with a
+  material. Scene import option `profile` / `profile_resource`, per-mesh names
+  `<name>-gads-<profile>`, and the GADSMeshInstance3D inspector's Apply Profile menu (undoable).
 - **More texture-set conventions** (Create Material from Selected Textures, the import offer):
   Megascans' Gloss and Unity's Smoothness (roughness inverted), Unity's BaseMap and MaskMap
   (metallic, occlusion, smoothness repacked to ORM), RMA packing, and a height or displacement

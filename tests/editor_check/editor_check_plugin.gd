@@ -154,6 +154,16 @@ func _run() -> void:
 	var buttons := EditorInterface.get_inspector().find_children("*", "Button", true, false).filter(
 			func(b: Button) -> bool: return b.text in ["Bake", "Rebuild", "Clear"])
 	_check(buttons.size() == 3, "the inspector shows Bake, Rebuild and Clear")
+	var profiles := EditorInterface.get_inspector().find_children("*", "OptionButton", true, false).filter(
+			func(o: OptionButton) -> bool: return o.item_count > 0 and o.get_item_text(0) == "Apply Profile...")
+	if profiles.size() == 1:
+		(profiles[0] as OptionButton).item_selected.emit(3) # Wall (Modular Kit)
+	var walled := baked_box.lock_borders and is_equal_approx(baked_box.hard_angle, 20.0)
+	ur.undo()
+	var unwalled := not baked_box.lock_borders and is_equal_approx(baked_box.hard_angle, 30.0)
+	ur.redo()
+	_check(profiles.size() == 1 and walled and unwalled and baked_box.lock_borders, "Apply Profile > Wall locks the borders, undoable")
+	ur.undo()
 	_sd_plugin.bake_selected_meshes()
 	var baked_path: String = baked_box.bake_stats.get("path", "") if baked_box != null else ""
 	_check(baked_box != null and baked_box.baked and baked_path.begins_with("res://gads_baked/") and FileAccess.file_exists(baked_path)

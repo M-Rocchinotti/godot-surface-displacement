@@ -40,6 +40,8 @@ class BakePanel extends VBoxContainer:
 	var _progress: ProgressBar
 	var _status: Label
 	var _before := {}
+	const PROFILE_IDS: PackedStringArray = ["prop", "rock", "wall", "terrain"]
+	const PROFILE_LABELS: PackedStringArray = ["Prop", "Rock", "Wall (Modular Kit)", "Terrain Piece"]
 
 	func _ready() -> void:
 		var row := HBoxContainer.new()
@@ -58,6 +60,16 @@ class BakePanel extends VBoxContainer:
 		_paint = _button(row, "Paint", "Paint vertex colours in the 3D viewport (left-drag): the layered materials' layer masks (layer 1 red, layer 2 green); each stroke bakes again.", _on_paint)
 		_paint.toggle_mode = true
 		_paint.button_pressed = PaintInspector.PaintPanel.is_painting(node)
+		var profile := OptionButton.new()
+		profile.add_item("Apply Profile...")
+		for label in PROFILE_LABELS:
+			profile.add_item(label)
+		profile.tooltip_text = "Set the bake settings of a kind of asset (undoable): Prop (the defaults), Rock (High, rounded, collision), Wall (modular kit: locked borders) or Terrain Piece (locked borders, along +Y, collision)."
+		profile.item_selected.connect(func(i: int) -> void:
+			if i > 0:
+				apply_profile(PROFILE_IDS[i - 1])
+			profile.select(0))
+		row.add_child(profile)
 		_sculpt_row = HBoxContainer.new()
 		add_child(_sculpt_row)
 		var mode := OptionButton.new()
@@ -104,6 +116,15 @@ class BakePanel extends VBoxContainer:
 				node.bake_progress.disconnect(_on_progress)
 			if node.bake_finished.is_connected(_on_finished):
 				node.bake_finished.disconnect(_on_finished)
+
+	## Gives the node the built-in GADSProfile [param id]'s settings, undoably.
+	func apply_profile(id: String) -> void:
+		var values := GADSProfile.builtin(id).settings()
+		undo_redo.create_action("Apply GADS profile %s" % id, UndoRedo.MERGE_DISABLE, node)
+		for key: String in values:
+			undo_redo.add_do_property(node, key, values[key])
+			undo_redo.add_undo_property(node, key, node.get(key))
+		undo_redo.commit_action()
 
 	func _button(row: HBoxContainer, text: String, tip: String, action: Callable) -> Button:
 		var b := Button.new()

@@ -12,7 +12,12 @@ extends RefCounted
 ##   [code]-col[/code] hints), or every one drawing a GADS material.
 ## - [code]bake[/code]: bake them during the import with [code]quality[/code]; the baked meshes are
 ##   stored in the imported scene (no cache files), so they are ready when the scene is
-##   instanced. Needs the native library; without it the nodes stay unbaked.
+##   instanced.
+## - [code]profile[/code]: a [GADSProfile] for them (a built-in id such as "rock", a .tres path or
+##   a GADSProfile): its settings, material and quality instead of [code]quality[/code]. A mesh
+##   named [code]<name>-gads-<id>[/code] (rock, wall, terrain, prop, character) gets that built-in
+##   profile whatever the option says; a profile without geometry (character) keeps the
+##   MeshInstance3D and only gives it the profile's material.
 
 enum Meshes { NONE, SUFFIX, ALL_GADS }
 
@@ -23,6 +28,7 @@ const DEFAULTS := {
 	"meshes": Meshes.SUFFIX,
 	"bake": true,
 	"quality": GADSMeshInstance3D.Quality.MEDIUM,
+	"profile": "",
 }
 
 
@@ -50,18 +56,65 @@ static func process(root: Node, options := {}) -> Dictionary:
 		var mi := node as MeshInstance3D
 		if mi.mesh == null:
 			continue
-		var wanted := String(mi.name).to_lower().ends_with(SUFFIX) if o["meshes"] == Meshes.SUFFIX else _draws_gads(mi)
+		var named := String(mi.name).to_lower().ends_with(SUFFIX) or not _name_profile(mi.name).is_empty()
+		var wanted := named if o["meshes"] == Meshes.SUFFIX else (named or _draws_gads(mi))
 		if wanted:
 			candidates.append(mi)
 	if root is MeshInstance3D and not (root is GADSMeshInstance3D):
 		(report["skipped"] as Array).append("%s: the scene's root stays as it is" % root.name)
+	var scene_profile := profile_of(o["profile"])
 	for mi in candidates:
+		var id := _name_profile(mi.name)
+		var profile := GADSProfile.builtin(id) if not id.is_empty() else scene_profile
+		if profile != null and not profile.geometry:
+			if profile.material != null:
+				mi.material_override = profile.material
+			mi.name = _base_name(mi.name)
+			continue
 		var node := _replace(mi, root)
 		report["meshes"] += 1
-		if o["bake"]:
-			if _bake(node, root, o["quality"], report):
+		if profile != null:
+			profile.apply(node)
+		if o["bake"] and (profile == null or profile.bake):
+			if _bake(node, root, profile.quality if profile != null else o["quality"], report):
 				report["baked"] += 1
 	return report
+
+
+## [param value] as a [GADSProfile]: one, a built-in id, a resource path, or null ("", "none" or
+## unknown, with a warning for a path that does not load).
+static func profile_of(value: Variant) -> GADSProfile:
+	if value is GADSProfile:
+		return value
+	var text := String(value) if value != null else ""
+	if text.is_empty() or text.to_lower() == "none":
+		return null
+	if text.to_lower() in GADSProfile.BUILTIN_IDS:
+		return GADSProfile.builtin(text)
+	var res := load(text) as GADSProfile if ResourceLoader.exists(text) else null
+	if res == null:
+		push_warning("GADS import: %s is not a GADSProfile; no profile applied" % text)
+	return res
+
+
+## The built-in profile id a node name asks for ("Rock-gads-rock": "rock"), or "".
+static func _name_profile(node_name: String) -> String:
+	var lower := node_name.to_lower()
+	var at := lower.rfind(SUFFIX + "-")
+	if at < 0:
+		return ""
+	var id := lower.substr(at + SUFFIX.length() + 1)
+	return id if id in GADSProfile.BUILTIN_IDS else ""
+
+
+## [param node_name] without its "-gads" or "-gads-<profile>" suffix.
+static func _base_name(node_name: String) -> String:
+	var lower := node_name.to_lower()
+	if not _name_profile(node_name).is_empty():
+		return node_name.left(lower.rfind(SUFFIX + "-"))
+	if lower.ends_with(SUFFIX):
+		return node_name.left(node_name.length() - SUFFIX.length())
+	return node_name
 
 
 static func _draws_gads(mi: MeshInstance3D) -> bool:
@@ -75,9 +128,7 @@ static func _draws_gads(mi: MeshInstance3D) -> bool:
 ## materials, settings and children).
 static func _replace(mi: MeshInstance3D, root: Node) -> GADSMeshInstance3D:
 	var node := GADSMeshInstance3D.new()
-	var base := String(mi.name)
-	if base.to_lower().ends_with(SUFFIX):
-		base = base.left(base.length() - SUFFIX.length())
+	var base := _base_name(mi.name)
 	node.source_mesh = mi.mesh
 	node.transform = mi.transform
 	node.visible = mi.visible
