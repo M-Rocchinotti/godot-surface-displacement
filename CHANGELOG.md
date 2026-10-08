@@ -157,6 +157,10 @@ All notable changes to this project are documented here. The format follows
   collision and the detail field's ground data. Edited maps are one texel per vertex, saved into
   `data_directory`. Runtime API: `sculpt()`, `paint_splatmap()`, `set_height_region()` /
   `set_splat_region()`, `intersect_ray()` (no physics needed), the `edited` signal.
+- **Curvature-aware subdivision** (`GADSMeshInstance3D.smooth_shape`, the tessellator's
+  `smooth_shape` setting): a vertex added on a smooth edge moves towards the circular arc the
+  corner normals describe (exact on spheres and cylinders), and that curvature counts in the
+  refinement error, so low-poly curved props bake round; hard edges stay sharp.
 - **Impacts** (`GADSImpact.dent_ray()` / `dent_node()`): one call dents whatever is hit: a mark
   in the runtime deformation where it covers the hit, the heights of a GADSTerrain3D, or the
   sculpt map of a baked GADSMeshInstance3D (baked again in the background). The demo's C key digs

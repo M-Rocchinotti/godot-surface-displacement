@@ -338,6 +338,17 @@ The relief of the GADS materials made into real geometry, offline, for any trian
 - Everything runs on worker threads (`parallel_for` over triangles and groups); results do not
   depend on the thread count (bake tests).
 
+**Curvature-aware subdivision.** With `smooth_shape` a bisection does not put the new vertex on
+the straight edge: where the edge is smooth (every triangle on it has the same corner normals at
+both ends) it goes to the middle of the circular arc perpendicular to both corner normals, which
+lies (chord / 2) tan(phi / 4) from the chord along the mean normal (phi the angle between the
+normals; outwards where the normals spread along the edge, inwards where they close), times
+`smooth_shape`. The new corner takes the mean normal, so repeated bisection stays on a sphere or
+cylinder exactly. Classic Phong tessellation was tried first: it overshoots by about 6 % on a
+45-degree edge and the overshoot compounds with every level. A triangle's error adds the largest
+such offset of its edges, so curved regions refine until the curve is within tolerance; flat
+faces and hard edges (whose corners carry the face normal) add nothing.
+
 **Vector displacement.** A UV-mapped material can add a vector map: an XYZ offset per texel
 (three height maps inside the tessellator, one per channel; 0..1 around 0.5 unless signed) times
 `vector_displacement_m`. In tangent space the offset is `x * T + y * B + z * N`, where `N` is the

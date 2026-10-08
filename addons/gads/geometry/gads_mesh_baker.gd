@@ -435,7 +435,7 @@ func _make_tessellator(settings: Dictionary) -> RefCounted:
 		tess.call("set_offset_map", sculpt_image)
 	var native_settings := {}
 	for k: String in ["max_error", "min_edge_texels", "max_triangles", "max_level", "lock_borders", "weld_distance",
-			"direction_mode", "direction", "geometry_normals", "hard_angle_deg", "filter_heights", "threads",
+			"direction_mode", "direction", "geometry_normals", "hard_angle_deg", "smooth_shape", "filter_heights", "threads",
 			"view_dependent", "view_position", "pixel_error", "focal_px", "min_edge_pixels"]:
 		if settings.has(k):
 			native_settings[k] = settings[k]

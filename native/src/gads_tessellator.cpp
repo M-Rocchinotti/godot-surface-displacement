@@ -252,6 +252,7 @@ void GADSTessellator::set_settings(const Dictionary &p_settings) {
 	}
 	s.geometry_normals = p_settings.get("geometry_normals", s.geometry_normals);
 	s.hard_angle_deg = p_settings.get("hard_angle_deg", s.hard_angle_deg);
+	s.smooth_shape = p_settings.get("smooth_shape", s.smooth_shape);
 	s.filter_heights = p_settings.get("filter_heights", s.filter_heights);
 	s.threads = p_settings.get("threads", s.threads);
 	s.view_dependent = p_settings.get("view_dependent", s.view_dependent);

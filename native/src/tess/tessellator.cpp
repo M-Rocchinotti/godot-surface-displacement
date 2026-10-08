@@ -728,7 +728,42 @@ double Tessellator::tri_tolerance(int t) const {
 
 // How far the triangle's own height field deviates from the plane through its corners (m). Below
 // tol the bound is enough (the triangle needs no refinement either way).
+// The middle of the circular arc from a to b that is perpendicular to the corner normals at both
+// ends lies (chord / 2) tan(phi / 4) from the chord's middle along the mean normal, phi being the
+// angle between the normals: exact on spheres and cylinders (and on the arcs subdividing them,
+// as a new corner takes the mean normal), nothing on flat faces. Outwards where the normals
+// spread along the edge (convex), inwards where they close (concave).
+V3 Tessellator::curve_offset(int ca, int cb) const {
+	const Corner &x = corners_[ca], &y = corners_[cb];
+	const V3 &a = groups_[x.group].rest, &b = groups_[y.group].rest;
+	V3 na = x.normal.normalized(V3()), nb = y.normal.normalized(V3());
+	V3 nm = (na + nb).normalized(V3());
+	double phi = std::acos(std::clamp(na.dot(nb), -1.0, 1.0));
+	double sagitta = (b - a).length() * 0.5 * std::tan(phi * 0.25);
+	double side = (nb - na).dot(b - a) >= 0.0 ? 1.0 : -1.0;
+	return nm * (sagitta * side * settings_.smooth_shape);
+}
+
+double Tessellator::curvature_error(int t) const {
+	const Tri &tr = tris_[t];
+	double worst = 0.0;
+	for (int k = 0; k < 3; k++) {
+		worst = std::max(worst, xform_.basis.xform(curve_offset(tr.c[k], tr.c[(k + 1) % 3])).length());
+	}
+	return worst;
+}
+
+// The triangle's error: how far its relief (and, with smooth_shape, the curved surface) leaves the
+// flat triangle.
 float Tessellator::tri_error(int t, double tol) const {
+	if (settings_.smooth_shape <= 0.0) {
+		return relief_error(t, tol);
+	}
+	double curv = curvature_error(t);
+	return float(curv) + relief_error(t, std::max(tol - curv, 0.0));
+}
+
+float Tessellator::relief_error(int t, double tol) const {
 	const Tri &tr = tris_[t];
 	int di = inputs_[tr.surface].displacement;
 	const Corner *c[3] = { &corners_[tr.c[0]], &corners_[tr.c[1]], &corners_[tr.c[2]] };
@@ -961,6 +996,35 @@ void Tessellator::split_edge(int ga, int gb) {
 	const Group &a = groups_[ga], &b = groups_[gb];
 	m.rest = (a.rest + b.rest) * 0.5;
 	m.world = (a.world + b.world) * 0.5;
+	if (settings_.smooth_shape > 0.0 && !(a.locked && b.locked && incident.size() == 1)) {
+		// Curved only where the edge is smooth: every side has the same normals at both ends (a
+		// hard edge or a crease stays straight, and both sides share the one new position).
+		int first_a = -1, first_b = -1;
+		bool smooth = true;
+		for (int t : incident) {
+			const Tri &tr = tris_[t];
+			for (int i = 0; i < 3; i++) {
+				int ca = tr.c[i], cb = tr.c[(i + 1) % 3];
+				int x = corners_[ca].group, y = corners_[cb].group;
+				if (x == gb && y == ga) {
+					std::swap(ca, cb);
+				} else if (!(x == ga && y == gb)) {
+					continue;
+				}
+				if (first_a < 0) {
+					first_a = ca;
+					first_b = cb;
+				} else {
+					smooth = smooth && corners_[ca].normal.dot(corners_[first_a].normal) > 0.9999 * corners_[ca].normal.length() * corners_[first_a].normal.length()
+						&& corners_[cb].normal.dot(corners_[first_b].normal) > 0.9999 * corners_[cb].normal.length() * corners_[first_b].normal.length();
+				}
+			}
+		}
+		if (smooth && first_a >= 0) {
+			m.rest = m.rest + curve_offset(first_a, first_b);
+			m.world = xform_.xform(m.rest);
+		}
+	}
 	m.dir = axis_directions_ ? a.dir : (a.dir + b.dir).normalized(a.dir);
 	m.locked = a.locked && b.locked && incident.size() == 1; // the midpoint of a border edge
 	m.level = std::max(a.level, b.level) + 1;

@@ -119,6 +119,11 @@ struct Settings {
 	V3 direction = V3(0.0, 1.0, 0.0); // world, for DIRECTION_AXIS
 	bool geometry_normals = true; // false: interpolate the source normals
 	double hard_angle_deg = 30.0; // source normals further apart than this stay split
+	// Curvature-aware subdivision, 0..1: a vertex added on an edge whose normals agree on both
+	// sides moves this far towards the circular arc its corner normals describe, and that curvature
+	// counts in the refinement error, so low-poly curved meshes come out round (spheres and
+	// cylinders exactly). 0: new vertices stay on the source's flat triangles. Hard edges stay sharp.
+	double smooth_shape = 0.0;
 	bool filter_heights = true; // where refinement stopped early: heights at each vertex's footprint
 	int threads = 0; // 0: hardware concurrency
 	// View-dependent refinement (runtime tessellation): a triangle's tolerance grows with its
@@ -242,6 +247,12 @@ private:
 	void layer_masks(const Displacement &d, const float color[4], const V3 &dir, double r_masks[2]) const;
 	double corner_h(const Corner &c) const;
 	float tri_error(int t, double tol) const;
+	float relief_error(int t, double tol) const;
+	// How far (object space) the curved surface lies from the straight edge between corners ca and
+	// cb at its middle, as smooth_shape moves a vertex added there.
+	V3 curve_offset(int ca, int cb) const;
+	// The largest curve_offset over a triangle's edges, in world metres.
+	double curvature_error(int t) const;
 	double tri_tolerance(int t) const;
 	double view_distance(int t) const;
 	double texel_size_m(int t) const;

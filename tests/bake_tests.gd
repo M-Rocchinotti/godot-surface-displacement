@@ -42,6 +42,7 @@ func _run() -> void:
 	await _test("refines_only_where_the_relief_is", test_adaptivity)
 	await _test("vector_displacement", test_vector_displacement)
 	await _test("closed_meshes_stay_closed", test_watertight)
+	await _test("smooth_shape_rounds_low_poly_meshes", test_smooth_shape)
 	await _test("locked_borders_stay", test_locked_borders)
 	await _test("triangle_budget", test_budget)
 	await _test("view_dependent_refinement", test_view_dependent)
@@ -428,6 +429,57 @@ func test_watertight() -> void:
 				open += 1
 		print("  %s: %d triangles, %d edges, %d not shared by exactly two" % [c[0], triangle_count(baker.mesh), edges.size(), open])
 		check(open == 0, "%s stays closed" % c[0])
+
+
+## smooth_shape (curvature-aware subdivision): a low-poly sphere with a flat material bakes round
+## (the triangles' centres close to the sphere) and closed; a box keeps its flat faces and sharp
+## edges.
+func test_smooth_shape() -> void:
+	var flat := Image.create(256, 256, false, Image.FORMAT_RF)
+	var mat := GADSMaterials.create(GADSMaterials.Mapping.UV, {"height": ImageTexture.create_from_image(flat)},
+		{"height_m": 0.01, "height_center": 0.0}, GADSMaterials.Quality.POM)
+	var sphere := SphereMesh.new()
+	sphere.radius = 0.5
+	sphere.height = 1.0
+	sphere.radial_segments = 8
+	sphere.rings = 4
+	var off_sphere := func(m: Mesh) -> float:
+		var worst := 0.0
+		for t: Array in triangles_of(m):
+			var centre: Vector3 = (t[0] + t[1] + t[2]) / 3.0
+			worst = maxf(worst, absf(0.5 - centre.length()))
+		return worst
+	var plain := bake_with(sphere, mat, {"max_error": 0.001})
+	var round := bake_with(sphere, mat, {"max_error": 0.001, "smooth_shape": 1.0})
+	if plain.mesh == null or round.mesh == null:
+		check(false, "the sphere bakes (%s %s)" % [plain.error, round.error])
+		return
+	var plain_off: float = off_sphere.call(plain.mesh)
+	var round_off: float = off_sphere.call(round.mesh)
+	print("  8-segment sphere: triangle centres up to %.1f mm off the sphere flat (%d triangles), %.1f mm with smooth_shape 1 (%d triangles)" % [
+		plain_off * 1000.0, triangle_count(plain.mesh), round_off * 1000.0, triangle_count(round.mesh)])
+	check(round_off < 0.25 * plain_off and triangle_count(round.mesh) > triangle_count(plain.mesh), "smooth_shape refines a low-poly sphere towards its curve")
+	var edges := {}
+	for t: Array in triangles_of(round.mesh):
+		var keys := [_weld(t[0]), _weld(t[1]), _weld(t[2])]
+		if keys[0] == keys[1] or keys[1] == keys[2] or keys[0] == keys[2]:
+			continue
+		for k in 3:
+			var a: Vector3i = keys[k]
+			var c: Vector3i = keys[(k + 1) % 3]
+			var key := [a, c] if [a.x, a.y, a.z] < [c.x, c.y, c.z] else [c, a]
+			edges[key] = edges.get(key, 0) + 1
+	check(edges.values().all(func(n: int) -> bool: return n == 2), "and it stays closed")
+	var field := Harness.make_wave_field(64)
+	var box_mat := GADSMaterials.create(GADSMaterials.Mapping.TRIPLANAR, {"height": ImageTexture.create_from_image(field["image"])},
+		{"height_m": 0.02, "height_center": 0.0, "texture_size_m": Vector2(0.5, 0.5)}, GADSMaterials.Quality.POM)
+	var box := bake_with(BoxMesh.new(), box_mat, {"max_error": 0.002, "smooth_shape": 1.0})
+	var bulge := 0.0
+	for p: Vector3 in box.mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX]:
+		# Every vertex lies on (or, displaced, outside) a face: none moves inwards off the cube.
+		bulge = maxf(bulge, 0.5 - maxf(absf(p.x), maxf(absf(p.y), absf(p.z))))
+	print("  box with smooth_shape 1: deepest vertex %.2f mm inside the cube" % (bulge * 1000.0))
+	check(bulge < 0.0005, "a box keeps its flat faces and sharp edges")
 
 
 static func _weld(p: Vector3) -> Vector3i:

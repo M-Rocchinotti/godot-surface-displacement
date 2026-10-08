@@ -86,6 +86,11 @@ const STREAM_INTERVAL := 0.1
 ## Source normals further apart than this keep a hard edge.
 @export_range(0.0, 180.0, 0.1, "degrees") var hard_angle := 30.0
 @export var generate_lods := true
+## Curvature-aware subdivision (0..1): new vertices move this far towards the curved surface the
+## source's normals describe (circular arcs between the vertices: spheres and cylinders exactly),
+## and the bake refines where that curve leaves the flat triangles, so a low-poly rock or barrel
+## comes out round. Hard edges stay sharp. 0: new vertices stay on the source's flat triangles.
+@export_range(0.0, 1.0, 0.05) var smooth_shape := 0.0
 ## Splits the bake into clusters of at most this many triangles, each drawn as its own instance:
 ## the engine culls them and picks LODs per cluster, so a large mesh (a cliff, a facade, a terrain
 ## patch) is detailed only where the camera is close. 0: one mesh.
@@ -295,6 +300,8 @@ func get_bake_settings() -> Dictionary:
 		"hard_angle_deg": hard_angle,
 		"lods": generate_lods,
 	}
+	if smooth_shape > 0.0:
+		settings["smooth_shape"] = smooth_shape
 	if cluster_triangles > 0:
 		settings["cluster_triangles"] = cluster_triangles
 	if sculpt_map != null:
