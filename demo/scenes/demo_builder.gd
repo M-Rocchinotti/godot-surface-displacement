@@ -634,7 +634,7 @@ static func build_material_lab() -> Node3D:
 	var wall := _mesh_node(root, "Wall", wall_quad(Vector2(8, 3), 2.0), wall_mat, Vector3(0, 0, -6))
 	wall.rotation_degrees = Vector3.ZERO
 	# Baked spheres, one per procedural kind.
-	var kinds := ["rock", "stones", "craters", "cracks", "ridged"]
+	var kinds := ["rock", "stones", "craters", "cracks", "ridged", "scales"]
 	for i in kinds.size():
 		var kind: String = kinds[i]
 		# Around a sphere u runs twice as far as v: two repeats around keep the texels square.
@@ -648,7 +648,7 @@ static func build_material_lab() -> Node3D:
 		var mi := MeshInstance3D.new()
 		mi.mesh = sphere
 		mi.material_override = mat
-		mi.position = Vector3(-4.0 + 2.0 * i, 0.6, -2.5)
+		mi.position = Vector3(-5.0 + 2.0 * i, 0.6, -2.5)
 		var node := baked(mi, "Sphere_%s" % kind)
 		node.quality = GADSMeshInstance3D.Quality.MEDIUM
 		root.add_child(node)

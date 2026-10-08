@@ -84,8 +84,8 @@ what the engine allows:
   the materials' relief, undoable and baked again per stroke.
 - Paint the layered materials' layers onto any mesh in the viewport (vertex colours, on a copy of
   the mesh so the asset stays untouched): the parallax and the bake follow the paint.
-- Procedural relief without texture files: eleven tileable patterns (noise, ridged, billow, rock,
-  stones, cracks, bricks, tiles, waves, ripples, craters) and normal, occlusion, curvature,
+- Procedural relief without texture files: thirteen tileable patterns (noise, ridged, billow, rock,
+  stones, cracks, bricks, tiles, waves, ripples, craters, scales, dunes) and normal, occlusion, curvature,
   albedo and ORM maps from any height map, as a complete material in one click.
 - Editor tools: create a GADS material from a downloaded texture set (roles from file names,
   proposed depth, height converted to 16-bit EXR, ORM packed, DirectX normals converted), add
@@ -236,7 +236,8 @@ material.set_shader_parameter("cavity_color", Color(0.18, 0.25, 0.1))
 #### Procedural materials (no texture files)
 
 **Project > Tools > GADS: Generate Procedural Material...** makes a complete material from a
-pattern: noise, ridged, billow, rock, stones, cracks, bricks, tiles, waves, ripples or craters.
+pattern: noise, ridged, billow, rock, stones, cracks, bricks, tiles, waves, ripples, craters,
+scales or dunes.
 Pick the kind, size (256 to 2048 px), seed, features per tile, tile size, relief depth and
 mapping; GADS writes `<name>_height.exr` (half float with mipmaps), `<name>_normal.png`,
 `<name>_albedo.png` (two colours by height, darker where occluded and in hollows) and
@@ -942,8 +943,8 @@ terrain's layers. The cliff is a GADSMeshInstance3D tessellated for the camera w
 runs (`view_dependent`: about 90 000 triangles seen from its foot, more when it fills the view
 from further out) and split into clusters; walk along its foot to see the displaced outline.
 The material lab is made without texture files: a procedural tile floor with dirt in the joints
-and worn edges, a procedural brick wall with moss in the joints, five baked spheres (rock,
-stones, craters, cracks, ridged), the stones sphere again unbaked with silhouette parallax (its
+and worn edges, a procedural brick wall with moss in the joints, six baked spheres (rock,
+stones, craters, cracks, ridged, scales), the stones sphere again unbaked with silhouette parallax (its
 outline shows the stones), a pool whose billowing relief flows and breathes, and a panel whose
 vector displacement curls into overhanging ridges (view Grazing).
 

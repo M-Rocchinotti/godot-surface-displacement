@@ -862,7 +862,7 @@ func test_procedural() -> void:
 	var same := kinds.size() == native.size()
 	for k in kinds:
 		same = same and native.has(k)
-	check(same and kinds.size() == 11, "a preset for each of the native generator's %d kinds" % native.size())
+	check(same and kinds.size() == 13, "a preset for each of the native generator's %d kinds" % native.size())
 	var size := 128
 	var bad := []
 	var seams := []

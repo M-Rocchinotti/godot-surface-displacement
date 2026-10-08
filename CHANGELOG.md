@@ -157,6 +157,8 @@ All notable changes to this project are documented here. The format follows
   collision and the detail field's ground data. Edited maps are one texel per vertex, saved into
   `data_directory`. Runtime API: `sculpt()`, `paint_splatmap()`, `set_height_region()` /
   `set_splat_region()`, `intersect_ray()` (no physics needed), the `edited` signal.
+- **Two more procedural patterns**: `scales` (overlapping rows of domes, for skin, armour and
+  organic surfaces) and `dunes` (gentle windward slopes, steep lee faces, wind ripples).
 - **GADS material inspector**: a row at the top of a GADS material's inspector shows its mapping
   and switches its quality, depth write and silhouette parallax (the matching variant, undoable).
 - **Curvature-aware subdivision** (`GADSMeshInstance3D.smooth_shape`, the tessellator's

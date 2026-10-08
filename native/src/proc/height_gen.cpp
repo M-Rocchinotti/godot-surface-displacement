@@ -189,7 +189,7 @@ void normalise(std::vector<float> &h) {
 
 const std::vector<std::string> &generator_kinds() {
 	static const std::vector<std::string> kinds = { "noise", "ridged", "billow", "rock", "stones", "cracks", "bricks", "tiles",
-		"waves", "ripples", "craters" };
+		"waves", "ripples", "craters", "scales", "dunes" };
 	return kinds;
 }
 
@@ -219,7 +219,7 @@ std::vector<float> generate(const std::string &kind, int size, const GenParams &
 	// Bricks: an even number of rows, a whole number of bricks per row (half-brick offset on odd
 	// rows), so the pattern tiles.
 	int rows = std::max(2, cells + (cells & 1));
-	int per_row = kind == "tiles" ? rows : std::max(1, int(std::lround(rows / std::max(p.aspect, 0.1))));
+	int per_row = kind == "tiles" || kind == "scales" ? rows : std::max(1, int(std::lround(rows / std::max(p.aspect, 0.1))));
 	// Waves: integer wave vectors around a main direction.
 	struct Wave {
 		int a, b;
@@ -250,6 +250,8 @@ std::vector<float> generate(const std::string &kind, int size, const GenParams &
 			spots.push_back({ rnd(i, 7, seed), rnd(i, 8, seed), r });
 		}
 	}
+	// Dunes: crests across a whole-number direction, so the pattern tiles.
+	int dune_a = cells, dune_b = int(std::lround(cells * 0.6 * (rnd(3, 1, seed) - 0.5)));
 	const double sharp = std::clamp(p.sharpness, 0.0, 1.0);
 	parallel_for(size_t(size), threads, [&](size_t row) {
 		for (int col = 0; col < size; col++) {
@@ -316,6 +318,38 @@ std::vector<float> generate(const std::string &kind, int size, const GenParams &
 						double window = 1.0 - smoothstep(0.3, 0.5, r);
 						h += std::cos(TAU * r * freq) * std::exp(-r * 6.0) * window;
 					}
+					break;
+				}
+				case 11: { // scales: rows of overlapping discs, half a scale offset per row, each a dome;
+					// where discs overlap the lower row's lies on top (as on a fish or a lizard)
+					double fr = v * rows;
+					int r = int(std::floor(fr));
+					bool covered = false;
+					for (int rr = r + 1; rr >= r - 1 && !covered; rr--) {
+						double offset = (wrap(rr, rows) & 1) ? 0.5 : 0.0;
+						double fc = u * per_row - offset;
+						int c0 = int(std::floor(fc));
+						for (int c = c0 - 1; c <= c0 + 1 && !covered; c++) {
+							double du = (fc - (c + 0.5)) / 0.62;
+							double dv = (fr - (rr + 0.15)) / 0.85;
+							double t2 = du * du + dv * dv;
+							if (t2 < 1.0) {
+								covered = true;
+								h = (0.25 + 0.75 * std::sqrt(1.0 - t2)) * (1.0 - p.variation * rnd(wrap(c, per_row), wrap(rr, rows), seed + 61u));
+							}
+						}
+					}
+					h += p.roughness * fine(u, v, 0);
+					break;
+				}
+				case 12: { // dunes: a gentle windward slope and a steep lee face, bent by noise, with
+					// fine wind ripples on top
+					double w = 0.3 * warp_x(u, v);
+					double s = dune_a * u + dune_b * v + w;
+					s -= std::floor(s);
+					h = s < 0.78 ? smoothstep(0.0, 1.0, s / 0.78) : 1.0 - smoothstep(0.0, 1.0, (s - 0.78) / 0.22);
+					h += 0.06 * (0.5 + 0.5 * std::sin(TAU * (7 * dune_a * u + (7 * dune_b + 2) * v + 3.0 * w)));
+					h += p.roughness * fine(u, v, 0);
 					break;
 				}
 				case 10: { // craters

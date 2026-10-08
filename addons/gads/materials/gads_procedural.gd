@@ -2,7 +2,7 @@
 class_name GADSProcedural
 extends RefCounted
 ## Relief without texture files: tileable procedural height maps (noise, ridged, billow, rock,
-## stones, cracks, bricks, tiles, waves, ripples, craters) and the maps a material needs from a
+## stones, cracks, bricks, tiles, waves, ripples, craters, scales, dunes) and the maps a material needs from a
 ## height map (normal, ambient occlusion, curvature, a two-colour albedo, ORM), made by the
 ## native GADSHeightGenerator in milliseconds. Use them in memory, or write them as a texture set
 ## (the editor's Project > Tools > GADS: Generate Procedural Material does).
@@ -41,6 +41,9 @@ const PRESETS := {
 	"waves": {"params": {"scale": 3, "sharpness": 0.4}, "depth_m": 0.03, "colors": [Color(0.55, 0.47, 0.34), Color(0.8, 0.72, 0.56)], "roughness": 0.95},
 	"ripples": {"params": {"scale": 3}, "depth_m": 0.01, "colors": [Color(0.5, 0.43, 0.32), Color(0.76, 0.68, 0.53)], "roughness": 0.95},
 	"craters": {"params": {"scale": 4, "roughness": 0.06}, "depth_m": 0.05, "colors": [Color(0.24, 0.22, 0.2), Color(0.55, 0.52, 0.48)], "roughness": 0.9},
+	"scales": {"params": {"scale": 10, "variation": 0.15, "roughness": 0.02}, "depth_m": 0.008,
+		"colors": [Color(0.12, 0.16, 0.1), Color(0.45, 0.55, 0.35)], "roughness": 0.45},
+	"dunes": {"params": {"scale": 2, "roughness": 0.02}, "depth_m": 0.08, "colors": [Color(0.62, 0.5, 0.34), Color(0.86, 0.74, 0.55)], "roughness": 0.95},
 }
 
 
@@ -50,7 +53,7 @@ static func is_available() -> bool:
 
 
 ## The kinds of height map: noise, ridged, billow, rock, stones, cracks, bricks, tiles, waves,
-## ripples, craters.
+## ripples, craters, scales (overlapping rows, organic), dunes (sand with wind ripples).
 static func get_kinds() -> PackedStringArray:
 	return PackedStringArray(PRESETS.keys())
 

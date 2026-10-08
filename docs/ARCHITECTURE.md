@@ -565,8 +565,9 @@ by construction: gradient noise hashes its lattice corners modulo the octave's p
 octave a whole multiple of the first, octaves beyond half the resolution dropped); Voronoi cells
 (stones, cracks) jitter points on a wrapped grid and measure the exact distance to the nearest
 cell border (the bisector with each neighbour of the nearest point); bricks use an even number
-of rows and a whole number of bricks per row, waves integer wave vectors, ripples and craters
-distances on the torus, faded out before half a tile. Domain warp offsets the coordinates by
+of rows and a whole number of bricks per row (scales too: rows of overlapping discs, the lower
+row's on top), waves integer wave vectors (dunes one crest direction, warped by periodic noise),
+ripples and craters distances on the torus, faded out before half a tile. Domain warp offsets the coordinates by
 periodic noise, so warped patterns tile too. Each field is normalised to 0..1. The derived maps
 wrap at the borders as well: normals by central differences in metres (OpenGL convention, as the
 shaders read them), occlusion as 1 - sin of the horizon elevation averaged over 8 directions
