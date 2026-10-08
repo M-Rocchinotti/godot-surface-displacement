@@ -22,7 +22,7 @@ signal settings_changed
 signal quality_adapted(level: int)
 
 enum Feature { POM, SELF_SHADOW, NEAR_FIELD, SCATTER }
-enum DebugView { OFF = 0, HIT_OFFSET = 1, COST = 2, RELIEF = 3, NORMALS = 4, SELF_SHADOW = 5, FIELD_LEVELS = 8, TESSELLATION = 9 }
+enum DebugView { OFF = 0, HIT_OFFSET = 1, COST = 2, RELIEF = 3, NORMALS = 4, SELF_SHADOW = 5, FIELD_LEVELS = 8, TESSELLATION = 9, BEFORE_AFTER = 10 }
 
 ## Off: every GADS material draws as plain normal mapping, no field, no scatter.
 @export var enabled := true:
@@ -127,6 +127,13 @@ enum DebugView { OFF = 0, HIT_OFFSET = 1, COST = 2, RELIEF = 3, NORMALS = 4, SEL
 @export var debug_view := DebugView.OFF:
 	set(value):
 		debug_view = value
+		_queue_apply()
+## Before / After: the fraction of the screen's width, from the left, where GADS surfaces draw
+## without their relief (plain normal mapping, the near-camera field flat on the ground), for
+## comparing while authoring a material; a line marks the split. Baked meshes keep their geometry.
+@export_range(0.0, 1.0, 0.01) var debug_split := 0.5:
+	set(value):
+		debug_split = value
 		_queue_apply()
 
 var _materials := {} # instance id -> WeakRef(ShaderMaterial)
@@ -491,7 +498,7 @@ func apply() -> void:
 	var s := get_effective_settings()
 	s.apply_globals()
 	_apply_weather()
-	GADSGlobals.set_value(GADSGlobals.DEBUG, Vector4(debug_view, 0.1, 0.0, 0.0))
+	GADSGlobals.set_value(GADSGlobals.DEBUG, Vector4(debug_view, debug_split if debug_view == DebugView.BEFORE_AFTER else 0.1, 0.0, 0.0))
 	# In the editor only the globals change: materials keep the variant they are saved with, and
 	# fields and scatters keep their saved properties (they are scene data).
 	if not Engine.is_editor_hint():

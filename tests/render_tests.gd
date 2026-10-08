@@ -42,6 +42,7 @@ func _run() -> void:
 	await _test("mip_shimmer_at_distance", test_mip_shimmer)
 	await _test("relief_fades_with_distance", test_distance_fade)
 	await _test("animated_relief_flows_and_breathes", test_animated_relief)
+	await _test("before_after_split_view", test_before_after)
 	await _test("surface_effects", test_surface_effects)
 	await _test("custom_shader_hooks", test_custom_hooks)
 	await _test("visual_shader_nodes", test_visual_shader_nodes)
@@ -1103,6 +1104,44 @@ func test_distance_fade() -> void:
 	print("  largest parallax offset: before the fade %.1f mm, beyond it %.3f mm (%d px)" % [near_max * 1000.0, far_max * 1000.0, far_n])
 	check(near_max > 0.02, "the full relief is there before the fade starts")
 	check(far_n > 1000 and far_max < 0.0002, "beyond the fade end the offset is zero (plain normal mapping)")
+
+
+## Debug view Before / After: left of the split the surface draws as plain normal mapping (as
+## beyond the relief's fade), right of it as usual, with a line at the split.
+func test_before_after() -> void:
+	var field := Harness.make_stone_field(256, 40, 2)
+	var tex := ImageTexture.create_from_image(field["image"])
+	var mat := GADSMaterials.create(GADSMaterials.Mapping.UV, {"height": tex}, {"height_m": 0.06, "height_center": 1.0}, GADSMaterials.Quality.POM_SELF_SHADOW)
+	var full := await _render_lit_plane(mat, false)
+	GADSGlobals.set_value(GADSGlobals.POM_RANGE, Vector4(0.0, 0.001, -10, 99))
+	var plain := await _render_lit_plane(mat, false)
+	_reset_globals()
+	GADSGlobals.set_value(GADSGlobals.DEBUG, Vector4(GADSManager.DebugView.BEFORE_AFTER, 0.4, 0, 0))
+	var split := await _render_lit_plane(mat, false)
+	GADSGlobals.set_value(GADSGlobals.DEBUG, Vector4(0, 0.1, 0, 0))
+	var at := int(0.4 * SIZE.x)
+	var worst := [0.0, 0.0]
+	var differs := 0
+	var counted := 0
+	for py in range(0, SIZE.y, 3):
+		for px in range(0, SIZE.x, 3):
+			if absi(px - at) <= 2:
+				continue
+			var c := split.get_pixel(px, py)
+			var ref := plain.get_pixel(px, py) if px < at else full.get_pixel(px, py)
+			var k := 0 if px < at else 1
+			worst[k] = maxf(worst[k], maxf(maxf(absf(c.r - ref.r), absf(c.g - ref.g)), absf(c.b - ref.b)))
+			if px < at:
+				counted += 1
+				var f := full.get_pixel(px, py)
+				differs += 1 if absf(Harness.luminance(f) - Harness.luminance(ref)) > 0.01 else 0
+	var line := split.get_pixel(at, SIZE.y / 2)
+	print("  left vs plain normal mapping %.5f, right vs the full render %.5f (largest channel difference); relief changes %d of %d left pixels" % [
+		worst[0], worst[1], differs, counted])
+	check(differs > counted / 4, "the relief shows (the two references differ)")
+	check(worst[0] < 0.002, "left of the split: plain normal mapping")
+	check(worst[1] < 0.002, "right of the split: the full relief")
+	check(Harness.luminance(line) > 1.0, "a line marks the split")
 
 
 ## Sums the frames' process steps: the renderer's TIME advances by the same steps.

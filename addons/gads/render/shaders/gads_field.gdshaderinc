@@ -228,7 +228,10 @@ void vertex() {
 	// The relief fades with distance; the runtime deformation does not (the ground around the field
 	// shows it at every distance).
 	float deform = gads_deformation(xz);
-	float y = ground + lift + gads_field_fade(xz) * gads_fade(view_distance) * (gads_field_relief(xz, lod, w) + deform) - deform;
+	// Before / after view: vertices left of the split keep to the ground.
+	vec4 clip = PROJECTION_MATRIX * (MODELVIEW_MATRIX * vec4(local_xz.x, ground - field_origin.y, local_xz.y, 1.0));
+	float split = clip.w > 0.0 ? gads_split(clip.x / clip.w * 0.5 + 0.5) : 1.0;
+	float y = ground + lift + gads_field_fade(xz) * gads_fade(view_distance) * split * (gads_field_relief(xz, lod, w) + deform) - deform;
 	y = mix(ground - push_down, y, displaceable);
 	VERTEX = vec3(local_xz.x, y - field_origin.y, local_xz.y);
 	f_base_normal = g.normal;
@@ -247,7 +250,7 @@ void fragment() {
 	vec3 n = normalize(f_base_normal);
 	float displaceable = f_displaceable;
 	vec4 w = f_weights;
-	float pom_fade = gads_fade(length(VERTEX));
+	float pom_fade = gads_fade(length(VERTEX)) * gads_split(FRAGCOORD.x / VIEWPORT_SIZE.x);
 	float amp = gads_field_amp(w) * pom_fade;
 	// log2 of metres per pixel on the ground (uniform control flow). The footprint is taken on the
 	// ground plane under the proxy: the view ray's point there is the same for every point of the
@@ -407,6 +410,8 @@ void fragment() {
 		METALLIC = 0.0;
 		ROUGHNESS = 1.0;
 		AO = 1.0;
+	} else if (debug_view == 10) {
+		EMISSION += gads_split_line(FRAGCOORD.xy, VIEWPORT_SIZE);
 	} else if (debug_view > 0) {
 		vec3 debug_color = vec3(0.0);
 		if (debug_view == 1) {

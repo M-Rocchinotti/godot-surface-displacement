@@ -35,6 +35,17 @@ global uniform vec4 gads_weather;            // surface effects everywhere: rain
 #endif
 
 // Distance fade of the relief (1 near, 0 beyond the fade end).
+// Debug view 10 (before / after): 0 where the screen shows surfaces without their relief (left
+// of gads_debug.y of the viewport's width; `screen_x` 0..1), else 1.
+float gads_split(float screen_x) {
+	return int(gads_debug.x + 0.5) == 10 && screen_x < gads_debug.y ? 0.0 : 1.0;
+}
+
+// The divider of the before / after view: light on the pixels at the split.
+vec3 gads_split_line(vec2 frag, vec2 viewport) {
+	return int(gads_debug.x + 0.5) == 10 && abs(frag.x - gads_debug.y * viewport.x) < 1.0 ? vec3(2.0) : vec3(0.0);
+}
+
 float gads_fade(float view_distance) {
 	return 1.0 - smoothstep(gads_pom_range.x, max(gads_pom_range.y, gads_pom_range.x + 1e-3), view_distance);
 }

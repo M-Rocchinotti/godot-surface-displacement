@@ -114,7 +114,8 @@ void fragment() {
 	float view_distance = length(VERTEX);
 	mat3 view_to_world = mat3(INV_VIEW_MATRIX);
 	mat3 world_to_view = mat3(VIEW_MATRIX);
-	float fade = gads_fade(view_distance);
+	// Before / after view: left of the split the relief is off (plain normal mapping).
+	float fade = gads_fade(view_distance) * gads_split(FRAGCOORD.x / VIEWPORT_SIZE.x);
 	// A baked mesh's geometry already carries the relief; an animated one breathes (pulse).
 #ifdef GADS_LAYERED
 	float up = normalize(gads_world_normal).y;
@@ -360,7 +361,8 @@ void fragment() {
 	// Debug views (gads_debug.x): 1 = hit offset (world, 0.5 + offset / (2 * gads_debug.y)),
 	// 2 = cost (steps / 64, planes marched / 3, LOD / 8), 3 = relief height in the slab,
 	// 4 = world normal, 5 = self-shadow factor of directional lights (written by light()),
-	// 9 = tessellation of a baked mesh (refinement level: blue 0, green 8, yellow 16, red 24+).
+	// 9 = tessellation of a baked mesh (refinement level: blue 0, green 8, yellow 16, red 24+),
+	// 10 = before / after (normal shading, the relief off left of the split, a line at it).
 	// Output through EMISSION with black, non-reflective ALBEDO/SPECULAR; view 5 through a white,
 	// non-reflective ALBEDO that light() fills.
 	int debug_view = int(gads_debug.x + 0.5);
@@ -370,6 +372,8 @@ void fragment() {
 		METALLIC = 0.0;
 		ROUGHNESS = 1.0;
 		AO = 1.0;
+	} else if (debug_view == 10) {
+		EMISSION += gads_split_line(FRAGCOORD.xy, VIEWPORT_SIZE);
 	} else if (debug_view > 0) {
 		vec3 off_world = view_to_world * offset_view;
 		vec3 debug_color = vec3(0.0);

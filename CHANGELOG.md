@@ -157,6 +157,9 @@ All notable changes to this project are documented here. The format follows
   collision and the detail field's ground data. Edited maps are one texel per vertex, saved into
   `data_directory`. Runtime API: `sculpt()`, `paint_splatmap()`, `set_height_region()` /
   `set_splat_region()`, `intersect_ray()` (no physics needed), the `edited` signal.
+- **Before / after view** (`GADSManager.DebugView.BEFORE_AFTER`, `debug_split`): left of the
+  split GADS surfaces draw without their relief and the near-camera field lies flat, right of it
+  as usual, with a line at the split; also in the demo's View menu.
 - **Animated relief**: `flow_speed` (texture tiles per second) moves every map of a GADS
   material, its relief, shading and shadows together, and `pulse_amount` / `pulse_rate` make the
   depth breathe between `height_m` and (1 - amount) x `height_m`, never deeper. The near-camera
