@@ -66,6 +66,9 @@ def main() -> int:
     shutil.copy2(ROOT / "tests" / "editor_check" / "editor_check_plugin.gd", check_dir / "editor_check_plugin.gd")
     (check_dir / "plugin.cfg").write_text(CHECK_CFG, encoding="utf-8")
     shutil.copy2(ROOT / "tests" / "editor_check" / "build_scene.gd", DEST / "build_scene.gd")
+    # Height maps for the GADS Height Map importer: a 16-bit PNG and a terrain's R16.
+    shutil.copy2(ROOT / "tests" / "data" / "height16_grey.png", DEST / "height16.png")
+    shutil.copy2(ROOT / "tests" / "data" / "height16_le.r16", DEST / "terrain_height.r16")
     (DEST / "project.godot").write_text(PROJECT, encoding="utf-8")
     run(["--headless", "--editor", "--quit"])
     run(["--headless", "--import"])

@@ -79,15 +79,13 @@ static func analyse_detail(image: Image) -> Dictionary:
 	}
 
 
-## Writes [param dst_path] (.exr): the red channel of the image at [param src_path], remapped by
+## Writes [param dst_path] (.exr): the red channel of the image at [param src_path] (16-bit PNGs and
+## RAW / R16 files at their full precision, [method GADSHeightImport.load_height]), remapped by
 ## its percentiles when [param remap], as one 16-bit float channel, and an .import file that keeps
 ## it lossless with mipmaps. Returns the analysis of the source.
 static func convert_to_half_exr(src_path: String, dst_path: String, remap := true) -> Dictionary:
-	# Loading from the global path reads the source file itself (not its imported texture) without
-	# Godot's "will not work on export" warning; this is an editor tool.
-	var src := Image.load_from_file(ProjectSettings.globalize_path(src_path))
-	if src == null or src.is_empty():
-		push_error("GADSHeightTools: cannot load %s" % src_path)
+	var src := GADSHeightImport.load_height(src_path)
+	if src == null:
 		return {}
 	var stats := analyse(src)
 	var img := src.duplicate() as Image

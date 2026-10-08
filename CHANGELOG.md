@@ -183,6 +183,14 @@ All notable changes to this project are documented here. The format follows
   mappings, detail, layers, masks and sculpt maps; vector displacement, blend shapes, skinning,
   clusters and runtime tessellation still need the native library. Its bakes have their own
   cache key.
+- **GADS Height Map importer** (Import As in the Import dock; RAW / R16 files by default): 16-bit
+  PNGs at their full 16 bits (Godot's importer reads them as 8) and RAW / R16 terrain heightmaps
+  (World Machine, Gaea, Unity; width and byte order options), one channel (red, green, blue,
+  alpha, luminance), invert, remap (None, Min Max, Percentiles), lossless half or 32-bit floats,
+  and mipmaps by Average, Max or Min (spec §63: Max keeps sparse peaks at a distance, Min keeps
+  grooves). Material Height and Terrain Heightmap presets. `GADSHeightImport` does the same from
+  scripts; Prepare Height Maps and the texture-set tools now read 16-bit PNGs at full precision
+  too, and the validator's height-format notes point to the importer.
 - **Procedural maps without the native library**: `GADSProcedural` falls back to
   `GADSProceduralGD`, a GDScript generator with the same kinds and parameters (tileable,
   seeded, 0..1) and the derived maps (normals, occlusion, curvature, albedo, ORM), so the

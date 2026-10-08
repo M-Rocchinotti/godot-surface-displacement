@@ -29,6 +29,7 @@ const PaintInspector := preload("res://addons/gads/editor/gads_paint_inspector.g
 const MaterialInspector := preload("res://addons/gads/editor/gads_material_inspector.gd")
 const ProfilerPanel := preload("res://addons/gads/editor/gads_profiler_panel.gd")
 const ImportPlugin := preload("res://addons/gads/editor/gads_import_plugin.gd")
+const HeightImporter := preload("res://addons/gads/editor/gads_height_importer.gd")
 const ExportPlugin := preload("res://addons/gads/editor/gads_export_plugin.gd")
 ## Editor setting: offer to create GADS materials when a texture set is imported.
 const OFFER_SETTING := "gads/texture_sets/offer_materials_on_import"
@@ -52,6 +53,7 @@ var _brush := {} # the Sculpt tool's cursor: "camera", "position", "normal", "ra
 var _profiler_panel: Control
 var _import_plugin: EditorScenePostImportPlugin
 var _export_plugin: EditorExportPlugin
+var _height_importer: EditorImportPlugin
 var _creating := 0 # create_materials() calls in progress: their imports are no downloads
 var _offer_armed := false # after the editor's first scan (a fresh project's textures are no downloads)
 var _offered := {} # "dir/name" of the texture sets offered this session
@@ -97,6 +99,8 @@ func _enter_tree() -> void:
 	add_scene_post_import_plugin(_import_plugin)
 	_export_plugin = ExportPlugin.new()
 	add_export_plugin(_export_plugin)
+	_height_importer = HeightImporter.new()
+	add_import_plugin(_height_importer)
 	var es := EditorInterface.get_editor_settings()
 	if not es.has_setting(OFFER_SETTING):
 		es.set_setting(OFFER_SETTING, true)
@@ -132,6 +136,8 @@ func _exit_tree() -> void:
 	_import_plugin = null
 	remove_export_plugin(_export_plugin)
 	_export_plugin = null
+	remove_import_plugin(_height_importer)
+	_height_importer = null
 
 
 ## The GADS bottom panel (profiler, recommendations, Optimize for Target).
@@ -364,7 +370,7 @@ func bake_selected_field() -> void:
 func prepare_selected_height_maps() -> void:
 	var done := 0
 	for path in EditorInterface.get_selected_paths():
-		if not path.get_extension().to_lower() in ["png", "jpg", "jpeg", "exr", "webp", "tga", "bmp", "hdr"]:
+		if not path.get_extension().to_lower() in ["png", "jpg", "jpeg", "exr", "webp", "tga", "bmp", "hdr"] + GADSHeightImport.RAW_EXTENSIONS:
 			continue
 		var dst := path.get_basename() + "_gads_height.exr"
 		var stats := GADSHeightTools.convert_to_half_exr(path, dst)

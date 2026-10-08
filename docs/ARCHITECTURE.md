@@ -648,3 +648,27 @@ which is why the field and the ground material agree under weather (field tests)
 the relief the effects leave (`normal_keep`: 1 - water, times 1 - 0.75 x cover) scales the normal
 map and the self-shadow strength, since snow and water fill the relief. Everything sits behind one
 branch on uniforms, so materials without effects pay nothing.
+
+## 15. Height map import (`GADSHeightImport`)
+
+The engine's PNG loader reduces 16-bit samples to 8 bits, so `GADSHeightImport.decode_png16()`
+reads 16-bit PNGs itself: the IDAT chunks are concatenated and inflated with
+`PackedByteArray.decompress(..., COMPRESSION_DEFLATE)` (a zlib stream, which is what PNG
+stores), then each row is unfiltered (None, Sub, Up, Average, Paeth, per the PNG specification)
+and the chosen channel's big-endian samples are divided by 65 535. A 2048 x 2048 grey map takes
+about a second in GDScript (the inflate itself 70 ms), so there is no native path. Interlaced and
+palette PNGs, and everything below 16 bits, go through the engine. RAW / R16 files are 16-bit
+unsigned samples, little-endian unless told otherwise, square unless given a width.
+
+`build_mipmaps()` with Max or Min makes each level from the one above: a texel of a level of
+`nw` x `nh` covers the source texels `[x w / nw, (x + 1) w / nw)` (and the same in y), so an odd
+edge's last texel is folded into its neighbour's block rather than dropped, and a single raised
+texel survives to the 1 x 1 level. Average uses the engine's `generate_mipmaps()`. The chain is
+assembled as one buffer in Godot's mip layout (each level `max(1, w >> 1)` by `max(1, h >> 1)`)
+and converted to half floats afterwards, which converts every level. The importer
+(`editor/gads_height_importer.gd`, "gads.height_map") saves the result as a compressed binary
+`ImageTexture` resource (`.res`), since the engine's compressed-texture format cannot be written
+from scripts; uncompressed floats are what a height map wants anyway. The logic tests decode
+fixtures written by `tests/data/make_height_fixtures.py` (every row filter, odd sizes, RGBA,
+both byte orders) to their exact values; the editor check imports an R16 and a 16-bit PNG
+through the importer.

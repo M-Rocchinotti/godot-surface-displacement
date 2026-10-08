@@ -32,6 +32,7 @@ func _run() -> void:
 	test_texture_sets()
 	test_mesh_diagnostics()
 	test_procedural()
+	test_height_import()
 	await test_adaptive_quality()
 	await test_platform_caps()
 	test_sculpt_brush()
@@ -865,6 +866,95 @@ func test_scatter_parameter_sync() -> void:
 ## GADSProcedural: every kind of height map fills 0..1, tiles (the wrap-around column and row
 ## look like their neighbours), is the same for the same seed and differs for another; normals,
 ## occlusion and curvature of known shapes; a material and a texture set from a kind.
+## GADSHeightImport: 16-bit PNGs (every row filter) and RAW / R16 files decode to their exact
+## 16-bit values (tests/data, written by make_height_fixtures.py), where the engine's loader
+## keeps 256 steps; channels, remapping, the Max / Min / Average mip chains (odd sizes too), the
+## half-float texture keeping them (the importer itself: the editor check).
+func test_height_import() -> void:
+	print("\n== height map import")
+	var value := func(x: int, y: int) -> float: return float((x * 1031 + y * 517 + (x * y) % 97) % 65536)
+	var worst := func(img: Image, f: Callable) -> float:
+		var d := img.get_data().to_float32_array()
+		var w := 0.0
+		for y in img.get_height():
+			for x in img.get_width():
+				w = maxf(w, absf(d[y * img.get_width() + x] * 65535.0 - f.call(x, y)))
+		return w
+	var grey := GADSHeightImport.load_height("res://tests/data/height16_grey.png")
+	check(grey != null and grey.get_size() == Vector2i(67, 45) and grey.get_format() == Image.FORMAT_RF
+		and worst.call(grey, value) < 0.01,
+		"a 16-bit grey PNG (all five row filters) decodes to its exact 16-bit values")
+	var engine := Image.load_from_file(ProjectSettings.globalize_path("res://tests/data/height16_grey.png"))
+	var levels: int = GADSHeightTools.analyse(engine)["levels"]
+	check(levels <= 256 and GADSHeightTools.analyse(grey)["levels"] > 1024,
+		"where the engine's loader keeps %d steps (%d decoded)" % [levels, GADSHeightTools.analyse(grey)["levels"]])
+	var c := GADSHeightImport.Channel
+	var g := GADSHeightImport.load_height("res://tests/data/height16_rgba.png", {"channel": c.GREEN})
+	var a := GADSHeightImport.load_height("res://tests/data/height16_rgba.png", {"channel": c.ALPHA})
+	var lum := GADSHeightImport.load_height("res://tests/data/height16_rgba.png", {"channel": c.LUMINANCE})
+	check(g != null and a != null and lum != null
+		and worst.call(g, func(x: int, y: int) -> float: return 65535.0 - value.call(x, y)) < 0.01
+		and worst.call(a, func(x: int, y: int) -> float: return float((int(value.call(x, y)) * 7) % 65536)) < 0.01
+		and worst.call(lum, func(x: int, y: int) -> float:
+			var v: int = int(value.call(x, y))
+			return (v + (65535 - v) + (v * 3) % 65536) / 3.0) < 0.05,
+		"an RGBA one gives its green, alpha and luminance channels")
+	var le := GADSHeightImport.load_height("res://tests/data/height16_le.r16")
+	var be := GADSHeightImport.load_height("res://tests/data/height16_be.raw", {"raw_width": 48, "raw_big_endian": true})
+	check(le != null and le.get_size() == Vector2i(40, 40) and worst.call(le, value) < 0.01
+		and be != null and be.get_size() == Vector2i(48, 20) and worst.call(be, value) < 0.01,
+		"R16 (little-endian, square by its size) and big-endian RAW of a given width decode exactly")
+	var remapped := GADSHeightImport.remap_height(grey, GADSHeightImport.Remap.MIN_MAX, true)
+	var stats := GADSHeightTools.analyse(remapped)
+	check(is_equal_approx(stats["min"], 0.0) and is_equal_approx(stats["max"], 1.0), "Min Max remap (inverted) spans 0..1")
+	# One raised texel in 37 x 23 (on the odd last column and row): Max keeps it in every mip
+	# level, Average fades it, Min of the inverted map keeps the pit.
+	var peak := Image.create(37, 23, false, Image.FORMAT_RF)
+	peak.set_pixel(36, 22, Color(1, 0, 0))
+	var pit := peak.duplicate() as Image
+	var pd := pit.get_data().to_float32_array()
+	for i in pd.size():
+		pd[i] = 1.0 - pd[i]
+	pit = Image.create_from_data(37, 23, false, Image.FORMAT_RF, pd.to_byte_array())
+	var level_extreme := func(img: Image, level: int, take_max: bool) -> float:
+		var from := img.get_mipmap_offset(level)
+		var to := img.get_mipmap_offset(level + 1) if level < img.get_mipmap_count() else img.get_data().size()
+		var bytes := img.get_data().slice(from, to)
+		var vals: PackedFloat32Array = bytes.to_float32_array() if img.get_format() == Image.FORMAT_RF else PackedFloat32Array()
+		if img.get_format() == Image.FORMAT_RH:
+			for i in bytes.size() / 2:
+				vals.append(bytes.decode_half(i * 2))
+		var e := -INF if take_max else INF
+		for v in vals:
+			e = maxf(e, v) if take_max else minf(e, v)
+		return e
+	var mf := GADSHeightImport.MipFilter
+	var mx := GADSHeightImport.build_mipmaps(peak, mf.MAX)
+	var mn := GADSHeightImport.build_mipmaps(pit, mf.MIN)
+	var av := GADSHeightImport.build_mipmaps(peak, mf.AVERAGE)
+	var kept := true
+	for level in range(1, mx.get_mipmap_count() + 1):
+		kept = kept and level_extreme.call(mx, level, true) == 1.0 and level_extreme.call(mn, level, false) == 0.0
+	var faded: float = level_extreme.call(av, av.get_mipmap_count(), true)
+	check(mx.has_mipmaps() and mx.get_mipmap_count() == av.get_mipmap_count() and kept and faded < 0.05,
+		"Max and Min mip chains keep a one-texel peak and pit down to 1 x 1 (%d levels; the average's last level %.4f)" % [mx.get_mipmap_count(), faded])
+	var tex := GADSHeightImport.make_texture(peak, {"mip_filter": mf.MAX})
+	var timg := tex.get_image()
+	check(timg.get_format() == Image.FORMAT_RH and timg.has_mipmaps() and level_extreme.call(timg, timg.get_mipmap_count(), true) == 1.0,
+		"its texture is half floats with the Max chain")
+	var full := GADSHeightImport.import_texture("res://tests/data/height16_le.r16", {"float": true, "mipmaps": false})
+	check(full != null and full.get_image().get_format() == Image.FORMAT_RF and not full.get_image().has_mipmaps()
+		and worst.call(full.get_image(), value) < 0.01, "import_texture: an R16 as a 32-bit texture, values as stored")
+	# The texture-set tools read the 16-bit PNG at full precision too.
+	var exr := "user://gads_height16_test.exr"
+	var conv := GADSHeightTools.convert_to_half_exr("res://tests/data/height16_grey.png", exr)
+	var back := Image.load_from_file(ProjectSettings.globalize_path(exr))
+	check(not conv.is_empty() and int(conv["levels"]) > 1024 and back != null and int(GADSHeightTools.analyse(back)["levels"]) > 1024,
+		"Prepare Height Maps keeps a 16-bit PNG's precision (%d levels in the EXR)" % (GADSHeightTools.analyse(back)["levels"] if back != null else 0))
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(exr))
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(exr + ".import"))
+
+
 func test_procedural() -> void:
 	print("\n== procedural height maps")
 	if not GADSProcedural.is_available():

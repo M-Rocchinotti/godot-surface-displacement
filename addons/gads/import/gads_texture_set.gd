@@ -114,8 +114,8 @@ static func recommend(texture_set: Dictionary, texture_size_m := 2.0) -> Diction
 	if not files.has("height"):
 		(out["notes"] as Array).append("no height map: the material will be flat (normal mapped only)")
 		return out
-	var img := Image.load_from_file(ProjectSettings.globalize_path(files["height"]))
-	if img == null or img.is_empty():
+	var img := GADSHeightImport.load_height(files["height"])
+	if img == null:
 		(out["notes"] as Array).append("cannot read the height map")
 		return out
 	var stats := GADSHeightTools.analyse(img)

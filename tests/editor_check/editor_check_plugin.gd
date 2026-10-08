@@ -561,6 +561,34 @@ func _run() -> void:
 	ur.redo()
 	_check(gi.data != null and gi.data.resource_path == gi_path, "redo gives it again")
 	EditorInterface.get_selection().clear()
+
+	# 19. The GADS Height Map importer: an R16 imports with it by default (the terrain preset:
+	# 32-bit floats, values as stored, mipmaps); a 16-bit PNG switched to it (Import As) keeps its
+	# 16 bits, remapped 0..1, with the Max mip filter it was given.
+	var r16 := load("res://terrain_height.r16") as ImageTexture if ResourceLoader.exists("res://terrain_height.r16") else null
+	var r16_img := r16.get_image() if r16 != null else null
+	# (x * 1031 + y * 517 + (x * y) % 97) % 65536 at (3, 5): the fixture's values.
+	_check(r16_img != null and r16_img.get_format() == Image.FORMAT_RF and r16_img.get_size() == Vector2i(40, 40) and r16_img.has_mipmaps()
+		and absf(r16_img.get_pixel(3, 5).r * 65535.0 - 5693.0) < 0.05,
+		"an R16 heightmap imports as a 32-bit height texture with its exact values (%s)" % (r16_img.get_pixel(3, 5).r * 65535.0 if r16_img != null else "not imported"))
+	var cfg := ConfigFile.new()
+	cfg.load("res://height16.png.import")
+	cfg.set_value("remap", "importer", "gads.height_map")
+	cfg.set_value("remap", "type", "ImageTexture")
+	cfg.erase_section("params")
+	cfg.set_value("params", "mipmaps/filter", GADSHeightImport.MipFilter.MAX)
+	cfg.save("res://height16.png.import")
+	efs.reimport_files(PackedStringArray(["res://height16.png"]))
+	await _frames_wait(5)
+	var h16 := ResourceLoader.load("res://height16.png", "", ResourceLoader.CACHE_MODE_REPLACE) as ImageTexture
+	var h16_img := h16.get_image() if h16 != null else null
+	var h16_stats := GADSHeightTools.analyse(h16_img) if h16_img != null else {}
+	_check(h16_img != null and h16_img.get_format() == Image.FORMAT_RH and h16_img.has_mipmaps() and int(h16_stats["levels"]) > 1024
+		and is_equal_approx(h16_stats["min"], 0.0) and is_equal_approx(h16_stats["max"], 1.0),
+		"a 16-bit PNG imported as GADS Height Map keeps its precision, remapped 0..1 (%s levels)" % h16_stats.get("levels", "not imported"))
+	var last := h16_img.get_mipmap_count() if h16_img != null else 0
+	_check(h16_img != null and absf(h16_img.get_data().decode_half(h16_img.get_mipmap_offset(last)) - 1.0) < 0.001,
+		"with the Max filter its 1 x 1 mip level is the highest value")
 	_finish()
 
 

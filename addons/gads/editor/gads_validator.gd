@@ -101,11 +101,11 @@ static func _check_material(m: ShaderMaterial, node: Node) -> Array:
 	if height != null:
 		var img := height.get_image()
 		if img != null and not img.has_mipmaps():
-			issues.append(_issue("error", "%s: the height texture has no mipmaps (the march samples the full-size map at every distance: shimmer and cost). Import it with mipmaps." % label))
+			issues.append(_issue("error", "%s: the height texture has no mipmaps (the march samples the full-size map at every distance: shimmer and cost). Import it with mipmaps (or as GADS Height Map)." % label))
 		if img != null and img.get_format() in [Image.FORMAT_L8, Image.FORMAT_R8, Image.FORMAT_RGB8, Image.FORMAT_RGBA8, Image.FORMAT_LA8]:
-			issues.append(_issue("info", "%s: 8-bit height texture; fine for small relief, a 16-bit float (EXR) map avoids terracing under self-shadowing." % label))
+			issues.append(_issue("info", "%s: 8-bit height texture; fine for small relief, a 16-bit float (EXR) map avoids terracing under self-shadowing (a 16-bit PNG keeps its 16 bits imported as GADS Height Map)." % label))
 		if img != null and img.is_compressed():
-			issues.append(_issue("warning", "%s: the height texture is VRAM compressed; block artefacts show as relief. Import it lossless." % label))
+			issues.append(_issue("warning", "%s: the height texture is VRAM compressed; block artefacts show as relief. Import it lossless (or as GADS Height Map)." % label))
 	if float(GADSMaterials.get_param(m, "detail_height_m")) > 0.0 and m.get_shader_parameter("detail_height_texture") == null:
 		issues.append(_issue("warning", "%s: detail_height_m is set but there is no detail_height_texture; the relief is only lowered by half of it." % label))
 	for key in ["albedo_texture", "normal_texture", "orm_texture", "detail_height_texture", "detail_normal_texture"]:
