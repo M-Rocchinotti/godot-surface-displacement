@@ -1,10 +1,14 @@
 @tool
 extends EditorInspectorPlugin
 ## The terrain's Sculpt / Paint tool at the top of a GADSTerrain3D's inspector: with it on,
-## left-drag in the 3D viewport raises, lowers, smooths or flattens the heights or paints a layer.
+## left-drag in the 3D viewport raises, lowers, smooths or flattens the heights, paints a layer or
+## cuts and fills holes.
 ## Each stroke is one undoable step; the edited maps are saved into the terrain's data directory.
 
-const MODES := ["Raise", "Lower", "Smooth", "Flatten", "Paint layer 2", "Paint layer 3", "Erase layers"]
+const MODES := ["Raise", "Lower", "Smooth", "Flatten", "Paint layer 2", "Paint layer 3", "Erase layers", "Cut holes", "Fill holes"]
+## GADSSculpt.tool_paint values of the hole brushes (the layer brushes use 0-2).
+const CUT_HOLES := 10
+const FILL_HOLES := 11
 const KINDS := ["ridged", "noise", "billow", "craters"]
 
 ## The plugin's edit_terrain_heights(terrain, action name, callable): one undoable action.
@@ -102,6 +106,10 @@ class ToolPanel extends VBoxContainer:
 				return 5
 			0:
 				return 6
+			CUT_HOLES:
+				return 7
+			FILL_HOLES:
+				return 8
 		return GADSSculpt.tool_mode
 
 	static func set_mode(index: int) -> void:
@@ -109,7 +117,7 @@ class ToolPanel extends VBoxContainer:
 			GADSSculpt.tool_mode = index as GADSSculpt.Mode
 			GADSSculpt.tool_paint = -1
 		else:
-			GADSSculpt.tool_paint = [1, 2, 0][index - 4]
+			GADSSculpt.tool_paint = [1, 2, 0, CUT_HOLES, FILL_HOLES][index - 4]
 
 	func _on_generate() -> void:
 		var kind: String = KINDS[_kind.selected]

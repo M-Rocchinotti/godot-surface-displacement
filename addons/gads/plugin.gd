@@ -38,7 +38,7 @@ var _paint_inspector: EditorInspectorPlugin
 var _material_inspector: EditorInspectorPlugin
 var _stroke_node: Node3D # the node of the stroke in progress (null: none)
 var _stroke_before: Image # its sculpt map (a terrain: its edited map) before the stroke (null: it had none)
-var _stroke_kind := "" # a terrain stroke: "height" or "splat"
+var _stroke_kind := "" # a terrain stroke: "height", "splat" or "holes"
 var _stroke_original: Texture2D # a terrain's map before the stroke made it editable
 var _stroke_was_editable := true
 var _stroke_rect := Rect2i() # a terrain stroke's grid vertices
@@ -799,7 +799,9 @@ func _forward_3d_draw_over_viewport(overlay: Control) -> void:
 	var colors := {GADSSculpt.Mode.RAISE: Color(1.0, 0.75, 0.3), GADSSculpt.Mode.LOWER: Color(0.4, 0.7, 1.0),
 		GADSSculpt.Mode.SMOOTH: Color(0.6, 1.0, 0.6), GADSSculpt.Mode.FLATTEN: Color(1.0, 1.0, 1.0)}
 	var color: Color = colors.get(GADSSculpt.tool_mode, Color.WHITE)
-	if terrain != null and GADSSculpt.tool_paint >= 0:
+	if terrain != null and GADSSculpt.tool_paint >= TerrainInspector.CUT_HOLES:
+		color = Color(1.0, 0.2, 0.15) if GADSSculpt.tool_paint == TerrainInspector.CUT_HOLES else Color(0.2, 0.9, 0.9)
+	elif terrain != null and GADSSculpt.tool_paint >= 0:
 		color = Color(1.0, 0.45, 0.9)
 	elif terrain == null and GADSVertexPaint.tool_on:
 		color = [Color(1.0, 0.3, 0.3), Color(0.3, 1.0, 0.3), Color(0.4, 0.5, 1.0), Color.WHITE][GADSVertexPaint.tool_channel]
@@ -810,7 +812,7 @@ func _forward_3d_draw_over_viewport(overlay: Control) -> void:
 func _update_brush(target: Node3D, camera: Camera3D, screen: Vector2) -> void:
 	var terrain := target as GADSTerrain3D
 	if terrain != null:
-		var at := terrain.intersect_ray(camera.project_ray_origin(screen), camera.project_ray_normal(screen))
+		var at := terrain.intersect_ray(camera.project_ray_origin(screen), camera.project_ray_normal(screen), 1e6, false)
 		if at.is_finite():
 			_brush = {"camera": camera, "position": at, "normal": Vector3.UP, "radius": GADSSculpt.terrain_radius, "terrain": terrain}
 		else:
@@ -878,22 +880,24 @@ func sculpt_at(target: Node3D, origin: Vector3, direction: Vector3) -> bool:
 
 
 ## One dab on a terrain: its heights (Raise, Lower, Smooth, Flatten) or, with
-## GADSSculpt.tool_paint >= 0, its layers.
+## GADSSculpt.tool_paint >= 0, its layers (0-2) or holes (TerrainInspector.CUT_HOLES, FILL_HOLES).
 func _terrain_dab(terrain: GADSTerrain3D, origin: Vector3, direction: Vector3) -> bool:
-	var hit := terrain.intersect_ray(origin, direction)
+	# The brush lands on the surface as if the holes were closed (Fill Holes needs them).
+	var hit := terrain.intersect_ray(origin, direction, 1e6, false)
 	if not hit.is_finite():
 		return false
-	var painting := GADSSculpt.tool_paint >= 0
 	if _stroke_node == null:
 		_stroke_node = terrain
-		_stroke_kind = "splat" if painting else "height"
-		_stroke_was_editable = terrain.is_splat_editable() if painting else terrain.is_height_editable()
-		_stroke_original = terrain.splatmap if painting else terrain.heightmap
-		_stroke_before = terrain.get_splat_image() if painting else terrain.get_height_image()
+		_stroke_kind = "holes" if GADSSculpt.tool_paint >= TerrainInspector.CUT_HOLES else ("splat" if GADSSculpt.tool_paint >= 0 else "height")
+		_stroke_was_editable = _terrain_map(terrain, "editable")
+		_stroke_original = terrain.get(_terrain_map(terrain, "property"))
+		_stroke_before = terrain.call(_terrain_map(terrain, "getter"))
 		_stroke_rect = Rect2i()
 		_stroke_flatten = hit.y
 	var rect: Rect2i
-	if _stroke_kind == "splat":
+	if _stroke_kind == "holes":
+		rect = terrain.cut_holes(hit, GADSSculpt.terrain_radius, GADSSculpt.tool_paint == TerrainInspector.FILL_HOLES)
+	elif _stroke_kind == "splat":
 		rect = terrain.paint_splatmap(hit, GADSSculpt.terrain_radius, maxi(GADSSculpt.tool_paint, 0), 0.25)
 	else:
 		var raise := GADSSculpt.tool_mode == GADSSculpt.Mode.RAISE or GADSSculpt.tool_mode == GADSSculpt.Mode.LOWER
@@ -932,14 +936,13 @@ func _end_terrain_stroke(terrain: GADSTerrain3D) -> void:
 	terrain.flush_edits()
 	if not _stroke_rect.has_area() or _stroke_before == null:
 		return
-	var painting := _stroke_kind == "splat"
-	var now := terrain.get_splat_image() if painting else terrain.get_height_image()
+	var now: Image = terrain.call(_terrain_map(terrain, "getter"))
 	var after := now.get_region(_stroke_rect)
 	var before := _stroke_before.get_region(_stroke_rect)
-	var property := "splatmap" if painting else "heightmap"
-	var setter := "set_splat_region" if painting else "set_height_region"
+	var property: String = _terrain_map(terrain, "property")
+	var setter: String = _terrain_map(terrain, "setter")
 	var undo := get_undo_redo()
-	undo.create_action("GADS Terrain Paint" if painting else "GADS Terrain Sculpt", UndoRedo.MERGE_DISABLE, terrain)
+	undo.create_action({"splat": "GADS Terrain Paint", "holes": "GADS Terrain Holes"}.get(_stroke_kind, "GADS Terrain Sculpt"), UndoRedo.MERGE_DISABLE, terrain)
 	if not _stroke_was_editable:
 		undo.add_do_property(terrain, property, terrain.get(property))
 	undo.add_do_method(terrain, setter, _stroke_rect.position, after)
@@ -950,6 +953,17 @@ func _end_terrain_stroke(terrain: GADSTerrain3D) -> void:
 	undo.add_undo_method(terrain, "save_edited_maps")
 	undo.commit_action(false)
 	terrain.save_edited_maps()
+
+
+## The map the terrain stroke in progress edits: its "property", "getter", "setter" names, or
+## (for "editable") whether it is an editable map already.
+func _terrain_map(terrain: GADSTerrain3D, what: String) -> Variant:
+	var names: Dictionary = {
+		"height": {"property": "heightmap", "getter": "get_height_image", "setter": "set_height_region", "editable": "is_height_editable"},
+		"splat": {"property": "splatmap", "getter": "get_splat_image", "setter": "set_splat_region", "editable": "is_splat_editable"},
+		"holes": {"property": "holes", "getter": "get_hole_image", "setter": "set_hole_region", "editable": "is_holes_editable"},
+	}[_stroke_kind]
+	return terrain.call(names["editable"]) if what == "editable" else names[what]
 
 
 ## Runs [param edit] (a callable that changes [param terrain]'s heights at once: Generate, Erode)

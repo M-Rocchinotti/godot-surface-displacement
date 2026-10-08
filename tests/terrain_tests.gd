@@ -28,6 +28,7 @@ func _run() -> void:
 	await _test("layers_by_rules_and_splat_map", test_layers)
 	await _test("collision_matches_the_surface", test_collision)
 	await _test("detail_field_ground_data", test_ground_data)
+	await _test("holes", test_holes)
 	await _test("rebuilds_once_per_change", test_rebuild)
 	await _test("streams_chunks_around_the_camera", test_streaming)
 	await _test("paints_layers_at_runtime", test_painting)
@@ -382,6 +383,70 @@ func test_ground_data() -> void:
 	print("  surface with relief: %.1f to %.1f mm above the triangles" % [lo * 1000.0, hi * 1000.0])
 	check(same and lo > -field.lift and hi > 0.005 and hi <= 0.06, "get_surface_height() is the detail field's relief on the terrain, the ground where it does not displace")
 	t.queue_free()
+	await process_frame
+
+
+## Holes: cut_holes() leaves the triangles around the cut vertices out of every LOD, the collision
+## and the ground data; intersect_ray() passes through (or, asked to, stops on the closed surface);
+## is_hole() says where; filling them restores the surface; a hole map texture cuts the same way.
+func test_holes() -> void:
+	var grass := layer_material(2.0, Color(0.2, 0.6, 0.2))
+	var t := make_terrain({"layers": [grass] as Array[ShaderMaterial], "detail_field": true, "height_scale": 4.0})
+	root.add_child(t)
+	var count_tris := func() -> int:
+		var n := 0
+		for key: Vector2i in t._chunk_data:
+			n += (t._chunk_data[key]["arrays"][Mesh.ARRAY_INDEX] as PackedInt32Array).size() / 3
+		return n
+	var before: int = count_tris.call()
+	var at := Vector3(5.0, 0.0, -3.0)
+	at.y = t.get_height(at)
+	var far := Vector3(-10.0, 0.0, 8.0)
+	far.y = t.get_height(far)
+	var rect := t.cut_holes(at, 1.5)
+	await process_frame
+	check(rect.has_area() and t.is_hole(at) and not t.is_hole(far), "is_hole() is true at the cut, false elsewhere")
+	# No triangle of any LOD (skirts included) with its centre within 1 m of the cut.
+	var inside := 0
+	for key: Vector2i in t._chunk_data:
+		var data: Dictionary = t._chunk_data[key]
+		var verts: PackedVector3Array = data["arrays"][Mesh.ARRAY_VERTEX]
+		var sets: Array = [data["arrays"][Mesh.ARRAY_INDEX]]
+		sets.append_array((data["lods"] as Dictionary).values())
+		for idx: PackedInt32Array in sets:
+			for i in range(0, idx.size(), 3):
+				var c := (verts[idx[i]] + verts[idx[i + 1]] + verts[idx[i + 2]]) / 3.0
+				if Vector2(c.x - at.x, c.z - at.z).length() < 1.0:
+					inside += 1
+	var removed: int = before - count_tris.call()
+	print("  %d of %d finest triangles cut; %d triangles of any LOD left within 1 m" % [removed, before, inside])
+	check(inside == 0 and removed > 50 and removed < 400, "the chunks leave the hole's triangles out at every LOD, and only those")
+	check(not t.intersect_ray(at + Vector3(0, 10, 0), Vector3.DOWN).is_finite(), "a ray passes through the hole")
+	var closed := t.intersect_ray(at + Vector3(0, 10, 0), Vector3.DOWN, 1e6, false)
+	check(closed.is_finite() and absf(closed.y - at.y) < 0.01, "or stops on the closed surface when asked (the brushes)")
+	await physics_frame
+	await physics_frame
+	var space := t.get_world_3d().direct_space_state
+	var through := space.intersect_ray(PhysicsRayQueryParameters3D.create(at + Vector3(0, 10, 0), at - Vector3(0, 10, 0)))
+	var beside := space.intersect_ray(PhysicsRayQueryParameters3D.create(far + Vector3(0, 10, 0), far - Vector3(0, 10, 0)))
+	check(through.is_empty() and not beside.is_empty(), "the collision has the hole too")
+	var bake := t.get_detail_field().ground_bake
+	var w_hole: Color = bake.sample(Vector2(at.x, at.z))["weights"]
+	var w_far: Color = bake.sample(Vector2(far.x, far.z))["weights"]
+	check(w_hole.r + w_hole.g + w_hole.b + w_hole.a < 0.01 and w_far.r + w_far.g + w_far.b + w_far.a > 0.99,
+		"the detail field has no ground there (it dives under, as at the end of the ground)")
+	check(t.is_holes_editable() and t.get_hole_image().get_size() == t.get_grid_size(), "the hole map is an editable map of one texel per vertex")
+	t.cut_holes(at, 2.0, true)
+	await process_frame
+	check(not t.is_hole(at) and count_tris.call() == before, "filling closes it again")
+	t.queue_free()
+	# A hole map: white where the terrain is open.
+	var img := Image.create(64, 64, false, Image.FORMAT_L8)
+	img.fill_rect(Rect2i(28, 28, 8, 8), Color.WHITE)
+	var t2 := make_terrain({"holes": ImageTexture.create_from_image(img)})
+	root.add_child(t2)
+	check(t2.is_hole(Vector3(0, 0, 0)) and not t2.is_hole(Vector3(10, 0, 10)), "a hole map texture cuts where it is white")
+	t2.queue_free()
 	await process_frame
 
 

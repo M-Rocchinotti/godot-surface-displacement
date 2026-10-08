@@ -367,6 +367,25 @@ func _run() -> void:
 	_check(terrain.splatmap == null and terrain.get_layer_weights(aim).x < 0.01 and terrain.get_height(aim) > h0 + 1.0, "undo removes the paint, the sculpt stays")
 	ur.redo()
 	await _frames_wait(2)
+	# Cut Holes (the inspector's hole brush), then undo and redo.
+	GADSSculpt.tool_paint = load("res://addons/gads/editor/gads_terrain_inspector.gd").CUT_HOLES
+	GADSSculpt.terrain_radius = 1.0
+	var hole_dab: bool = _sd_plugin.sculpt_at(terrain, aim + Vector3(0, 20, 0), Vector3.DOWN)
+	_sd_plugin.end_sculpt_stroke()
+	var holes_path := terrain.holes.resource_path if terrain.holes != null else ""
+	_check(hole_dab and terrain.is_hole(aim) and holes_path.begins_with(terrain.data_directory) and FileAccess.file_exists(holes_path),
+		"a Cut Holes stroke opens the ground and saves the hole map (%s)" % holes_path)
+	ur.undo()
+	await _frames_wait(2)
+	_check(terrain.holes == null and not terrain.is_hole(aim), "undo closes it (no hole map, as before)")
+	ur.redo()
+	await _frames_wait(2)
+	_check(terrain.is_hole(aim), "redo opens it again")
+	GADSSculpt.tool_paint = load("res://addons/gads/editor/gads_terrain_inspector.gd").FILL_HOLES
+	_sd_plugin.sculpt_at(terrain, aim + Vector3(0, 20, 0), Vector3.DOWN)
+	_sd_plugin.end_sculpt_stroke()
+	_check(not terrain.is_hole(aim), "Fill Holes closes it (the brush finds the surface across the hole)")
+	GADSSculpt.terrain_radius = 2.0
 	GADSSculpt.tool_active = false
 	GADSSculpt.tool_node = null
 	GADSSculpt.tool_paint = -1

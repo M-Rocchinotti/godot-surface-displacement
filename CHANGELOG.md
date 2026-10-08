@@ -175,6 +175,11 @@ All notable changes to this project are documented here. The format follows
   triangle budget) while the camera is within `prop_geometry_range`, and draw their parallax again
   beyond it; no conversion or bake needed. Roadmap item (runtime geometry for non-planar surfaces
   near the camera) done.
+- **Terrain holes** (cave and tunnel entrances): `GADSTerrain3D.holes` (a map), the inspector's
+  Cut holes / Fill holes brushes (undoable, saved next to the other edited maps) and
+  `cut_holes()` at runtime. The chunks (every LOD, skirts, occluders), the collision (trimesh
+  for chunks with holes) and the detail field's ground data leave them out;
+  `intersect_ray()` passes through, `is_hole()` tells.
 - **Validate Setup** notes materials that read vertex colours (layer masks, the displacement
   mask, the effects mask) on meshes without them (they read 1 everywhere until painted).
 - **Materials offered on import**: when the editor imports images that make up a texture set

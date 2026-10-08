@@ -522,6 +522,16 @@ is under twice the largest error, and skirts of that depth hang from every borde
 quads split along the (1, 0)-(0, 1) diagonal, the same triangulation the HeightMapShape3D of
 Jolt and Godot Physics uses, so collision is the drawn surface.
 
+**Holes.** A hole map of one byte per vertex; a triangle with a hole vertex is cut, the rule
+Jolt's height shape applies to NaN samples. Both chunk builders build the full grid and the
+holes are cut afterwards from the index buffers (each LOD's: a coarse triangle also when the
+vertex nearest its centre is in a hole, so a hole between its corners stays open from afar;
+skirts by the border vertex they hang from), so the native builder needs no change. Collision
+does not use NaN (Godot Physics warns on every ray through one): without holes it is the one
+height shape, with holes a shape per chunk, the chunks with holes a trimesh of their remaining
+finest triangles. The ground data marks the texels of the quads around a hole vertex "no
+ground" (-2); `intersect_ray()` and `is_hole()` test the triangle under the point.
+
 **Editing.** `sculpt()` and `paint_splatmap()` work on maps of one texel per vertex (heights
 FORMAT_RF in 0..1 over `height_scale`, weights RG8), so a brush texel is a vertex and nothing is
 resampled: the first edit replaces `heightmap` / `splatmap` by such an ImageTexture holding the

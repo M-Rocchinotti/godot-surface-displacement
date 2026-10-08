@@ -50,6 +50,16 @@ const MAX_STREAM_TASKS := 4
 		heightmap = value
 		if not _swapping_edit_map:
 			_queue_rebuild()
+## Holes (cave and tunnel entrances): where the map's red channel is over 0.5, sampled at each
+## vertex, the terrain has no surface. A triangle with a vertex in a hole is left out of the chunks
+## (at coarser LODs also one whose middle vertex is), of the collision shape and of the near-camera
+## ground data, and [method intersect_ray] passes through. The editor's Cut / Fill Holes brushes
+## and [method cut_holes] edit it (one texel per vertex, saved next to the other edited maps).
+@export var holes: Texture2D:
+	set(value):
+		holes = value
+		if not _swapping_edit_map:
+			_queue_rebuild()
 ## Width and depth (m), rounded to whole chunks.
 @export var size := Vector2(256, 256):
 	set(value):
@@ -181,8 +191,9 @@ const MAX_STREAM_TASKS := 4
 		_queue_rebuild()
 
 @export_group("Editing")
-## Where the editor saves the terrain's edited heightmap and splat map
-## ([code]<scene>_<node>_height.res[/code], [code]_splat.res[/code]) after each stroke.
+## Where the editor saves the terrain's edited heightmap, splat map and holes
+## ([code]<scene>_<node>_height.res[/code], [code]_splat.res[/code], [code]_holes.res[/code])
+## after each stroke.
 @export_dir var data_directory := "res://gads_terrain"
 
 @export_tool_button("Rebuild", "Reload") var _rebuild_button := rebuild
@@ -196,6 +207,9 @@ var _splat := {} # the splat map, RGBA float {"width", "height", "data"}; empty:
 var _heights := PackedFloat32Array() # whole terrain only: local y per vertex, row-major (_nx per row)
 var _w1 := PackedFloat32Array() # whole terrain only: the second layer's weight per vertex
 var _w2 := PackedFloat32Array() # the third layer's
+var _holes := PackedByteArray() # 1 per vertex in a hole (row-major, _nx per row); empty: none
+var _hole_count := 0
+var _holes_texture: Texture2D # the hole map _holes was read from
 var _chunks: Array[MeshInstance3D] = []
 var _chunk_nodes := {} # Vector2i -> MeshInstance3D
 var _chunk_data := {} # Vector2i -> its arrays and LODs (kept for repainting)
@@ -280,6 +294,7 @@ func rebuild() -> void:
 	_splat = _rgba_image(splatmap)
 	_src_texture = heightmap
 	_splat_texture = splatmap
+	_build_holes()
 	_edit_dirty = Rect2i()
 	_edit_maps_dirty = {}
 	_heights.clear()
@@ -566,6 +581,8 @@ func _ground_arrays(rect := Rect2()) -> Dictionary:
 	if ClassDB.class_exists(MESHER) and _paint.is_empty():
 		var part: Dictionary = ClassDB.class_call_static(MESHER, &"ground_arrays", _grid_state(1), i0, Vector2i(w, d), texel, gp.y, layers.size())
 		part.merge({"first": i0, "size": Vector2i(w, d), "texel": texel})
+		if _hole_count > 0:
+			_cut_ground_holes(part)
 		return part
 	var heights := PackedFloat32Array()
 	heights.resize(w * d)
@@ -580,7 +597,10 @@ func _ground_arrays(rect := Rect2()) -> Dictionary:
 			var wts := _weights_at(g)
 			var layer := 2 if wts.y >= 0.5 else (1 if wts.x >= 0.5 else 0)
 			codes[i] = layer if layer < layers.size() else -1
-	return {"first": i0, "size": Vector2i(w, d), "heights": heights, "codes": codes, "texel": texel}
+	var out := {"first": i0, "size": Vector2i(w, d), "heights": heights, "codes": codes, "texel": texel}
+	if _hole_count > 0:
+		_cut_ground_holes(out)
+	return out
 
 
 ## How far the field's bilinear heights can fall from the triangles on ground it displaces (m):
@@ -939,6 +959,8 @@ func flush_edits() -> void:
 		(heightmap as ImageTexture).update(_height_image())
 	if _edit_maps_dirty.get("splat", false) and is_splat_editable() and splatmap == _splat_texture:
 		(splatmap as ImageTexture).update(_splat_image())
+	if _edit_maps_dirty.get("holes", false) and is_holes_editable() and holes == _holes_texture:
+		(holes as ImageTexture).update(_hole_image())
 	_edit_maps_dirty = {}
 	_update_ground_region(rect)
 
@@ -950,7 +972,7 @@ func save_edited_maps() -> void:
 	if not Engine.is_editor_hint():
 		return
 	flush_edits()
-	for entry in [["heightmap", "height", is_height_editable()], ["splatmap", "splat", is_splat_editable()]]:
+	for entry in [["heightmap", "height", is_height_editable()], ["splatmap", "splat", is_splat_editable()], ["holes", "holes", is_holes_editable()]]:
 		var tex := get(entry[0]) as ImageTexture
 		if tex == null or not entry[2]:
 			continue
@@ -977,8 +999,9 @@ func _edit_stem() -> String:
 ## Where the ray from [param origin] along [param direction] (world space) first comes down onto
 ## the terrain's surface (its finest LOD), or Vector3.INF. Steps along the grid at half the vertex
 ## spacing within the terrain's bounds, then bisects to about a millimetre. The Sculpt tool picks
-## with it; a game can too (no physics needed).
-func intersect_ray(origin: Vector3, direction: Vector3, max_distance := 1e6) -> Vector3:
+## with it; a game can too (no physics needed). It passes through [member holes] unless
+## [param through_holes] is off.
+func intersect_ray(origin: Vector3, direction: Vector3, max_distance := 1e6, through_holes := true) -> Vector3:
 	if _nx < 2 or direction.is_zero_approx():
 		return Vector3.INF
 	var o := to_local(origin)
@@ -1024,7 +1047,9 @@ func intersect_ray(origin: Vector3, direction: Vector3, max_distance := 1e6) -> 
 					b = m
 				if b - a < 1e-4:
 					break
-			return to_global(o + d * b)
+			var hit := o + d * b
+			if not through_holes or not _is_hole_local(Vector2(hit.x, hit.z)):
+				return to_global(hit)
 		prev_t = t
 		prev_f = f
 	return Vector3.INF
@@ -1032,7 +1057,7 @@ func intersect_ray(origin: Vector3, direction: Vector3, max_distance := 1e6) -> 
 
 ## Reads the maps again if a property set them since (undo and redo swap them).
 func _sync_maps() -> void:
-	if _nx >= 2 and (heightmap != _src_texture or splatmap != _splat_texture):
+	if _nx >= 2 and (heightmap != _src_texture or splatmap != _splat_texture or holes != _holes_texture):
 		rebuild()
 
 
@@ -1109,17 +1134,13 @@ func _rebuild_chunks(rect: Rect2i) -> void:
 		mesh.clear_surfaces()
 		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, data["arrays"], [], data["lods"])
 		_chunk_data[key] = data
-		if data.has("occluder"):
-			for child in mi.get_children(true):
-				if child is OccluderInstance3D:
-					((child as OccluderInstance3D).occluder as ArrayOccluder3D).set_arrays(data["occluder"]["vertices"], data["occluder"]["indices"])
+		_set_occluder(mi, data)
 		if _shapes.has(key):
-			var heights: PackedFloat32Array = data["heights"]
-			var map := PackedFloat32Array()
-			map.resize(heights.size())
-			for i in heights.size():
-				map[i] = heights[i] / _spacing
-			((_shapes[key] as CollisionShape3D).shape as HeightMapShape3D).map_data = map
+			var old := _shapes[key] as Node
+			_body.remove_child(old)
+			old.queue_free()
+			_shapes.erase(key)
+			_add_chunk_shape(key, data)
 
 
 ## The detail field's ground data within grid [param rect]: rewritten in place, or made again when
@@ -1373,12 +1394,237 @@ static func _ring(cq: int) -> Array[Vector2i]:
 ## [method _chunk_arrays_gd], about thirty times faster). Reads no node: runs on worker threads
 ## while streaming.
 func _chunk_arrays(cx: int, cz: int, levels: int) -> Dictionary:
+	var out: Dictionary
 	if not ClassDB.class_exists(MESHER):
-		return _chunk_arrays_gd(cx, cz, levels)
-	var out: Dictionary = ClassDB.class_call_static(MESHER, &"build_chunk", _grid_state(levels), cx, cz)
-	if not _paint.is_empty():
-		_paint_chunk_colors(out, cx, cz)
+		out = _chunk_arrays_gd(cx, cz, levels)
+	else:
+		out = ClassDB.class_call_static(MESHER, &"build_chunk", _grid_state(levels), cx, cz)
+		if not _paint.is_empty():
+			_paint_chunk_colors(out, cx, cz)
+	if _hole_count > 0 and _chunk_has_holes(cx, cz):
+		_cut_chunk_holes(out, cx, cz)
 	return out
+
+
+# --- Holes --------------------------------------------------------------------------------------
+
+func _build_holes() -> void:
+	_holes_texture = holes
+	_holes = PackedByteArray()
+	_hole_count = 0
+	if holes == null or _nx < 2:
+		return
+	var img := holes.get_image()
+	if img == null or img.is_empty():
+		return
+	img = img.duplicate() as Image
+	if img.is_compressed():
+		img.decompress()
+	img.convert(Image.FORMAT_L8)
+	if img.get_size() != Vector2i(_nx, _nz):
+		img.resize(_nx, _nz, Image.INTERPOLATE_NEAREST)
+	_holes = img.get_data()
+	for i in _holes.size():
+		var h := 1 if _holes[i] > 127 else 0
+		_holes[i] = h
+		_hole_count += h
+
+
+func _hole_at(gx: int, gz: int) -> bool:
+	return _hole_count > 0 and _holes[clampi(gz, 0, _nz - 1) * _nx + clampi(gx, 0, _nx - 1)] != 0
+
+
+func _chunk_has_holes(cx: int, cz: int) -> bool:
+	var cq := chunk_quads
+	for z in range(cz * cq, cz * cq + cq + 1):
+		for x in range(cx * cq, cx * cq + cq + 1):
+			if _holes[z * _nx + x] != 0:
+				return true
+	return false
+
+
+## Leaves out of a built chunk the triangles of its LODs and skirts that touch a hole, and its
+## occluder (it would hide what lies below the holes).
+func _cut_chunk_holes(out: Dictionary, cx: int, cz: int) -> void:
+	var ring := _ring(chunk_quads)
+	var arrays: Array = out["arrays"]
+	arrays[Mesh.ARRAY_INDEX] = _cut_indices(arrays[Mesh.ARRAY_INDEX], cx, cz, 1, ring)
+	var keys: Array = (out["lods"] as Dictionary).keys()
+	keys.sort()
+	var lods := {}
+	for k in keys.size():
+		lods[keys[k]] = _cut_indices(out["lods"][keys[k]], cx, cz, 2 << k, ring)
+	out["lods"] = lods
+	out.erase("occluder")
+
+
+func _cut_indices(idx: PackedInt32Array, cx: int, cz: int, s: int, ring: Array[Vector2i]) -> PackedInt32Array:
+	var cq := chunk_quads
+	var n := cq + 1
+	var g0 := Vector2i(cx * cq, cz * cq)
+	var kept := PackedInt32Array()
+	kept.resize(idx.size())
+	var count := 0
+	for t in range(0, idx.size(), 3):
+		var hole := false
+		var sum := Vector2i.ZERO
+		for k in 3:
+			var v := idx[t + k]
+			# A skirt vertex hangs from a border vertex: the border vertex decides.
+			var g := Vector2i(v % n, v / n) if v < n * n else ring[v - n * n]
+			sum += g
+			hole = hole or _holes[(g0.y + g.y) * _nx + g0.x + g.x] != 0
+		if not hole and s > 1:
+			var c := Vector2i(roundi(sum.x / 3.0), roundi(sum.y / 3.0))
+			hole = _holes[(g0.y + c.y) * _nx + g0.x + c.x] != 0
+		if not hole:
+			kept[count] = idx[t]
+			kept[count + 1] = idx[t + 1]
+			kept[count + 2] = idx[t + 2]
+			count += 3
+	kept.resize(count)
+	return kept
+
+
+## Whether [param world_position] (its XZ) lies in a hole: on a triangle the chunks leave out at
+## their finest LOD.
+func is_hole(world_position: Vector3) -> bool:
+	if _hole_count == 0:
+		return false
+	var local := to_local(world_position)
+	return _is_hole_local(Vector2(local.x, local.z))
+
+
+func _is_hole_local(p: Vector2) -> bool:
+	if _hole_count == 0:
+		return false
+	var g := (p - _origin) / _spacing
+	if g.x < 0.0 or g.y < 0.0 or g.x > _nx - 1 or g.y > _nz - 1:
+		return false
+	var x0 := mini(floori(g.x), _nx - 2)
+	var z0 := mini(floori(g.y), _nz - 2)
+	var fx := g.x - x0
+	var fz := g.y - z0
+	# The quad's diagonal runs from (x0 + 1, z0) to (x0, z0 + 1), as the chunks triangulate it.
+	if fx + fz <= 1.0:
+		return _hole_at(x0, z0) or _hole_at(x0 + 1, z0) or _hole_at(x0, z0 + 1)
+	return _hole_at(x0 + 1, z0 + 1) or _hole_at(x0 + 1, z0) or _hole_at(x0, z0 + 1)
+
+
+## Cuts holes (or with [param fill], closes them) within [param radius] metres of
+## [param world_position]: every vertex within the radius. Persistent: the hole map becomes an
+## editable map of one texel per vertex ([method make_holes_editable]). Returns the grid vertices
+## it changed.
+func cut_holes(world_position: Vector3, radius: float, fill := false) -> Rect2i:
+	if _nx < 2 or radius <= 0.0:
+		return Rect2i()
+	make_holes_editable()
+	_wait_tasks()
+	var local := to_local(world_position)
+	var c := (Vector2(local.x, local.z) - _origin) / _spacing
+	var r := radius / _spacing
+	var g0 := Vector2i((c - Vector2.ONE * r).floor()).clamp(Vector2i.ZERO, Vector2i(_nx - 1, _nz - 1))
+	var g1 := Vector2i((c + Vector2.ONE * r).ceil()).clamp(Vector2i.ZERO, Vector2i(_nx - 1, _nz - 1))
+	var value := 0 if fill else 1
+	for gz in range(g0.y, g1.y + 1):
+		for gx in range(g0.x, g1.x + 1):
+			if (Vector2(gx, gz) - c).length() <= r:
+				_holes[gz * _nx + gx] = value
+	var rect := Rect2i(g0, g1 - g0 + Vector2i.ONE)
+	_holes_changed(rect)
+	return rect
+
+
+## Whether [member holes] is an editable map (an ImageTexture of one L8 texel per vertex).
+func is_holes_editable() -> bool:
+	var tex := holes as ImageTexture
+	return tex != null and _nx >= 2 and tex.get_width() == _nx and tex.get_height() == _nz and tex.get_format() == Image.FORMAT_L8
+
+
+## Replaces [member holes] by an editable map with the same holes at every vertex (255: a hole,
+## FORMAT_L8, one texel per vertex), unless it is one.
+func make_holes_editable() -> void:
+	_sync_maps()
+	if _nx < 2 or is_holes_editable():
+		return
+	_wait_tasks()
+	if _holes.is_empty():
+		_holes.resize(_nx * _nz)
+		_holes.fill(0)
+	_swapping_edit_map = true
+	holes = ImageTexture.create_from_image(_hole_image())
+	_swapping_edit_map = false
+	_holes_texture = holes
+
+
+## The editable hole map (FORMAT_L8, 255 where a vertex is in a hole, one texel per vertex), a copy.
+func get_hole_image() -> Image:
+	make_holes_editable()
+	return _hole_image()
+
+
+func _hole_image() -> Image:
+	var data := _holes.duplicate()
+	for i in data.size():
+		data[i] = 255 if data[i] != 0 else 0
+	return Image.create_from_data(_nx, _nz, false, Image.FORMAT_L8, data)
+
+
+## Writes [param region] (as [method get_hole_image] has it) into the editable hole map at grid
+## vertex [param position] and updates the terrain there. The hole brushes' undo and redo.
+func set_hole_region(position: Vector2i, region: Image) -> void:
+	make_holes_editable()
+	if region == null:
+		return
+	_wait_tasks()
+	var img := region.duplicate() as Image
+	img.convert(Image.FORMAT_L8)
+	var data := img.get_data()
+	var rect := Rect2i(position, img.get_size()).intersection(Rect2i(0, 0, _nx, _nz))
+	for y in range(rect.position.y, rect.end.y):
+		for x in range(rect.position.x, rect.end.x):
+			_holes[y * _nx + x] = 1 if data[(y - position.y) * img.get_width() + (x - position.x)] > 127 else 0
+	_holes_changed(rect)
+	flush_edits()
+
+
+## After the holes of grid [param rect] changed in _holes: the chunks, collision; the ground data
+## and the texture with the next flush.
+func _holes_changed(rect: Rect2i) -> void:
+	if not rect.has_area():
+		return
+	_hole_count = _holes.size() - _holes.count(0)
+	var grown := rect.grow(1).intersection(Rect2i(0, 0, _nx, _nz))
+	_rebuild_chunks(grown)
+	# Collision: one height shape without holes, a shape per chunk with them (see _build_collision).
+	var whole := _whole_shape != null and is_instance_valid(_whole_shape)
+	if not is_streaming() and _body != null and whole == (_hole_count > 0):
+		_build_collision()
+	_queue_edit_flush(grown, "holes")
+
+
+## The ground data's texels that lie on a hole get no ground (code -2): the near-camera field
+## dives under them as at the end of the ground.
+func _cut_ground_holes(part: Dictionary) -> void:
+	var texel: float = part["texel"]
+	var first: Vector2i = part["first"]
+	var size: Vector2i = part["size"]
+	var codes: PackedInt32Array = part["codes"]
+	var lo := Vector2i(((Vector2(first) * texel) / _spacing).floor()) - Vector2i.ONE
+	var hi := Vector2i(((Vector2(first + size) * texel) / _spacing).ceil()) + Vector2i.ONE
+	lo = lo.clamp(Vector2i.ZERO, Vector2i(_nx - 1, _nz - 1))
+	hi = hi.clamp(Vector2i.ZERO, Vector2i(_nx - 1, _nz - 1))
+	for gz in range(lo.y, hi.y + 1):
+		for gx in range(lo.x, hi.x + 1):
+			if _holes[gz * _nx + gx] == 0:
+				continue
+			# Every texel in the quads around the vertex.
+			var t0 := Vector2i(((Vector2(gx - 1, gz - 1) * _spacing) / texel).floor()) - first
+			var t1 := Vector2i(((Vector2(gx + 1, gz + 1) * _spacing) / texel).ceil()) - first
+			for tz in range(maxi(t0.y, 0), mini(t1.y, size.y - 1) + 1):
+				for tx in range(maxi(t0.x, 0), mini(t1.x, size.x - 1) + 1):
+					codes[tz * size.x + tx] = -2
+	part["codes"] = codes
 
 
 ## What the native chunk builder needs of the grid: the heights (the whole terrain's, or the
@@ -1555,18 +1801,30 @@ func _make_chunk(key: Vector2i, data: Dictionary) -> void:
 	mi.material_override = _material
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON if cast_shadows else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(mi, false, Node.INTERNAL_MODE_BACK)
-	if data.has("occluder"):
-		var occ := ArrayOccluder3D.new()
-		occ.set_arrays(data["occluder"]["vertices"], data["occluder"]["indices"])
-		var oi := OccluderInstance3D.new()
-		oi.name = "Occluder"
-		oi.occluder = occ
-		mi.add_child(oi, false, Node.INTERNAL_MODE_BACK)
+	_set_occluder(mi, data)
 	_chunks.append(mi)
 	_chunk_nodes[key] = mi
 	_chunk_data[key] = data
 	if is_streaming() and _body != null:
-		_add_chunk_shape(key, data["heights"])
+		_add_chunk_shape(key, data)
+
+
+## Gives chunk [param mi] the occluder of its [param data], or none (a chunk with holes has none).
+func _set_occluder(mi: MeshInstance3D, data: Dictionary) -> void:
+	var oi: OccluderInstance3D
+	for child in mi.get_children(true):
+		if child is OccluderInstance3D:
+			oi = child
+	if not data.has("occluder"):
+		if oi != null:
+			oi.queue_free()
+		return
+	if oi == null:
+		oi = OccluderInstance3D.new()
+		oi.name = "Occluder"
+		oi.occluder = ArrayOccluder3D.new()
+		mi.add_child(oi, false, Node.INTERNAL_MODE_BACK)
+	(oi.occluder as ArrayOccluder3D).set_arrays(data["occluder"]["vertices"], data["occluder"]["indices"])
 
 
 ## Triangles of a chunk's grid at stride [param s] and its skirts. Front faces wind clockwise seen
@@ -1773,8 +2031,15 @@ func _build_collision() -> void:
 	_body.collision_mask = collision_mask
 	for child in _body.get_children():
 		child.queue_free()
+	_shapes.clear()
+	_whole_shape = null
 	if is_streaming():
 		return # one shape per streamed chunk, as it loads
+	if _hole_count > 0:
+		# Holes: a shape per chunk, the chunks with holes as their triangles.
+		for key: Vector2i in _chunk_data:
+			_add_chunk_shape(key, _chunk_data[key])
+		return
 	# A HeightMapShape3D has one unit between samples and is centred: scale it by the spacing
 	# (uniformly, with the heights divided by it), offset to the grid's centre.
 	var data := PackedFloat32Array()
@@ -1796,16 +2061,36 @@ func _height_shape(w: int, d: int, data: PackedFloat32Array, centre: Vector2) ->
 	return cs
 
 
-func _add_chunk_shape(key: Vector2i, heights: PackedFloat32Array) -> void:
+func _add_chunk_shape(key: Vector2i, chunk: Dictionary) -> void:
+	var cs := _chunk_shape(key, chunk)
+	cs.name = "Chunk_%d_%d" % [key.x, key.y]
+	_body.add_child(cs)
+	_shapes[key] = cs
+
+
+## A chunk's collision shape: its heights (a HeightMapShape3D), or, with holes in it, its finest
+## triangles the holes leave (a trimesh; a height shape cannot have holes but by NaN heights, which
+## Godot's own physics warns about on every ray).
+func _chunk_shape(key: Vector2i, chunk: Dictionary) -> CollisionShape3D:
 	var n := chunk_quads + 1
+	if _hole_count > 0 and _chunk_has_holes(key.x, key.y):
+		var verts: PackedVector3Array = chunk["arrays"][Mesh.ARRAY_VERTEX]
+		var idx: PackedInt32Array = chunk["arrays"][Mesh.ARRAY_INDEX]
+		var faces := PackedVector3Array()
+		for t in range(0, idx.size(), 3):
+			if idx[t] < n * n and idx[t + 1] < n * n and idx[t + 2] < n * n: # not the skirts
+				faces.append_array([verts[idx[t]], verts[idx[t + 1]], verts[idx[t + 2]]])
+		var trimesh := ConcavePolygonShape3D.new()
+		trimesh.set_faces(faces)
+		var cs := CollisionShape3D.new()
+		cs.shape = trimesh
+		return cs
+	var heights: PackedFloat32Array = chunk["heights"]
 	var data := PackedFloat32Array()
 	data.resize(heights.size())
 	for i in heights.size():
 		data[i] = heights[i] / _spacing
-	var cs := _height_shape(n, n, data, _chunk_rect(key).get_center())
-	cs.name = "Chunk_%d_%d" % [key.x, key.y]
-	_body.add_child(cs)
-	_shapes[key] = cs
+	return _height_shape(n, n, data, _chunk_rect(key).get_center())
 
 
 func _build_field() -> void:
