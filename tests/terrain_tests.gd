@@ -763,7 +763,11 @@ func test_roads() -> void:
 	path.width = 3.0
 	path.falloff = 2.0
 	path.smoothing = 10.0
+	var lone := GADSTerrainPath3D.new()
+	check(lone._get_configuration_warnings().size() == 2, "a path with no terrain and no curve warns about both")
+	lone.free()
 	hills.add_child(path)
+	check(path._get_configuration_warnings().is_empty(), "a path on a terrain with a curve does not warn")
 	var points := path.road_points()
 	var ground_bump := 0.0
 	var road_bump := 0.0

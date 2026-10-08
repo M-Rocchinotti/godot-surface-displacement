@@ -35,6 +35,22 @@ func _ready() -> void:
 		apply.call_deferred()
 
 
+func _get_configuration_warnings() -> PackedStringArray:
+	var out := PackedStringArray()
+	if get_terrain() == null:
+		out.append("No GADSTerrain3D to edit: make this node a child of one, or set terrain.")
+	if curve == null or curve.point_count < 2:
+		out.append("Draw a curve with at least two points (the road's centre line).")
+	if layer >= 0 and get_terrain() != null and layer >= get_terrain().layers.size():
+		out.append("The terrain has no layer %d to paint (it has %d)." % [layer, get_terrain().layers.size()])
+	return out
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_PARENTED or what == NOTIFICATION_UNPARENTED:
+		update_configuration_warnings()
+
+
 func get_terrain() -> GADSTerrain3D:
 	if not terrain.is_empty():
 		return get_node_or_null(terrain) as GADSTerrain3D
