@@ -162,7 +162,9 @@ func dig_crater() -> Vector3:
 			t.sculpt(hit, 4.5, GADSSculpt.Mode.RAISE, 0.35)
 			t.sculpt(hit, 3.0, GADSSculpt.Mode.LOWER, 1.4)
 			return hit
-	return Vector3.INF
+	# Elsewhere: a dent in whatever is looked at (a baked prop with collision, the deformed ground).
+	var dent := GADSImpact.dent_ray(get_viewport().get_world_3d(), cam.project_ray_origin(centre), cam.project_ray_normal(centre), 0.25, 0.04)
+	return dent["position"]
 
 
 # --- UI ------------------------------------------------------------------------------------

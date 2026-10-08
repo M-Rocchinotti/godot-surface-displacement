@@ -36,6 +36,7 @@ func _run() -> void:
 	await _test("sculpts_and_paints", test_editing)
 	await _test("erodes_and_generates", test_erosion)
 	await _test("roads_along_paths", test_roads)
+	await _test("impacts_dent_the_ground", test_impact)
 	await _test("native_chunks", test_native_chunks)
 	await _test("native_grid", test_native_grid)
 	if DisplayServer.get_name() != "headless":
@@ -119,6 +120,35 @@ func make_terrain(params := {}) -> GADSTerrain3D:
 
 
 # --- Tests --------------------------------------------------------------------------------------
+
+## GADSImpact on a terrain: a permanent dent lowers the heights by its depth at the hit; where a
+## deformation field covers the hit, a dent is a deformation mark instead and the heights stay.
+func test_impact() -> void:
+	var t := make_terrain({"height_scale": 10.0})
+	root.add_child(t)
+	var spot := Vector3(2.0, 0.0, 2.0)
+	var before := t.get_height(spot)
+	var hit := GADSImpact.dent_node(t, spot + Vector3(0, 30, 0), Vector3.DOWN, 3.0, 0.5, true)
+	var drop := before - t.get_height(spot)
+	print("  permanent dent: %s at %s, the ground %.3f m lower" % [hit["kind"], hit["position"], drop])
+	check(hit["kind"] == "terrain" and absf(drop - 0.5) < 0.01 and absf(t.get_height(spot + Vector3(4, 0, 0)) - t.get_height(spot + Vector3(4, 0, 0))) == 0.0,
+		"a permanent dent lowers the terrain by its depth at the hit")
+	var deform := GADSDeformationField.new()
+	deform.size_m = 16.0
+	deform.resolution = 256
+	root.add_child(deform)
+	await process_frame
+	var other := Vector3(-3.0, 0.0, 1.0)
+	var h0 := t.get_height(other)
+	hit = GADSImpact.dent_node(t, other + Vector3(0, 30, 0), Vector3.DOWN, 1.0, 0.2)
+	var mark := deform.get_depth(Vector3(other.x, h0, other.z))
+	print("  covered by a deformation field: %s, mark %.3f m deep, ground moved %.4f m" % [hit["kind"], mark, h0 - t.get_height(other)])
+	check(hit["kind"] == "deformation" and absf(mark - 0.2) < 0.02 and t.get_height(other) == h0,
+		"under a deformation field a dent is a mark that recovers, the heights stay")
+	check(GADSImpact.dent_node(t, Vector3(500, 30, 0), Vector3.DOWN, 1.0, 0.2)["kind"] == "", "a ray that misses dents nothing")
+	deform.queue_free()
+	t.queue_free()
+	await process_frame
 
 func test_heights() -> void:
 	var t := make_terrain()

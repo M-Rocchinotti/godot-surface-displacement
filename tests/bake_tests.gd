@@ -63,6 +63,7 @@ func _run() -> void:
 	await _test("sculpt", test_sculpt)
 	await _test("bake_cache", test_bake_cache)
 	await _test("vertex_paint", test_vertex_paint)
+	await _test("impact_dents_a_baked_mesh", test_impact)
 	await _test("streamed_bake", test_stream)
 	await _test("skinned", test_skinned)
 	await _test("blend_shapes", test_blend_shapes)
@@ -1904,6 +1905,37 @@ func test_prop_geometry() -> void:
 	manager.prop_geometry = false
 	check(manager.get_prop_geometry_nodes().is_empty(), "turning it off lets them go")
 	h.clear_scene()
+	await process_frame
+
+
+## GADSImpact.dent_ray on a baked mesh with collision: the physics ray finds the node, the dent
+## goes into its sculpt map and the new bake is lower there by the dent's depth.
+func test_impact() -> void:
+	var node := _make_node(uv_material(bump_field(64, 0.08), 0.02))
+	node.name = "Dented"
+	node.quality = GADSMeshInstance3D.Quality.MEDIUM
+	node.collision = GADSMeshBaker.Collision.TRIMESH
+	root.add_child(node)
+	node.bake()
+	await physics_frame
+	await physics_frame
+	# The bump is in the middle; at the spot the material's relief is under 0.2 mm.
+	var spot := Vector2(0.5, 0.3)
+	var lowest_at := func() -> float:
+		var low := INF
+		for p: Vector3 in node.mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX]:
+			if Vector2(p.x - spot.x, p.z - spot.y).length() < 0.03:
+				low = minf(low, p.y)
+		return low
+	var hit := GADSImpact.dent_ray(node.get_world_3d(), Vector3(spot.x, 1.0, spot.y), Vector3.DOWN, 0.15, 0.03)
+	check(hit["kind"] == "mesh" and hit["node"] == node, "the physics ray finds the baked mesh (%s)" % hit["kind"])
+	while node.is_baking():
+		await process_frame
+	var after: float = lowest_at.call()
+	print("  the new bake's lowest point at the hit: %.1f mm (dent 30 mm)" % (after * 1000.0))
+	check(node.sculpt_map != null and absf(after + 0.03) < 0.004, "the new bake is lower there by the dent's depth")
+	check(GADSImpact.dent_ray(node.get_world_3d(), Vector3(9, 1, 9), Vector3.DOWN, 0.1, 0.01)["kind"] == "", "a ray that hits nothing dents nothing")
+	node.queue_free()
 	await process_frame
 
 

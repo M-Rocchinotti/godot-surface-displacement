@@ -157,6 +157,10 @@ All notable changes to this project are documented here. The format follows
   collision and the detail field's ground data. Edited maps are one texel per vertex, saved into
   `data_directory`. Runtime API: `sculpt()`, `paint_splatmap()`, `set_height_region()` /
   `set_splat_region()`, `intersect_ray()` (no physics needed), the `edited` signal.
+- **Impacts** (`GADSImpact.dent_ray()` / `dent_node()`): one call dents whatever is hit: a mark
+  in the runtime deformation where it covers the hit, the heights of a GADSTerrain3D, or the
+  sculpt map of a baked GADSMeshInstance3D (baked again in the background). The demo's C key digs
+  into props too.
 - **Prop geometry** (`GADSManager.prop_geometry`): the nearest plain MeshInstance3D props
   drawing a UV-mapped or triplanar GADS material get a runtime, view-dependent tessellation
   (`GADSPropGeometry`: an internal GADSMeshInstance3D drawing in their place, sharing the runtime
