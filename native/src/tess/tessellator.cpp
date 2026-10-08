@@ -585,13 +585,17 @@ double Tessellator::sample_displacement(int surface, const V3 &world, const V3 &
 		return offset;
 	}
 	const Displacement &d = displacements_[di];
+	double mask = relief_mask(d, color);
+	if (mask <= 0.0) {
+		return offset;
+	}
 	double masks[2];
 	layer_masks(d, color, dir, masks);
 	if (d.mapping == MAPPING_UV) {
-		return offset + relief_at(d, uv_transform(d, uv), lod, masks);
+		return offset + mask * relief_at(d, uv_transform(d, uv), lod, masks);
 	}
 	if (d.mapping == MAPPING_WORLD) {
-		return offset + relief_at(d, planar_uv(d, -1, world, dir), lod, masks);
+		return offset + mask * relief_at(d, planar_uv(d, -1, world, dir), lod, masks);
 	}
 	double w[3];
 	triplanar_weights(dir, d.triplanar_sharpness, w);
@@ -601,7 +605,12 @@ double Tessellator::sample_displacement(int surface, const V3 &world, const V3 &
 			relief += w[a] * relief_at(d, planar_uv(d, a, world, dir), lod, masks);
 		}
 	}
-	return offset + relief;
+	return offset + mask * relief;
+}
+
+// The displacement mask at vertex colour `color` (1 without one), as the shaders' gads_relief_mask().
+double Tessellator::relief_mask(const Displacement &d, const float color[4]) {
+	return d.relief_mask_channel >= 0 && d.relief_mask_channel < 4 ? std::clamp(double(color[d.relief_mask_channel]), 0.0, 1.0) : 1.0;
 }
 
 // The sculpt offset (m) at the source mesh's own uv (bilinear, mip 0, clamped to the map).
@@ -863,7 +872,17 @@ float Tessellator::relief_error(int t, double tol) const {
 	// layers', plus the detail layer's): the deviation cannot exceed it.
 	z_lo = std::min(z_lo, d.height_m * (lo - d.center));
 	z_hi = std::max(z_hi, d.height_m * (hi - d.center));
-	double bound = (z_hi - z_lo) + (has_detail(d) ? d.detail_height_m * std::max(0.0, detail_hi - detail_lo) : 0.0);
+	// The displacement mask m (linear over the triangle, in [m_lo, m_hi]) scales the relief: m x z
+	// stays within the products of the two ranges' ends.
+	double m_lo = 1.0, m_hi = 1.0;
+	if (d.relief_mask_channel >= 0) {
+		m_lo = std::min({ relief_mask(d, c[0]->color), relief_mask(d, c[1]->color), relief_mask(d, c[2]->color) });
+		m_hi = std::max({ relief_mask(d, c[0]->color), relief_mask(d, c[1]->color), relief_mask(d, c[2]->color) });
+		double a = std::min(m_lo * z_lo, m_hi * z_lo), b = std::max(m_lo * z_hi, m_hi * z_hi);
+		z_lo = a;
+		z_hi = b;
+	}
+	double bound = (z_hi - z_lo) + (has_detail(d) ? m_hi * d.detail_height_m * std::max(0.0, detail_hi - detail_lo) : 0.0);
 	bool vector = has_vector(d);
 	if (vector) {
 		// Each channel stays within its range over the triangle's uvs; the frame turns by up to the

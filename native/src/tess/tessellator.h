@@ -68,6 +68,9 @@ struct Displacement {
 	double detail_height_m = 0.0;
 	double detail_scale = 8.0;
 	Layer layers[2]; // layered materials: layers 1 and 2
+	// Displacement mask: a vertex colour channel (0-3: R, G, B, A) scales the height relief (main,
+	// detail and layers; not the vector offsets); -1: none.
+	int relief_mask_channel = -1;
 	// Optional vector displacement (UV mapping): an XYZ offset per texel, three maps (the x, y and z
 	// channels), times vector_m metres; in tangent space (x along +u, y along the image's up, z
 	// along the displacement direction, as OpenGL normal maps) or in object space. Signed values,
@@ -245,6 +248,7 @@ private:
 	double layer_texels(const Displacement &d, int k) const;
 	double finest_texels(const Displacement &d) const;
 	void layer_masks(const Displacement &d, const float color[4], const V3 &dir, double r_masks[2]) const;
+	static double relief_mask(const Displacement &d, const float color[4]);
 	double corner_h(const Corner &c) const;
 	float tri_error(int t, double tol) const;
 	float relief_error(int t, double tol) const;

@@ -44,6 +44,7 @@ func _run() -> void:
 	await _test("animated_relief_flows_and_breathes", test_animated_relief)
 	await _test("before_after_split_view", test_before_after)
 	await _test("per_node_relief_scale_and_tint", test_variation)
+	await _test("displacement_mask", test_relief_mask)
 	await _test("surface_effects", test_surface_effects)
 	await _test("custom_shader_hooks", test_custom_hooks)
 	await _test("visual_shader_nodes", test_visual_shader_nodes)
@@ -1172,6 +1173,55 @@ func test_variation() -> void:
 	check(d_half < 0.01, "relief_scale 0.5 and the tint draw like a material at half the depth with that tint")
 	check(d_full > 3.0 * d_half, "the scaled node differs from the unscaled one")
 	check(d_flat < 0.01, "relief_scale 0 draws like plain normal mapping")
+
+
+## relief_vertex_mask: where the painted channel is 0 the surface draws as plain normal mapping,
+## where it is 1 as the full relief.
+func test_relief_mask() -> void:
+	var field := Harness.make_stone_field(256, 40, 2)
+	var tex := ImageTexture.create_from_image(field["image"])
+	var params := {"height_m": 0.06, "height_center": 1.0}
+	var mat := GADSMaterials.create(GADSMaterials.Mapping.UV, {"height": tex}, params, GADSMaterials.Quality.POM_SELF_SHADOW)
+	var masked: ShaderMaterial = mat.duplicate()
+	masked.set_shader_parameter("relief_vertex_mask", 1)
+	var full := await _render_lit_plane(mat, false)
+	GADSGlobals.set_value(GADSGlobals.POM_RANGE, Vector4(0.0, 0.001, -10, 99))
+	var plain := await _render_lit_plane(mat, false)
+	_reset_globals()
+	# Red 0 on the left half of the plane, 1 on the right half (a sharp step at x = 0 between
+	# two quads).
+	h.new_lit_scene(Color(0.15, 0.17, 0.2))
+	var s := 2.0
+	h.add_quad(Vector3(-s, 0, s), Vector3(0, 0, s), Vector3(0, 0, -s), Vector3(-s, 0, -s),
+			[Vector2(0, 2), Vector2(1, 2), Vector2(1, 0), Vector2(0, 0)], masked, [Color(0, 1, 1), Color(0, 1, 1), Color(0, 1, 1), Color(0, 1, 1)])
+	h.add_quad(Vector3(0, 0, s), Vector3(s, 0, s), Vector3(s, 0, -s), Vector3(0, 0, -s),
+			[Vector2(1, 2), Vector2(2, 2), Vector2(2, 0), Vector2(1, 0)], masked, [Color.WHITE, Color.WHITE, Color.WHITE, Color.WHITE])
+	var sun := h.add_sun(35.0, 30.0, true, 10.0)
+	sun.light_energy = 1.2
+	h.add_camera(Vector3(0.3, 1.4, 2.0), Vector3(0.0, 0.0, -0.2))
+	await h.frames(4)
+	var img := await h.capture()
+	# Columns well away from the seam (its screen position moves with depth).
+	var left := [0.0, 0]
+	var right := [0.0, 0]
+	for py in range(SIZE.y / 2, SIZE.y, 2):
+		for px in range(0, SIZE.x, 2):
+			var c := img.get_pixel(px, py)
+			if px < SIZE.x / 4:
+				var r := plain.get_pixel(px, py)
+				left[0] += (absf(c.r - r.r) + absf(c.g - r.g) + absf(c.b - r.b)) / 3.0
+				left[1] += 1
+			elif px > SIZE.x * 3 / 4:
+				var r := full.get_pixel(px, py)
+				right[0] += (absf(c.r - r.r) + absf(c.g - r.g) + absf(c.b - r.b)) / 3.0
+				right[1] += 1
+	var d_left: float = left[0] / maxf(left[1], 1)
+	var d_right: float = right[0] / maxf(right[1], 1)
+	var d_ref := _mean_difference(plain, full)
+	print("  mean difference: mask 0 vs plain normal mapping %.4f, mask 1 vs the full relief %.4f (the two references differ by %.4f)" % [d_left, d_right, d_ref])
+	check(d_ref > 0.01, "the relief shows")
+	check(d_left < 0.2 * d_ref, "where the mask is 0: plain normal mapping")
+	check(d_right < 0.2 * d_ref, "where it is 1: the full relief")
 
 
 func _mean_difference(a: Image, b: Image) -> float:

@@ -104,6 +104,8 @@ static func displacement_of(material: Material) -> Dictionary:
 		"detail_height_m": GADSMaterials.get_param(sm, "detail_height_m"),
 		"detail_scale": GADSMaterials.get_param(sm, "detail_scale"),
 		"layers": _layers_of(sm),
+		# A vertex colour channel scaling the height relief (-1: none).
+		"relief_mask_channel": int(GADSMaterials.get_param(sm, "relief_vertex_mask")) - 1,
 	}
 	if vector_m > 0.0:
 		out["vector_texture"] = vector

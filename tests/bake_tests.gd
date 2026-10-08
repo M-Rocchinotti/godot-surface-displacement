@@ -39,6 +39,7 @@ func _run() -> void:
 	await _test("follows_the_height_field", test_accuracy)
 	await _test("detail_layer_baked", test_detail_layer)
 	await _test("layered_material_baked", test_layered)
+	await _test("displacement_mask_baked", test_relief_mask)
 	await _test("refines_only_where_the_relief_is", test_adaptivity)
 	await _test("vector_displacement", test_vector_displacement)
 	await _test("closed_meshes_stay_closed", test_watertight)
@@ -372,6 +373,62 @@ func test_layered() -> void:
 	# Blend transitions sharper than a texel cannot be followed; the bake says how far off it stays.
 	check(worst <= maxf(2.0 * tolerance, reported) + 0.0002, "nowhere further from the blended relief than the bake reports")
 	check(col.size() == v.size(), "the vertex colours (the layer masks) are carried into the baked mesh")
+
+
+## relief_vertex_mask: a vertex colour channel scales the relief. A plane whose red channel runs
+## from 0 (x < -0.5) to 1 (x > 0.5) bakes flat and unrefined where it is 0, the masked relief
+## elsewhere.
+func test_relief_mask() -> void:
+	var field := bump_field(128, 0.08)
+	var amp := 0.05
+	var tolerance := 0.0005
+	var mat := uv_material(field, amp, {"relief_vertex_mask": 1})
+	var source := PlaneMesh.new()
+	source.size = Vector2(2, 2)
+	source.subdivide_width = 7
+	source.subdivide_depth = 7
+	var arrays := source.get_mesh_arrays()
+	var colors := PackedColorArray()
+	for p: Vector3 in arrays[Mesh.ARRAY_VERTEX]:
+		colors.append(Color(clampf(p.x + 0.5, 0.0, 1.0), 1, 1, 1))
+	arrays[Mesh.ARRAY_COLOR] = colors
+	var mesh := ArrayMesh.new()
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	var baker := bake_with(mesh, mat, {"max_error": tolerance})
+	check(baker.mesh != null, "a masked material bakes (%s)" % baker.error)
+	if baker.mesh == null:
+		return
+	var out := baker.mesh.surface_get_arrays(0)
+	var v: PackedVector3Array = out[Mesh.ARRAY_VERTEX]
+	var uv: PackedVector2Array = out[Mesh.ARRAY_TEX_UV]
+	var col: PackedColorArray = out[Mesh.ARRAY_COLOR]
+	var idx: PackedInt32Array = out[Mesh.ARRAY_INDEX]
+	var flat_worst := 0.0
+	var masked_out := 0
+	var errors := []
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 5
+	for i in range(0, idx.size(), 3):
+		if v[idx[i]].x < -0.5 and v[idx[i + 1]].x < -0.5 and v[idx[i + 2]].x < -0.5:
+			masked_out += 1
+		var a := rng.randf()
+		var b := rng.randf() * (1.0 - a)
+		var c := 1.0 - a - b
+		var p := v[idx[i]] * a + v[idx[i + 1]] * b + v[idx[i + 2]] * c
+		var t := uv[idx[i]] * a + uv[idx[i + 1]] * b + uv[idx[i + 2]] * c
+		var m := col[idx[i]].r * a + col[idx[i + 1]].r * b + col[idx[i + 2]].r * c
+		errors.append(absf(p.y - m * Harness.relief_value({"amp": amp, "center": 0.0, "field": field}, t)))
+	for p in v:
+		if p.x < -0.5:
+			flat_worst = maxf(flat_worst, absf(p.y))
+	errors.sort()
+	var p95: float = errors[int(errors.size() * 0.95)]
+	var unmasked := bake_with(mesh, uv_material(field, amp), {"max_error": tolerance})
+	print("  %d triangles (%d unmasked), %d of them where the mask is 0; largest height there %.4f mm; distance to the masked relief: 95th percentile %.3f mm, largest %.3f mm" % [
+		idx.size() / 3, unmasked.stats["triangles"], masked_out, flat_worst * 1000.0, p95 * 1000.0, errors[-1] * 1000.0])
+	check(flat_worst < 1e-5, "where the mask is 0 the surface stays flat")
+	check(masked_out <= 16, "and is not refined (the source has 16 triangles there)")
+	check(p95 < 2.0 * tolerance, "elsewhere it follows the relief times the mask")
 
 
 func test_adaptivity() -> void:

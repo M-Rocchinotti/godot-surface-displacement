@@ -145,6 +145,13 @@ layer uv and its relief, in the vertex stage as in the fragment stage, so its ge
 with the parallax around it. A baked mesh (`gads_baked`) keeps the relief at rest: its geometry
 cannot follow, and textures sliding over still relief would look wrong.
 
+The displacement mask (`relief_vertex_mask`) multiplies the relief argument by a vertex colour
+channel, like `gads_relief_scale`: the colour is interpolated across the triangle, so over one
+pixel's march it is constant, as the march assumes. The tessellator multiplies the sampled
+relief (main, detail and layers; not the vector offsets) by the interpolated channel, and its
+per-triangle bound by the products of the mask's and the relief's ranges, so a triangle whose
+corners are all 0 has nothing to refine.
+
 ### 3.6 Per-node variation
 
 `gads_relief_scale` and `gads_tint` are instance uniforms (per GeometryInstance3D, stored in the

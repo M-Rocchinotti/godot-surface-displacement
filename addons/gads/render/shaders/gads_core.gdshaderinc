@@ -71,6 +71,9 @@ uniform float height_center : hint_range(0.0, 1.0) = 1.0;
 uniform vec2 height_remap = vec2(0.0, 1.0);
 uniform float pom_steps_scale : hint_range(0.25, 4.0) = 1.0;
 uniform float self_shadow_strength : hint_range(0.0, 1.0) = 1.0;
+// Displacement mask: a vertex colour channel scales the relief (0 flat, 1 full depth), painted
+// with the Paint tools; the bake follows it.
+uniform int relief_vertex_mask : hint_enum("None", "Vertex R", "Vertex G", "Vertex B", "Vertex A") = 0;
 group_uniforms detail;
 // A second, finer layer on top of the main relief (meso detail: grain on stones, chips in bricks),
 // repeated detail_scale times per main repeat. The height layer is off while detail_height_m is 0,
@@ -246,6 +249,11 @@ float gads_main_height(vec2 uv, float lod) {
 // The vertex colour channel a mask comes from (4 = everywhere).
 float gads_mask_channel(vec4 c, int channel) {
 	return channel == 0 ? c.r : channel == 1 ? c.g : channel == 2 ? c.b : channel == 3 ? c.a : 1.0;
+}
+
+// The relief_vertex_mask at a vertex colour (1 without one).
+float gads_relief_mask(vec4 color) {
+	return relief_vertex_mask == 0 ? 1.0 : gads_mask_channel(color, relief_vertex_mask - 1);
 }
 
 // Surface effects (see the effects uniforms, plus the weather) at the hit uv (main map mip lod)

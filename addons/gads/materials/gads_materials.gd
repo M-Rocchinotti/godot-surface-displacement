@@ -59,6 +59,7 @@ const PARAMETER_DEFAULTS := {
 	"edge_amount": 0.0,
 	"cavity_radius": 3.0,
 	"effects_vertex_mask": 0,
+	"relief_vertex_mask": 0,
 	"weather_response": 1.0,
 	# UV-mapped variants only.
 	"vector_displacement_m": 0.0,

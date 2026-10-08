@@ -200,6 +200,7 @@ void GADSTessellator::add_surface(const Array &p_arrays, const Dictionary &p_dis
 		d.detail_map = p_displacement.get("detail_height_map", -1);
 		d.detail_height_m = p_displacement.get("detail_height_m", 0.0);
 		d.detail_scale = p_displacement.get("detail_scale", 8.0);
+		d.relief_mask_channel = p_displacement.get("relief_mask_channel", -1);
 		Array layers = p_displacement.get("layers", Array());
 		for (int k = 0; k < 2 && k < layers.size(); k++) {
 			Dictionary l = layers[k];
