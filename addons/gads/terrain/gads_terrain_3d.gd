@@ -795,10 +795,11 @@ func erode(params := {}) -> Rect2i:
 
 ## Replaces the heights by a generated field: a GADSProcedural kind ("noise", "ridged", "billow",
 ## "craters"...) with [param params] as [method GADSProcedural.height_image] ("seed", "scale" =
-## features across the terrain, "octaves", "warp"...), 0..1 over [member height_scale]. Needs the
-## native library. Persistent like [method sculpt]. Returns the grid rectangle it changed.
+## features across the terrain, "octaves", "warp"...), 0..1 over [member height_scale] (without the
+## native library slower, by GADSProceduralGD). Persistent like [method sculpt]. Returns the grid
+## rectangle it changed.
 func generate_heights(kind: String, params := {}) -> Rect2i:
-	if _nx < 2 or not GADSProcedural.is_available():
+	if _nx < 2:
 		return Rect2i()
 	var n := clampi(maxi(_nx, _nz), 4, 8192)
 	var img := GADSProcedural.height_image(kind, n, params)

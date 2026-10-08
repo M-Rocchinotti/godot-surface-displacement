@@ -566,9 +566,6 @@ func _create_materials(sets: Array, options: Array) -> PackedStringArray:
 ## Asks for a procedural kind, its size, seed, scale, tile, depth, mapping, name and folder, then
 ## runs [method generate_procedural_material].
 func generate_procedural_dialog() -> void:
-	if not GADSProcedural.is_available():
-		push_warning("GADS: procedural materials need the GADS native library, which is not loaded on this platform.")
-		return
 	var dialog := ConfirmationDialog.new()
 	dialog.title = "Generate Procedural GADS Material"
 	dialog.ok_button_text = "Generate"

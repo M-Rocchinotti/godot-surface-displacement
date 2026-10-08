@@ -4,7 +4,8 @@ extends RefCounted
 ## Relief without texture files: tileable procedural height maps (noise, ridged, billow, rock,
 ## stones, cracks, bricks, tiles, waves, ripples, craters, scales, dunes) and the maps a material needs from a
 ## height map (normal, ambient occlusion, curvature, a two-colour albedo, ORM), made by the
-## native GADSHeightGenerator in milliseconds. Use them in memory, or write them as a texture set
+## native GADSHeightGenerator in milliseconds (without the native library by [GADSProceduralGD],
+## in seconds: the same patterns over a different noise). Use them in memory, or write them as a texture set
 ## (the editor's Project > Tools > GADS: Generate Procedural Material does).
 ##
 ## [codeblock]
@@ -47,9 +48,33 @@ const PRESETS := {
 }
 
 
-## Whether the native generator is loaded (the GADS library for this platform).
+## Generate with the GDScript generator even where the native one is loaded (tests).
+static var force_gdscript := false
+
+
+## Whether the native generator is loaded (the GADS library for this platform). Without it the
+## maps come from [GADSProceduralGD], and erosion is not available.
 static func is_available() -> bool:
 	return ClassDB.class_exists(NATIVE)
+
+
+static func _gen(method: StringName, args: Array) -> Variant:
+	if is_available() and not force_gdscript:
+		return ClassDB.class_call_static.callv([NATIVE, method] + args)
+	match method:
+		&"generate":
+			return GADSProceduralGD.generate(args[0], args[1], args[2])
+		&"normal_map":
+			return GADSProceduralGD.normal_map(args[0], args[1], args[2])
+		&"ambient_occlusion":
+			return GADSProceduralGD.ambient_occlusion(args[0], args[1], args[2], args[3])
+		&"curvature":
+			return GADSProceduralGD.curvature(args[0], args[1], args[2])
+		&"albedo_map":
+			return GADSProceduralGD.albedo_map(args[0], args[1], args[2], args[3], args[4], args[5], args[6])
+		&"orm_map":
+			return GADSProceduralGD.orm_map(args[0], args[1], args[2], args[3])
+	return null
 
 
 ## The kinds of height map: noise, ridged, billow, rock, stones, cracks, bricks, tiles, waves,
@@ -69,9 +94,7 @@ static func params_of(kind: String, params := {}) -> Dictionary:
 ## [param kind] with [param params] (see [constant PRESETS]); null when the kind is unknown or the
 ## native library is missing.
 static func height_image(kind: String, size := 512, params := {}) -> Image:
-	if not _native_ok():
-		return null
-	return ClassDB.class_call_static(NATIVE, &"generate", kind, size, params_of(kind, params))
+	return _gen(&"generate", [kind, size, params_of(kind, params)])
 
 
 ## [method height_image] as a texture for a GADS material: half floats with mipmaps.
@@ -96,40 +119,40 @@ static func erode_image(height: Image, params := {}) -> Image:
 
 
 static func normal_image(height: Image, depth_m: float, tile_m := Vector2.ONE) -> Image:
-	if not _native_ok() or height == null:
+	if height == null:
 		return null
-	return ClassDB.class_call_static(NATIVE, &"normal_map", height, depth_m, tile_m)
+	return _gen(&"normal_map", [height, depth_m, tile_m])
 
 
 ## Ambient occlusion of the relief (FORMAT_RF, 1 = open) from its horizon within
 ## [param radius_m] (default: four times the depth).
 static func ao_image(height: Image, depth_m: float, tile_m := Vector2.ONE, radius_m := -1.0) -> Image:
-	if not _native_ok() or height == null:
+	if height == null:
 		return null
-	return ClassDB.class_call_static(NATIVE, &"ambient_occlusion", height, depth_m, tile_m, radius_m if radius_m > 0.0 else 4.0 * depth_m)
+	return _gen(&"ambient_occlusion", [height, depth_m, tile_m, radius_m if radius_m > 0.0 else 4.0 * depth_m])
 
 
 ## Curvature (FORMAT_RF): 0.5 flat, above on crests and edges, below in hollows and cracks;
 ## [param radius_texels] the scale it looks at.
 static func curvature_image(height: Image, radius_texels := 4.0, gain := 4.0) -> Image:
-	if not _native_ok() or height == null:
+	if height == null:
 		return null
-	return ClassDB.class_call_static(NATIVE, &"curvature", height, radius_texels, gain)
+	return _gen(&"curvature", [height, radius_texels, gain])
 
 
 ## Albedo (RGB8): [param low] to [param high] by height, darker where occluded and in hollows.
 static func albedo_image(height: Image, low: Color, high: Color, ao: Image = null, curvature: Image = null) -> Image:
-	if not _native_ok() or height == null:
+	if height == null:
 		return null
-	return ClassDB.class_call_static(NATIVE, &"albedo_map", height, low, high, ao, curvature, 0.6, 0.5)
+	return _gen(&"albedo_map", [height, low, high, ao, curvature, 0.6, 0.5])
 
 
 ## ORM (RGB8: occlusion, roughness, metallic 0): [param roughness], a little lower on crests and
 ## higher in hollows.
 static func orm_image(ao: Image, curvature: Image, roughness := 0.85) -> Image:
-	if not _native_ok() or (ao == null and curvature == null):
+	if ao == null and curvature == null:
 		return null
-	return ClassDB.class_call_static(NATIVE, &"orm_map", ao, curvature, roughness, 0.15)
+	return _gen(&"orm_map", [ao, curvature, roughness, 0.15])
 
 
 ## The relief depth (m) [method make_maps] uses for [param options]: "depth_m", or the kind's
@@ -230,6 +253,6 @@ static func texture_of(img: Image, half_float := false) -> ImageTexture:
 
 static func _native_ok() -> bool:
 	if not is_available():
-		push_error("GADS: procedural maps need the GADS native library, which is not loaded on this platform.")
+		push_error("GADS: erosion needs the GADS native library, which is not loaded on this platform.")
 		return false
 	return true

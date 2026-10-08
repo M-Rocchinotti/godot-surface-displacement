@@ -621,6 +621,17 @@ in parallel; the results do not depend on the thread count. `tests/run_logic_tes
 the range, the seams (the wrap-around boundary against its neighbours), determinism and the
 derived maps on known shapes.
 
+Without the native library (or with `GADSProcedural.force_gdscript`) the same calls go to
+`GADSProceduralGD` (`addons/gads/materials/gads_procedural_gd.gd`), which keeps the per-texel
+work in the engine's image code: an octave of value noise is a random grid of the octave's
+period, wrapped by two cells and upscaled with `Image.resize` (cubic), then cropped, so it tiles;
+Voronoi, bricks, waves, ripples and craters are evaluated per texel with the same torus distances.
+Its blur (occlusion, curvature) halves the map with bilinear filtering (2 x 2 averages) down to
+the radius and scales it back up, wrapped the same way; occlusion is the slope down from that
+blurred surround rather than a horizon search. The patterns differ from the native ones in
+detail, not in parameters, range or tiling; the logic tests run every check on both generators.
+Erosion stays native only.
+
 ## 14. Surface effects
 
 `gads_apply_effects()` (`gads_common.gdshaderinc`) shades a hit from its remapped height `h`, the

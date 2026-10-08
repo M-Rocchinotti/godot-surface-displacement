@@ -183,6 +183,11 @@ All notable changes to this project are documented here. The format follows
   mappings, detail, layers, masks and sculpt maps; vector displacement, blend shapes, skinning,
   clusters and runtime tessellation still need the native library. Its bakes have their own
   cache key.
+- **Procedural maps without the native library**: `GADSProcedural` falls back to
+  `GADSProceduralGD`, a GDScript generator with the same kinds and parameters (tileable,
+  seeded, 0..1) and the derived maps (normals, occlusion, curvature, albedo, ORM), so the
+  Generate Procedural Material dialog and `GADSTerrain3D.generate_heights()` work everywhere;
+  only erosion still needs the native library.
 - **Global illumination**: `GADSGI.bake_voxel_gi()` and **GADS: Bake Selected VoxelGI (GADS
   Colours)** bake a VoxelGI with GADS surfaces in their colours (the engine's bake takes them as
   white); `GADSGI.proxy_material()`. README section on how SDFGI, VoxelGI, LightmapGI, reflection

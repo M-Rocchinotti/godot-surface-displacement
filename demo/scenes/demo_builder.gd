@@ -619,7 +619,7 @@ static func build_cliff() -> Node3D:
 ## A procedural material of [param kind], or [param fallback] where the native library is missing.
 static func _procedural(kind: String, options: Dictionary, fallback: ShaderMaterial) -> ShaderMaterial:
 	if not GADSProcedural.is_available():
-		return fallback
+		return fallback # The GDScript generator would take seconds a material at startup.
 	var m := GADSProcedural.create_material(kind, options)
 	return m if m != null else fallback
 

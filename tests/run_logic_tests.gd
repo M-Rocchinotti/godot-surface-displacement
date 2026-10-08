@@ -876,6 +876,16 @@ func test_procedural() -> void:
 	for k in kinds:
 		same = same and native.has(k)
 	check(same and kinds.size() == 13, "a preset for each of the native generator's %d kinds" % native.size())
+	_procedural_checks("native")
+	# The same checks on the GDScript generator (platforms without the native library).
+	GADSProcedural.force_gdscript = true
+	_procedural_checks("GDScript")
+	GADSProcedural.force_gdscript = false
+
+
+func _procedural_checks(label: String) -> void:
+	print("  -- the %s generator" % label)
+	var kinds := GADSProcedural.get_kinds()
 	var size := 128
 	var bad := []
 	var seams := []
@@ -962,7 +972,7 @@ func test_procedural() -> void:
 	check(tex_ok and is_equal_approx(float(mat.get_shader_parameter("height_m")), 0.04) and mat.get_shader_parameter("texture_size_m") == Vector2(2, 2),
 		"create_material: a triplanar GADS material with mipmapped maps, depth scaled with the tile (4 cm for 2 m bricks)")
 	# A texture set the texture-set tools recognise.
-	var dir := "user://gads_procedural_test"
+	var dir := "user://gads_procedural_test_%s" % label.to_lower()
 	var written := GADSProcedural.write_texture_set("stones", dir, "pebbles", {"size": 64})
 	var sets := GADSTextureSet.detect(PackedStringArray(written.values()))
 	var roles: Array = (sets[0]["files"] as Dictionary).keys() if sets.size() == 1 else []
