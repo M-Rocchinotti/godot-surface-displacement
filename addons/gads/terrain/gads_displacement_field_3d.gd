@@ -548,6 +548,7 @@ func _apply_layers() -> void:
 	var c: Array[Vector4] = []
 	var d: Array[Vector4] = []
 	var e: Array[Vector4] = []
+	var anim: Array[Vector4] = []
 	var effects: Array = []
 	for k in EFFECT_PARAMS.size():
 		effects.append([] as Array[Vector4])
@@ -563,6 +564,7 @@ func _apply_layers() -> void:
 			c.append(Vector4(1, 0, 1, 1))
 			d.append(Vector4(1, 1, 1, 0))
 			e.append(Vector4(0.5, 1, 1, 0))
+			anim.append(Vector4.ZERO)
 			for fx in effects:
 				fx.append(Vector4.ZERO)
 			continue
@@ -584,6 +586,8 @@ func _apply_layers() -> void:
 		d.append(Vector4(tint.r, tint.g, tint.b, _param(m, "metallic_scale")))
 		var texel := size.x / float(height_tex.get_width()) if height_tex != null else size.x / 1024.0
 		e.append(Vector4(_param(m, "specular"), _param(m, "pom_steps_scale"), _param(m, "self_shadow_strength"), -log(texel) / log(2.0)))
+		var flow: Vector2 = _param(m, "flow_speed")
+		anim.append(Vector4(flow.x, flow.y, _param(m, "pulse_amount"), _param(m, "pulse_rate")))
 		var cover_color: Color = (_param(m, "cover_color") as Color).srgb_to_linear()
 		var slope: Vector2 = _param(m, "cover_slope")
 		var cavity_color: Color = (_param(m, "cavity_color") as Color).srgb_to_linear()
@@ -604,6 +608,7 @@ func _apply_layers() -> void:
 	_set_param("layer_c", c)
 	_set_param("layer_d", d)
 	_set_param("layer_e", e)
+	_set_param("layer_anim", anim)
 	for k in EFFECT_PARAMS.size():
 		_set_param(EFFECT_PARAMS[k], effects[k])
 

@@ -53,6 +53,7 @@ uniform vec4 layer_b[GADS_FIELD_LAYERS]; // 1 / size x, 1 / size z, offset x, of
 uniform vec4 layer_c[GADS_FIELD_LAYERS]; // cos(rotation), sin(rotation), ao strength, roughness scale
 uniform vec4 layer_d[GADS_FIELD_LAYERS]; // albedo tint rgb, metallic scale
 uniform vec4 layer_e[GADS_FIELD_LAYERS]; // specular, steps scale, self-shadow strength, -log2(texel size in m)
+uniform vec4 layer_anim[GADS_FIELD_LAYERS]; // flow (texture tiles / s) x, y, pulse amount, pulse rate (Hz)
 // Each layer material's surface effects (see gads_core.gdshaderinc), blended by the weights.
 uniform vec4 layer_fx_cover_color[GADS_FIELD_LAYERS]; // cover colour rgb, cover roughness
 uniform vec4 layer_fx_cover[GADS_FIELD_LAYERS];       // cover amount, slope from, slope to, height bias
@@ -82,7 +83,7 @@ varying vec4 f_ss_params;  // lod (log2 m per pixel), amplitude, strength, specu
 vec2 gads_layer_uv(int i, vec2 xz) {
 	vec2 q = xz - layer_b[i].zw;
 	vec2 cs = layer_c[i].xy;
-	return vec2(cs.x * q.x - cs.y * q.y, cs.y * q.x + cs.x * q.y) * layer_b[i].xy;
+	return vec2(cs.x * q.x - cs.y * q.y, cs.y * q.x + cs.x * q.y) * layer_b[i].xy - layer_anim[i].xy * TIME;
 }
 
 float gads_layer_h(int i, vec2 xz, float lod) {
@@ -124,7 +125,7 @@ float gads_field_layers(vec2 xz, float lod, vec4 w, out vec4 eff) {
 		float h = gads_layer_h(i, xz, max(lod + layer_e[i].w, 0.0));
 		acc += w[i];
 		float t = gads_field_height_blend(h_acc, h, w[i] / acc, GADS_FIELD_BLEND_WIDTH);
-		relief = mix(relief, layer_a[i].x * h, t);
+		relief = mix(relief, layer_a[i].x * gads_pulse(layer_anim[i].z, layer_anim[i].w) * h, t);
 		h_acc = mix(h_acc, h, t);
 		eff *= 1.0 - t;
 		eff[i] = t;

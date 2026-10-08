@@ -157,6 +157,12 @@ All notable changes to this project are documented here. The format follows
   collision and the detail field's ground data. Edited maps are one texel per vertex, saved into
   `data_directory`. Runtime API: `sculpt()`, `paint_splatmap()`, `set_height_region()` /
   `set_splat_region()`, `intersect_ray()` (no physics needed), the `edited` signal.
+- **Animated relief**: `flow_speed` (texture tiles per second) moves every map of a GADS
+  material, its relief, shading and shadows together, and `pulse_amount` / `pulse_rate` make the
+  depth breathe between `height_m` and (1 - amount) x `height_m`, never deeper. The near-camera
+  field animates its geometry with its layers' settings, so it stays matched to the parallax
+  beyond it; a baked mesh keeps the relief at rest (the validator says so). The material lab has
+  a flowing pool.
 - **Painting layers** (vertex colours): **Paint** in the GADSMeshInstance3D inspector and
   **Paint Layers** in the inspector of any MeshInstance3D drawing a GADS material paint a vertex
   colour channel in the viewport (Paint, Erase, Smooth; Fill / Clear Channel), the layered

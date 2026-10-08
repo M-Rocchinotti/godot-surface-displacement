@@ -115,10 +115,10 @@ void fragment() {
 	mat3 view_to_world = mat3(INV_VIEW_MATRIX);
 	mat3 world_to_view = mat3(VIEW_MATRIX);
 	float fade = gads_fade(view_distance);
-	// A baked mesh's geometry already carries the relief.
+	// A baked mesh's geometry already carries the relief; an animated one breathes (pulse).
 #ifdef GADS_LAYERED
 	float up = normalize(gads_world_normal).y;
-	GADS_RELIEF_ARG arg = vec3(gads_baked > 0.5 ? 0.0 : fade, gads_layer_masks.x * gads_slope_band(layer1_slope, up),
+	GADS_RELIEF_ARG arg = vec3(gads_baked > 0.5 ? 0.0 : fade * gads_pulse_now(), gads_layer_masks.x * gads_slope_band(layer1_slope, up),
 			gads_layer_masks.y * gads_slope_band(layer2_slope, up));
 #ifdef GADS_CUSTOM_LAYER_MASKS
 	arg.yz = clamp(gads_custom_layer_masks(arg.yz, gads_world_pos, normalize(gads_world_normal)), 0.0, 1.0);
@@ -126,7 +126,7 @@ void fragment() {
 	// Masks for the texture blend, also on a baked mesh (whose relief scale is 0).
 	GADS_RELIEF_ARG sample_arg = vec3(1.0, arg.yz);
 #else
-	GADS_RELIEF_ARG arg = gads_baked > 0.5 ? 0.0 : height_m * fade;
+	GADS_RELIEF_ARG arg = gads_baked > 0.5 ? 0.0 : height_m * fade * gads_pulse_now();
 	GADS_RELIEF_ARG sample_arg = arg;
 #endif
 	float amp = gads_relief_amp(arg);
@@ -150,7 +150,7 @@ void fragment() {
 	vec3 n = NORMAL;
 	vec3 v = VIEW;
 	GADSPlane p;
-	p.uv = UV * uv_scale + uv_offset;
+	p.uv = UV * uv_scale + uv_offset - gads_flow();
 	p.ddx = dFdx(p.uv);
 	p.ddy = dFdy(p.uv);
 	vec3 dp1 = dFdx(VERTEX);

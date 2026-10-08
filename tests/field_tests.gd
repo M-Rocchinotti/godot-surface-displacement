@@ -30,6 +30,7 @@ func _run() -> void:
 	await _test("baked_ground_matches_the_cpu_reference", test_baked_ground)
 	await _test("field_pom_matches_ray_traced_height_field", test_field_pom)
 	await _test("layers_blend_by_height", test_layer_height_blend)
+	await _test("animated_layer_moves_the_geometry", test_animated_field)
 	await _test("no_cracks_between_rings", test_no_cracks)
 	await _test("geometry_does_not_swim", test_no_swimming)
 	await _test("edge_blends_into_pom", test_edge_seam)
@@ -171,6 +172,97 @@ func test_vertex_heights() -> void:
 	print("  %d vertices checked (per ring %s), largest error %.4f mm" % [errors.size(), per_ring, worst * 1000.0])
 	check(per_ring[0] > 300 and per_ring[1] > 300 and per_ring[2] > 100, "vertices of the inner three rings are checked")
 	check(worst < 0.00005, "every vertex is at lift + relief of the height map at its ring's mip (within 0.05 mm)")
+	GADSGlobals.set_value(GADSGlobals.DEBUG, Vector4(0, 0.1, 0, 0))
+
+
+## Sums the frames' process steps: the renderer's TIME advances by the same steps.
+class Clock extends Node:
+	var seconds := 0.0
+
+	func _process(delta: float) -> void:
+		seconds += delta
+
+
+## An animated ground material animates the field's geometry as it animates the parallax beyond
+## it: with flow_speed the vertices follow the relief as it moves (texture tiles per second of the
+## renderer's clock), with pulse_amount the relief breathes, never deeper than height_m.
+func test_animated_field() -> void:
+	var tile := 1.28
+	var amp := 0.04
+	var field := Harness.make_wave_field(256)
+	h.new_debug_scene()
+	var clock := Clock.new()
+	h.scene.add_child(clock)
+	var tracked := add_tracked_camera(Vector3(0.37, 1.7, -0.23))
+	var f := add_field(field, tile, amp, tracked)
+	await h.frames(3)
+	var snap := pow(2.0, LEVELS) * S0
+	var origin := Vector2(floorf(0.37 / snap + 0.5) * snap, floorf(-0.23 / snap + 0.5) * snap)
+	var centre := origin - Vector2(0.5, 0.5) * S0
+	add_top_camera(centre, S0)
+	var scale := 0.05
+	GADSGlobals.set_value(GADSGlobals.DEBUG, Vector4(Harness.DEBUG_WORLD_HEIGHT, scale, 0.0, 0.0))
+	var cx := SIZE.x / 2
+	var cy := SIZE.y / 2
+	# Rows through the two inner rings (one and two vertices per pixel), as metres.
+	var rows := func(img: Image) -> Array:
+		var out := []
+		for k in range(-40, 41, 8):
+			var row := PackedFloat32Array()
+			row.resize(SIZE.x)
+			for x in range(cx - 130, cx + 131):
+				row[x] = img.get_pixel(x, cy + k).r * scale
+			out.append(row)
+		return out
+	var shift_of := func(a: Array, b: Array) -> int:
+		var best := 0
+		var best_err := INF
+		for d in range(-30, 31):
+			var err := 0.0
+			for k in a.size():
+				var ra: PackedFloat32Array = a[k]
+				var rb: PackedFloat32Array = b[k]
+				for x in range(cx - 95, cx + 96):
+					err += absf(rb[x] - ra[x - d])
+			if err < best_err:
+				best_err = err
+				best = d
+		return best
+	var spread := func(r: Array) -> float:
+		var lo := INF
+		var hi := -INF
+		for row: PackedFloat32Array in r:
+			for x in range(cx - 60, cx + 61):
+				lo = minf(lo, row[x])
+				hi = maxf(hi, row[x])
+		return hi - lo
+	var still: Array = rows.call(await h.capture())
+	var layer := f.layers[0] as ShaderMaterial
+	layer.set_shader_parameter("flow_speed", Vector2(0.25, 0.0))
+	f.layers = f.layers
+	await h.frames(2)
+	var img_a := await h.capture()
+	var t_a := clock.seconds
+	await h.frames(6)
+	var img_b := await h.capture()
+	var t_b := clock.seconds
+	var moved: int = shift_of.call(rows.call(img_a), rows.call(img_b))
+	var expected := 0.25 * tile * (t_b - t_a) / S0
+	print("  flow 0.25 tiles/s for %.3f s: the field's vertices moved %d px (%d mm), expected %.1f px" % [t_b - t_a, moved, roundi(moved * S0 * 1000.0), expected])
+	# The vertices sample the moving relief on a fixed lattice: whole-pixel shifts with some slack.
+	check(expected > 5.0 and absf(moved - expected) <= maxf(3.0, 0.2 * expected), "the field's geometry moves with the flow, as the parallax does")
+	layer.set_shader_parameter("flow_speed", Vector2.ZERO)
+	layer.set_shader_parameter("pulse_amount", 1.0)
+	layer.set_shader_parameter("pulse_rate", 2.0)
+	f.layers = f.layers
+	await h.frames(2)
+	var still_spread: float = spread.call(still)
+	var spreads: Array[float] = []
+	var start := clock.seconds
+	while clock.seconds - start < 0.75 or spreads.size() < 6:
+		spreads.append(spread.call(rows.call(await h.capture())))
+	print("  pulse 1 at 2 Hz: the inner rings' relief spans %.1f-%.1f mm (still %.1f mm)" % [spreads.min() * 1000.0, spreads.max() * 1000.0, still_spread * 1000.0])
+	check(spreads.max() <= still_spread * 1.02 and spreads.min() < still_spread * 0.35, "the field's relief breathes with the pulse, never deeper")
 	GADSGlobals.set_value(GADSGlobals.DEBUG, Vector4(0, 0.1, 0, 0))
 
 

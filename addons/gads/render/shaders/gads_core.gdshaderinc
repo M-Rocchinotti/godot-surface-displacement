@@ -159,6 +159,14 @@ uniform vec2 texture_size_m = vec2(2.0);
 uniform float planar_rotation_deg = 0.0;
 uniform vec2 planar_offset_m = vec2(0.0);
 uniform float triplanar_sharpness : hint_range(1.0, 16.0) = 4.0;
+group_uniforms animation;
+// Animated relief (lava, flowing water, breathing surfaces): every map moves along flow_speed
+// (texture tiles per second), the relief, its shading and its shadows together, and the relief's
+// depth breathes between height_m and (1 - pulse_amount) x height_m, pulse_rate times a second.
+// Parallax and the near-camera field animate; a baked mesh keeps the relief at rest.
+uniform vec2 flow_speed = vec2(0.0);
+uniform float pulse_amount : hint_range(0.0, 1.0) = 0.0;
+uniform float pulse_rate : hint_range(0.0, 10.0) = 0.5;
 group_uniforms;
 
 // 1 on a GADSMeshInstance3D that draws its baked mesh: the geometry already carries the relief,
@@ -166,6 +174,16 @@ group_uniforms;
 // normal map adds only the detail finer than the triangles (gads_detail_normal). The bake stores
 // CUSTOM0 = rest position, mip level of the vertex's footprint; CUSTOM1 = rest normal, level / 32.
 instance uniform float gads_baked = 0.0;
+
+// How far the maps have moved (texture tiles) and the relief's depth factor now (see flow_speed,
+// pulse_amount); at rest on a baked mesh, whose geometry cannot follow.
+vec2 gads_flow() {
+	return gads_baked > 0.5 ? vec2(0.0) : flow_speed * TIME;
+}
+
+float gads_pulse_now() {
+	return gads_baked > 0.5 ? 1.0 : gads_pulse(pulse_amount, pulse_rate);
+}
 
 varying vec3 gads_world_pos;      // where textures are mapped (a baked mesh: the rest position)
 varying vec3 gads_world_normal;   // the normal projections use (a baked mesh: the rest normal)
@@ -500,7 +518,7 @@ GADSPlane gads_world_plane(vec3 wpos) {
 	p.gu = vec3(c, 0.0, -s) / texture_size_m.x;
 	p.gv = vec3(s, 0.0, c) / texture_size_m.y;
 	vec3 q = wpos - vec3(planar_offset_m.x, 0.0, planar_offset_m.y);
-	p.uv = vec2(dot(p.gu, q), dot(p.gv, q));
+	p.uv = vec2(dot(p.gu, q), dot(p.gv, q)) - gads_flow();
 	p.ddx = vec2(0.0); // Set by the caller from the position's derivatives.
 	p.ddy = vec2(0.0);
 	p.axis = vec3(0.0, 1.0, 0.0);
@@ -537,7 +555,7 @@ GADSPlane gads_triplanar_plane(vec3 wpos, vec3 n, int axis_index, float weight) 
 	p.gu = right / texture_size_m.x;
 	p.gv = -image_up / texture_size_m.y;
 	vec3 q = wpos - vec3(planar_offset_m.x, 0.0, planar_offset_m.y);
-	p.uv = vec2(dot(p.gu, q), dot(p.gv, q));
+	p.uv = vec2(dot(p.gu, q), dot(p.gv, q)) - gads_flow();
 	p.ddx = vec2(0.0); // Set by the caller from the position's derivatives.
 	p.ddy = vec2(0.0);
 	p.weight = weight;

@@ -41,6 +41,7 @@ func _run() -> void:
 	await _test("depth_write_opt_in", test_depth_write)
 	await _test("mip_shimmer_at_distance", test_mip_shimmer)
 	await _test("relief_fades_with_distance", test_distance_fade)
+	await _test("animated_relief_flows_and_breathes", test_animated_relief)
 	await _test("surface_effects", test_surface_effects)
 	await _test("custom_shader_hooks", test_custom_hooks)
 	await _test("visual_shader_nodes", test_visual_shader_nodes)
@@ -1102,6 +1103,108 @@ func test_distance_fade() -> void:
 	print("  largest parallax offset: before the fade %.1f mm, beyond it %.3f mm (%d px)" % [near_max * 1000.0, far_max * 1000.0, far_n])
 	check(near_max > 0.02, "the full relief is there before the fade starts")
 	check(far_n > 1000 and far_max < 0.0002, "beyond the fade end the offset is zero (plain normal mapping)")
+
+
+## Sums the frames' process steps: the renderer's TIME advances by the same steps.
+class Clock extends Node:
+	var seconds := 0.0
+
+	func _process(delta: float) -> void:
+		seconds += delta
+
+
+## Animated relief: flow_speed moves the relief along the flow by that many texture tiles per
+## second of the renderer's clock; pulse_amount makes its depth breathe between height_m and
+## (1 - amount) x height_m, never deeper. A still material stays still.
+func test_animated_relief() -> void:
+	var field := Harness.make_stone_field(256, 40, 2)
+	var tex := ImageTexture.create_from_image(field["image"])
+	h.new_debug_scene()
+	var clock := Clock.new()
+	h.scene.add_child(clock)
+	var mat := GADSMaterials.create(GADSMaterials.Mapping.WORLD, {"height": tex},
+		{"height_m": 0.05, "height_center": 0.0, "texture_size_m": Vector2(2, 2)}, GADSMaterials.Quality.POM)
+	var plane := PlaneMesh.new()
+	plane.size = Vector2(12, 12)
+	var mi := MeshInstance3D.new()
+	mi.mesh = plane
+	mi.material_override = mat
+	h.scene.add_child(mi)
+	# Straight down, orthographic, image right = world +X: the relief view is the height map.
+	var cam := h.add_camera(Vector3(0, 3, 0), Vector3.ZERO, 60.0, Vector3(0, 0, -1))
+	cam.projection = Camera3D.PROJECTION_ORTHOGONAL
+	cam.size = 2.0
+	var px_per_m := SIZE.y / cam.size
+	debug_view(Harness.DEBUG_RELIEF)
+	var rows := func(img: Image) -> Array:
+		var out := []
+		for k in 16:
+			var y := 60 + k * 26
+			var row := PackedFloat32Array()
+			row.resize(SIZE.x)
+			for x in SIZE.x:
+				row[x] = img.get_pixel(x, y).r
+			out.append(row)
+		return out
+	# The best whole-pixel shift d (|d| <= 150) with b(x) = a(x - d).
+	var shift_of := func(a: Array, b: Array) -> int:
+		var best := 0
+		var best_err := INF
+		for d in range(-150, 151):
+			var err := 0.0
+			for k in a.size():
+				var ra: PackedFloat32Array = a[k]
+				var rb: PackedFloat32Array = b[k]
+				for x in range(200, SIZE.x - 200, 2):
+					err += absf(rb[x] - ra[x - d])
+			if err < best_err:
+				best_err = err
+				best = d
+		return best
+	await h.frames(3)
+	var still_a: Array = rows.call(await h.capture())
+	await h.frames(6)
+	var still_b: Array = rows.call(await h.capture())
+	check(shift_of.call(still_a, still_b) == 0, "a material without flow stays still")
+	mat.set_shader_parameter("flow_speed", Vector2(0.25, 0.0))
+	await h.frames(2)
+	var img_a := await h.capture()
+	var t_a := clock.seconds
+	await h.frames(5)
+	var img_b := await h.capture()
+	var t_b := clock.seconds
+	var moved: int = shift_of.call(rows.call(img_a), rows.call(img_b))
+	var expected := 0.25 * 2.0 * (t_b - t_a) * px_per_m
+	print("  flow 0.25 tiles/s for %.3f s of the renderer's clock: the relief moved %d px, expected %.1f px" % [t_b - t_a, moved, expected])
+	check(expected > 8.0 and absf(moved - expected) <= 1.5, "flow moves the relief along +u by flow x time (whole pixels)")
+	mat.set_shader_parameter("flow_speed", Vector2.ZERO)
+	# Pulse: the parallax offset (proportional to the depth) seen from an angle.
+	cam.projection = Camera3D.PROJECTION_PERSPECTIVE
+	cam.look_at_from_position(Vector3(0, 1.2, 1.6), Vector3(0, 0, -0.4))
+	debug_view(Harness.DEBUG_HIT_OFFSET)
+	var mean_offset := func(img: Image) -> float:
+		var sum := 0.0
+		var n := 0
+		for py in range(SIZE.y / 3, SIZE.y, 6):
+			for px in range(0, SIZE.x, 6):
+				sum += Harness.decode_offset(img, Vector2i(px, py), OFFSET_SCALE).length()
+				n += 1
+		return sum / n
+	await h.frames(3)
+	var still: float = mean_offset.call(await h.capture())
+	mat.set_shader_parameter("pulse_amount", 1.0)
+	mat.set_shader_parameter("pulse_rate", 2.0)
+	var samples: Array[float] = []
+	var start := clock.seconds
+	while clock.seconds - start < 0.75 or samples.size() < 6:
+		samples.append(mean_offset.call(await h.capture()))
+	var lo: float = samples.min()
+	var hi: float = samples.max()
+	print("  pulse 1 at 2 Hz over %.2f s (%d frames): mean offset %.2f-%.2f mm, still %.2f mm" % [clock.seconds - start, samples.size(), lo * 1000.0, hi * 1000.0, still * 1000.0])
+	check(hi <= still * 1.02, "the relief never breathes deeper than height_m")
+	check(lo < still * 0.35 and hi - lo > still * 0.5, "it breathes down towards flat and back")
+	mat.set_shader_parameter("pulse_amount", 0.0)
+	debug_view(Harness.DEBUG_OFF)
 
 
 ## Mean over pixels (ground 10-60 m away) of the standard deviation of luminance over frames.

@@ -71,6 +71,12 @@ float gads_deformation(vec2 xz) {
 
 // Height map value h remapped so remap.x -> 0 and remap.y -> 1, clamped; remap.x > remap.y inverts
 // the map.
+// An animated material's relief depth factor now: 1 at rest, breathing down to 1 - amount and
+// back, rate times a second (TIME: the renderer's clock).
+float gads_pulse(float amount, float rate) {
+	return 1.0 - amount * (0.5 - 0.5 * cos(2.0 * GADS_PI * rate * TIME));
+}
+
 float gads_remap_height(float h, vec2 remap) {
 	float span = remap.y - remap.x;
 	span = abs(span) < 1e-5 ? 1e-5 : span;

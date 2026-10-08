@@ -228,6 +228,12 @@ static func _check_baked_mesh(mi: GADSMeshInstance3D) -> Array:
 			issues.append(_issue("warning", "GADSMeshInstance3D %s: %d non-manifold edges in the source mesh; displaced, it can tear there (Diagnose in the inspector shows them)." % [mi.name, report["counts"]["non_manifold"]]))
 		if report["degenerate"] > 0:
 			issues.append(_issue("info", "GADSMeshInstance3D %s: %d degenerate triangles in the source mesh (the bake skips them)." % [mi.name, report["degenerate"]]))
+	if mi.baked:
+		for m in GADSMeshBaker.resolve_materials(mi, mi.source_mesh):
+			if GADSMaterials.is_gads_material(m) and (GADSMaterials.get_param(m, "flow_speed") != Vector2.ZERO
+					or float(GADSMaterials.get_param(m, "pulse_amount")) > 0.0):
+				issues.append(_issue("info", "GADSMeshInstance3D %s: its material is animated (flow_speed or pulse_amount); the baked geometry keeps the relief at rest, the animation plays in parallax and the near-camera field." % mi.name))
+				break
 	if mi.stream_bake and mi.geometry_range <= 0.0:
 		issues.append(_issue("warning", "GADSMeshInstance3D %s: stream_bake needs a geometry_range; without one the bake loads with the scene." % mi.name))
 	elif mi.stream_bake and mi.baked and str(mi.bake_stats.get("path", "")).is_empty():

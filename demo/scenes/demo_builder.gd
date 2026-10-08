@@ -665,6 +665,16 @@ static func build_material_lab() -> Node3D:
 	sil_mi.material_override = sil_mat
 	sil_mi.position = Vector3(-2.0, 0.6, 0.3)
 	root.add_child(sil_mi)
+	# Animated relief: a slowly flowing, breathing pool (parallax; nothing to bake).
+	var pool_mat := _procedural("billow", {"size": 512, "mapping": GADSMaterials.Mapping.WORLD, "tile_m": Vector2(2, 2),
+		"params": {"seed": 9}}, fallback_ground)
+	pool_mat.set_shader_parameter("albedo_tint", Color(1.0, 0.5, 0.25))
+	pool_mat.set_shader_parameter("flow_speed", Vector2(0.06, 0.03))
+	pool_mat.set_shader_parameter("pulse_amount", 0.35)
+	pool_mat.set_shader_parameter("pulse_rate", 0.3)
+	var pool := PlaneMesh.new()
+	pool.size = Vector2(2.5, 2.5)
+	_mesh_node(root, "FlowingPool", pool, pool_mat, Vector3(-4.5, 0.03, 1.5))
 	# Vector displacement: curling ridges that overhang, baked from a flat panel.
 	var curl := GADSMaterials.create(GADSMaterials.Mapping.UV, {"albedo": (floor_mat.get_shader_parameter("albedo_texture") as Texture2D)},
 		{"vector_displacement_texture": curl_vector_map(), "vector_displacement_m": 0.35, "vector_displacement_signed": true,

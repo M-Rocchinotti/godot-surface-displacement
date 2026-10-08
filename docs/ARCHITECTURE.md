@@ -131,6 +131,20 @@ metre of height, so its height over the curved surface is `z + kappa/2 tan^2 z^2
 when it never gets that deep, to where it turns back up; a ray that got there without meeting the
 relief passed over it at the outline, and the fragment is discarded.
 
+### 3.5 Animated relief
+
+`flow_speed` subtracts `flow_speed * TIME` from the plane's uv (all three mappings) before
+anything samples it, so the march, the self-shadow, the normal map and the textures all see the
+same moved relief; the uv gradients are unchanged, so mip selection and the march's step stay
+what they were. `pulse_amount` scales the relief argument (`height_m x fade`, or the layered
+variants' scale) by `1 - amount (1 - cos(2 pi rate TIME)) / 2`, which stays within [1 - amount,
+1], so the relief never leaves the slab the march walks. `TIME` is the renderer's clock: the tests
+sum the frames' process steps, which advance it by the same amounts, to know how far it moved.
+The near-camera field gets each layer's flow and pulse (`layer_anim`) and applies them in its
+layer uv and its relief, in the vertex stage as in the fragment stage, so its geometry moves
+with the parallax around it. A baked mesh (`gads_baked`) keeps the relief at rest: its geometry
+cannot follow, and textures sliding over still relief would look wrong.
+
 ## 4. `GADSDisplacementField3D`
 
 ### 4.1 Mesh and snapping

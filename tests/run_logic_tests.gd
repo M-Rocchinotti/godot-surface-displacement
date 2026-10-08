@@ -393,6 +393,14 @@ func test_validator() -> void:
 	vector_only.material_override = GADSMaterials.create(GADSMaterials.Mapping.UV, {"vector_displacement": ImageTexture.create_from_image(vdm)},
 		{"vector_displacement_m": 0.02, "vector_displacement_signed": true})
 	bad.add_child(vector_only)
+	# An animated material on a baked mesh, and streaming without a geometry range.
+	var animated := GADSMeshInstance3D.new()
+	animated.name = "Animated"
+	animated.source_mesh = PlaneMesh.new()
+	animated.material_override = GADSMaterials.create(GADSMaterials.Mapping.UV, {"height": height}, {"flow_speed": Vector2(0.1, 0.0)})
+	animated.stream_bake = true
+	animated.set_bake_state({"baked": true, "mesh": PlaneMesh.new(), "bake_stats": {"path": "res://gads_baked/animated_0123456789abcdef.mesh"}})
+	bad.add_child(animated)
 	root.add_child(bad)
 	var messages := "\n".join(GADSValidator.validate(bad).map(func(i: Dictionary) -> String: return i["message"]))
 	var expected := {
@@ -409,6 +417,8 @@ func test_validator() -> void:
 		"a vector map on a node that does not bake": "moves vertices only in a GADSMeshInstance3D bake; VectorOnly draws without it",
 		"a signed vector map in 8 bits": "vector_displacement_signed is on but the texture is 8-bit",
 		"a vector map without a height map": "its bake follows the vector map, the parallax fallback draws flat",
+		"an animated material on a baked mesh": "GADSMeshInstance3D Animated: its material is animated",
+		"stream_bake without a geometry range": "GADSMeshInstance3D Animated: stream_bake needs a geometry_range",
 	}
 	var missing: Array[String] = []
 	for what: String in expected:
