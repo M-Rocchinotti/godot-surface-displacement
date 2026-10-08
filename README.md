@@ -805,6 +805,8 @@ baked mesh's refinement level: blue 0, green 8, yellow 16, red 24), **Before / a
 the near-camera field lies flat on the ground; right of it as usual; a line marks the split; baked
 meshes keep their geometry): for judging a material while authoring it.
 
+![Before / after on the rocky ground: plain normal mapping left of the line, relief and near-camera geometry right of it](docs/images/rocky_ground_before_after.jpg)
+
 ## Height maps and textures
 
 The relief is only as good as the height map. Poly Haven's CC0 sets come with float EXR
@@ -944,6 +946,8 @@ and worn edges, a procedural brick wall with moss in the joints, five baked sphe
 stones, craters, cracks, ridged), the stones sphere again unbaked with silhouette parallax (its
 outline shows the stones), a pool whose billowing relief flows and breathes, and a panel whose
 vector displacement curls into overhanging ridges (view Grazing).
+
+![The material lab: baked procedural spheres, the stones sphere with silhouette parallax in front, the flowing pool and the vector-displaced panel](docs/images/material_lab.jpg)
 
 ![Demo with its panel](docs/images/demo_ui.jpg)
 
