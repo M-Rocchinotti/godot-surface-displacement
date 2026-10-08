@@ -448,6 +448,29 @@ func _run() -> void:
 	await _until_baked(baked_box)
 	_check(baked_box.source_mesh == box_mesh and baked_box.bake_key == key_unpainted, "undo bakes the original source again")
 	paint_tool.PaintPanel.activate(baked_box, false)
+
+	# 17. A GADS material's inspector row: quality, depth write and silhouette switch the variant,
+	# each undoable.
+	var mat_tool = load("res://addons/gads/editor/gads_material_inspector.gd")
+	var mat := GADSMaterials.create(GADSMaterials.Mapping.UV, {}, {"height_m": 0.03}, GADSMaterials.Quality.POM)
+	var inspector: EditorInspectorPlugin = mat_tool.new()
+	var panel = mat_tool.VariantPanel.new()
+	panel.target = mat
+	panel.undo_redo = manager
+	EditorInterface.get_base_control().add_child(panel)
+	var mat_history: UndoRedo = manager.get_history_undo_redo(manager.get_object_history_id(mat))
+	var pom_shader := mat.shader
+	panel.set_quality(GADSMaterials.Quality.POM_SELF_SHADOW)
+	var ss_path := mat.shader.resource_path
+	panel.set_silhouette(true)
+	var sil_path := mat.shader.resource_path
+	mat_history.undo()
+	var undone_path := mat.shader.resource_path
+	mat_history.undo()
+	_check(inspector._can_handle(mat) and not inspector._can_handle(StandardMaterial3D.new()) and ss_path.ends_with("gads_uv_pom_ss.gdshader")
+		and sil_path.ends_with("gads_uv_pom_ss_sil.gdshader") and undone_path == ss_path and mat.shader == pom_shader,
+		"the material inspector switches quality and silhouette, undoable (%s, %s)" % [ss_path.get_file(), sil_path.get_file()])
+	panel.queue_free()
 	_finish()
 
 

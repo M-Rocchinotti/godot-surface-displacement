@@ -25,6 +25,7 @@ const MENUS: Array[String] = [MENU_ADD_NODE, MENU_ADD_FIELD, MENU_CONVERT, MENU_
 const MeshInspector := preload("res://addons/gads/editor/gads_mesh_inspector.gd")
 const TerrainInspector := preload("res://addons/gads/editor/gads_terrain_inspector.gd")
 const PaintInspector := preload("res://addons/gads/editor/gads_paint_inspector.gd")
+const MaterialInspector := preload("res://addons/gads/editor/gads_material_inspector.gd")
 const ProfilerPanel := preload("res://addons/gads/editor/gads_profiler_panel.gd")
 const ImportPlugin := preload("res://addons/gads/editor/gads_import_plugin.gd")
 const ExportPlugin := preload("res://addons/gads/editor/gads_export_plugin.gd")
@@ -32,6 +33,7 @@ const ExportPlugin := preload("res://addons/gads/editor/gads_export_plugin.gd")
 var _mesh_inspector: EditorInspectorPlugin
 var _terrain_inspector: EditorInspectorPlugin
 var _paint_inspector: EditorInspectorPlugin
+var _material_inspector: EditorInspectorPlugin
 var _stroke_node: Node3D # the node of the stroke in progress (null: none)
 var _stroke_before: Image # its sculpt map (a terrain: its edited map) before the stroke (null: it had none)
 var _stroke_kind := "" # a terrain stroke: "height" or "splat"
@@ -73,6 +75,9 @@ func _enter_tree() -> void:
 	_paint_inspector = PaintInspector.new()
 	_paint_inspector.fill = fill_paint
 	add_inspector_plugin(_paint_inspector)
+	_material_inspector = MaterialInspector.new()
+	_material_inspector.undo_redo = get_undo_redo()
+	add_inspector_plugin(_material_inspector)
 	_terrain_inspector = TerrainInspector.new()
 	_terrain_inspector.edit_heights = edit_terrain_heights
 	add_inspector_plugin(_terrain_inspector)
@@ -94,6 +99,8 @@ func _exit_tree() -> void:
 	_terrain_inspector = null
 	remove_inspector_plugin(_paint_inspector)
 	_paint_inspector = null
+	remove_inspector_plugin(_material_inspector)
+	_material_inspector = null
 	remove_control_from_bottom_panel(_profiler_panel)
 	_profiler_panel.queue_free()
 	_profiler_panel = null

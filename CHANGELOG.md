@@ -157,6 +157,8 @@ All notable changes to this project are documented here. The format follows
   collision and the detail field's ground data. Edited maps are one texel per vertex, saved into
   `data_directory`. Runtime API: `sculpt()`, `paint_splatmap()`, `set_height_region()` /
   `set_splat_region()`, `intersect_ray()` (no physics needed), the `edited` signal.
+- **GADS material inspector**: a row at the top of a GADS material's inspector shows its mapping
+  and switches its quality, depth write and silhouette parallax (the matching variant, undoable).
 - **Curvature-aware subdivision** (`GADSMeshInstance3D.smooth_shape`, the tessellator's
   `smooth_shape` setting): a vertex added on a smooth edge moves towards the circular arc the
   corner normals describe (exact on spheres and cylinders), and that curvature counts in the
