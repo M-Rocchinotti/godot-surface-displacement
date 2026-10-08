@@ -135,6 +135,18 @@ static func _layers_of(sm: ShaderMaterial) -> Array:
 	return out
 
 
+## Scales every depth of a [method displacement_of] result by [param factor] (a node's
+## gads_relief_scale): the main and detail heights, the vector map's and each layer's.
+static func scale_relief(d: Dictionary, factor: float) -> void:
+	if is_equal_approx(factor, 1.0):
+		return
+	for key: String in ["height_m", "detail_height_m", "vector_m"]:
+		if d.has(key):
+			d[key] = float(d[key]) * factor
+	for layer: Dictionary in d.get("layers", []):
+		layer["height_m"] = float(layer["height_m"]) * factor
+
+
 ## Why [param mesh] cannot be baked, or "" when it can.
 static func check_mesh(mesh: Mesh) -> String:
 	if mesh == null:
@@ -380,6 +392,7 @@ func _make_tessellator(settings: Dictionary) -> RefCounted:
 	for s in _source.get_surface_count():
 		var d := displacement_of(_materials[s] if s < _materials.size() else null)
 		if not d.is_empty():
+			scale_relief(d, float(settings.get("relief_scale", 1.0)))
 			var vector_tex: Texture2D = d.get("vector_texture")
 			d.erase("vector_texture")
 			if vector_tex != null:

@@ -43,6 +43,7 @@ func _run() -> void:
 	await _test("relief_fades_with_distance", test_distance_fade)
 	await _test("animated_relief_flows_and_breathes", test_animated_relief)
 	await _test("before_after_split_view", test_before_after)
+	await _test("per_node_relief_scale_and_tint", test_variation)
 	await _test("surface_effects", test_surface_effects)
 	await _test("custom_shader_hooks", test_custom_hooks)
 	await _test("visual_shader_nodes", test_visual_shader_nodes)
@@ -647,11 +648,13 @@ func test_brdf_parity() -> void:
 	check(d2["max"] < 0.001, "the flat variant samples and normal-maps exactly like ORMMaterial3D")
 
 
-func _render_lit_plane(material: Material, all_lights: bool, camera_position := Vector3(0.3, 1.4, 2.0)) -> Image:
+func _render_lit_plane(material: Material, all_lights: bool, camera_position := Vector3(0.3, 1.4, 2.0), variation := {}) -> Image:
 	h.new_lit_scene(Color(0.15, 0.17, 0.2))
 	var s := 2.0
-	h.add_quad(Vector3(-s, 0, s), Vector3(s, 0, s), Vector3(s, 0, -s), Vector3(-s, 0, -s),
+	var quad := h.add_quad(Vector3(-s, 0, s), Vector3(s, 0, s), Vector3(s, 0, -s), Vector3(-s, 0, -s),
 			[Vector2(0, 2), Vector2(2, 2), Vector2(2, 0), Vector2(0, 0)], material)
+	if not variation.is_empty():
+		GADSMaterials.set_variation(quad, variation.get("relief_scale", 1.0), variation.get("tint", Color.WHITE))
 	var sun := h.add_sun(35.0, 30.0, true, 10.0)
 	sun.light_energy = 1.2
 	if all_lights:
@@ -1142,6 +1145,45 @@ func test_before_after() -> void:
 	check(worst[0] < 0.002, "left of the split: plain normal mapping")
 	check(worst[1] < 0.002, "right of the split: the full relief")
 	check(Harness.luminance(line) > 1.0, "a line marks the split")
+
+
+## One material, varied per node: relief_scale 0.5 draws like the material at half its depth, a
+## tint like the material's albedo_tint, relief_scale 0 like plain normal mapping.
+func test_variation() -> void:
+	var field := Harness.make_stone_field(256, 40, 2)
+	var tex := ImageTexture.create_from_image(field["image"])
+	var params := {"height_m": 0.06, "height_center": 1.0}
+	var mat := GADSMaterials.create(GADSMaterials.Mapping.UV, {"height": tex}, params, GADSMaterials.Quality.POM_SELF_SHADOW)
+	var tint := Color(1.0, 0.6, 0.4)
+	var full := await _render_lit_plane(mat, false)
+	var halved := await _render_lit_plane(mat, false, Vector3(0.3, 1.4, 2.0), {"relief_scale": 0.5, "tint": tint})
+	var half_mat := GADSMaterials.create(GADSMaterials.Mapping.UV, {"height": tex}, {"height_m": 0.03, "height_center": 1.0, "albedo_tint": tint},
+			GADSMaterials.Quality.POM_SELF_SHADOW)
+	var half := await _render_lit_plane(half_mat, false)
+	var flat := await _render_lit_plane(mat, false, Vector3(0.3, 1.4, 2.0), {"relief_scale": 0.0})
+	GADSGlobals.set_value(GADSGlobals.POM_RANGE, Vector4(0.0, 0.001, -10, 99))
+	var plain := await _render_lit_plane(mat, false)
+	_reset_globals()
+	var d_half := _mean_difference(halved, half)
+	var d_full := _mean_difference(halved, full)
+	var d_flat := _mean_difference(flat, plain)
+	print("  mean difference: scaled vs half-depth material %.4f, vs the unscaled render %.4f; relief_scale 0 vs plain normal mapping %.4f" % [
+		d_half, d_full, d_flat])
+	check(d_half < 0.01, "relief_scale 0.5 and the tint draw like a material at half the depth with that tint")
+	check(d_full > 3.0 * d_half, "the scaled node differs from the unscaled one")
+	check(d_flat < 0.01, "relief_scale 0 draws like plain normal mapping")
+
+
+func _mean_difference(a: Image, b: Image) -> float:
+	var sum := 0.0
+	var n := 0
+	for py in range(0, a.get_height(), 2):
+		for px in range(0, a.get_width(), 2):
+			var ca := a.get_pixel(px, py)
+			var cb := b.get_pixel(px, py)
+			sum += (absf(ca.r - cb.r) + absf(ca.g - cb.g) + absf(ca.b - cb.b)) / 3.0
+			n += 1
+	return sum / maxf(n, 1)
 
 
 ## Sums the frames' process steps: the renderer's TIME advances by the same steps.

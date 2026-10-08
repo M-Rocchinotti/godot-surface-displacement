@@ -123,6 +123,36 @@ static func parse(shader: Shader) -> Dictionary:
 	return {}
 
 
+## The instance shader parameters that vary a shared material per node ([method set_variation]).
+const RELIEF_SCALE_PARAMETER := &"gads_relief_scale"
+const TINT_PARAMETER := &"gads_tint"
+
+
+## Varies the GADS materials [param node] draws without making new ones (they keep batching):
+## the relief [param relief_scale] times as deep (parallax and, for a GADSMeshInstance3D, its
+## bake; 0 flattens it) and the albedo multiplied by [param tint]. Set as the node's instance
+## shader parameters gads_relief_scale and gads_tint, which the inspector shows too.
+static func set_variation(node: GeometryInstance3D, relief_scale := 1.0, tint := Color.WHITE) -> void:
+	node.set_instance_shader_parameter(RELIEF_SCALE_PARAMETER, maxf(relief_scale, 0.0))
+	node.set_instance_shader_parameter(TINT_PARAMETER, tint)
+	if node.has_method(&"variation_changed"):
+		node.call(&"variation_changed")
+
+
+## {"relief_scale": float, "tint": Color} of [param node] (1 and white when unset).
+static func get_variation(node: GeometryInstance3D) -> Dictionary:
+	var s: Variant = node.get_instance_shader_parameter(RELIEF_SCALE_PARAMETER)
+	var t: Variant = node.get_instance_shader_parameter(TINT_PARAMETER)
+	return {"relief_scale": float(s) if s != null else 1.0, "tint": t as Color if t is Color else Color.WHITE}
+
+
+## Gives [param to] the variation of [param from] (internal nodes drawing in a node's place).
+static func copy_variation(from: GeometryInstance3D, to: GeometryInstance3D) -> void:
+	var v := get_variation(from)
+	to.set_instance_shader_parameter(RELIEF_SCALE_PARAMETER, v["relief_scale"])
+	to.set_instance_shader_parameter(TINT_PARAMETER, v["tint"])
+
+
 static func is_gads_material(material: Material) -> bool:
 	return material is ShaderMaterial and not parse((material as ShaderMaterial).shader).is_empty()
 

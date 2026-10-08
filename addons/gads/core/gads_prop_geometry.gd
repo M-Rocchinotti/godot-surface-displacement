@@ -125,6 +125,7 @@ func _start(mi: MeshInstance3D) -> void:
 	proxy.cast_shadow = mi.cast_shadow
 	proxy.layers = mi.layers
 	proxy.gi_mode = mi.gi_mode
+	GADSMaterials.copy_variation(mi, proxy)
 	proxy.pixel_error = pixel_error
 	proxy.view_dependent = true
 	# Hidden until its first tessellation is ready: the node keeps drawing its parallax meanwhile.

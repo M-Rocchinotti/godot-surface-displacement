@@ -302,6 +302,8 @@ func get_bake_settings() -> Dictionary:
 	}
 	if smooth_shape > 0.0:
 		settings["smooth_shape"] = smooth_shape
+	if not is_equal_approx(_relief_scale(), 1.0):
+		settings["relief_scale"] = _relief_scale()
 	if cluster_triangles > 0:
 		settings["cluster_triangles"] = cluster_triangles
 	if sculpt_map != null:
@@ -450,11 +452,35 @@ func get_relief_depth() -> float:
 	return _max_depth()
 
 
+## The node's gads_relief_scale instance shader parameter (1 when unset).
+func _relief_scale() -> float:
+	return GADSMaterials.get_variation(self)["relief_scale"]
+
+
+## Passes the node's variation ([method GADSMaterials.set_variation]) on to the nodes drawing in
+## its place (the parallax fallback, the clusters). A changed relief scale makes the bake outdated
+## (it is part of the key) and applies to the next runtime tessellation.
+func variation_changed() -> void:
+	if _fallback != null:
+		GADSMaterials.copy_variation(self, _fallback)
+	for mi in _cluster_nodes:
+		GADSMaterials.copy_variation(self, mi)
+	update_configuration_warnings()
+
+
+func _set(property: StringName, _value: Variant) -> bool:
+	# Set from the inspector or a scene: the engine stores it; the children follow afterwards.
+	if String(property).begins_with("instance_shader_parameters/gads_") and is_inside_tree():
+		variation_changed.call_deferred()
+	return false
+
+
 ## The largest relief depth among the surfaces the bake displaces (0: none).
 func _max_depth() -> float:
 	var depth: float = _sculpt_stats().get("depth", 0.0)
 	for m in _materials():
 		var d := GADSMeshBaker.displacement_of(m)
+		GADSMeshBaker.scale_relief(d, _relief_scale())
 		if not d.is_empty():
 			depth = maxf(depth, maxf(d["height_m"], d.get("vector_m", 0.0)))
 			for layer: Dictionary in d["layers"]:
@@ -646,6 +672,7 @@ func _update_fallback() -> void:
 			_fallback.set_surface_override_material(s, get_surface_override_material(s))
 	_fallback.cast_shadow = cast_shadow
 	_fallback.layers = layers
+	GADSMaterials.copy_variation(self, _fallback)
 	# A streamed bake that is not loaded: the source mesh draws at every distance meanwhile.
 	_fallback.visibility_range_begin = geometry_range if mesh != null else 0.0
 	_fallback.visibility_range_begin_margin = geometry_range_margin
@@ -963,6 +990,7 @@ func _sync_clusters() -> void:
 		for s in mini(get_surface_override_material_count(), mi.get_surface_override_material_count()):
 			mi.set_surface_override_material(s, get_surface_override_material(s))
 		mi.set_instance_shader_parameter(BAKED_PARAMETER, 1.0)
+		GADSMaterials.copy_variation(self, mi)
 		_share_skin(mi)
 	_update_cluster_visibility()
 	if not _cluster_nodes.is_empty() and is_inside_tree():

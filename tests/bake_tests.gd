@@ -55,6 +55,7 @@ func _run() -> void:
 	await _test("cancel", test_cancel)
 	await _test("node_bake_cache_and_clear", test_node)
 	await _test("staleness", test_staleness)
+	await _test("per_node_relief_scale", test_variation)
 	await _test("collision", test_collision)
 	await _test("save_and_load", test_save_load)
 	await _test("cluster_node", test_cluster_node)
@@ -740,6 +741,41 @@ func test_staleness() -> void:
 	check(planar.is_bake_stale(), "moving a world-mapped mesh makes it stale")
 	check(not planar._get_configuration_warnings().is_empty(), "the node warns about a stale bake")
 	planar.queue_free()
+	await process_frame
+
+
+## Nodes sharing one material with different gads_relief_scale bake different depths (and keys);
+## changing it makes a bake stale; the parallax fallback draws with the node's variation.
+func test_variation() -> void:
+	var field := bump_field(128, 0.08)
+	var mat := uv_material(field, 0.05)
+	var full := _make_node(mat)
+	var half := _make_node(mat)
+	GADSMaterials.set_variation(half, 0.5, Color(0.8, 0.7, 0.6))
+	root.add_child(full)
+	root.add_child(half)
+	check(full.bake() == OK and half.bake() == OK, "both bake")
+	var top := func(node: GADSMeshInstance3D) -> float:
+		var verts: PackedVector3Array = node.mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX]
+		var y := 0.0
+		for v in verts:
+			y = maxf(y, v.y)
+		return y
+	var full_top: float = top.call(full)
+	var half_top: float = top.call(half)
+	print("  highest vertex: %.4f m at relief scale 1, %.4f m at 0.5" % [full_top, half_top])
+	check(full_top > 0.03 and absf(half_top - 0.5 * full_top) < 0.1 * full_top, "relief_scale 0.5 bakes half the depth")
+	check(full.bake_key != half.bake_key and full.mesh.resource_path != half.mesh.resource_path, "a different key and cache file")
+	check(not half.is_bake_stale(), "fresh after the bake")
+	GADSMaterials.set_variation(half, 0.75, Color(0.8, 0.7, 0.6))
+	check(half.is_bake_stale(), "a new relief scale makes it stale")
+	half.geometry_range = 5.0
+	var fallback := half.get_fallback()
+	check(fallback != null and GADSMaterials.get_variation(fallback) == GADSMaterials.get_variation(half), "the parallax fallback draws with the node's variation")
+	GADSMaterials.set_variation(half, 0.25)
+	check(GADSMaterials.get_variation(fallback)["relief_scale"] == 0.25, "and follows when it changes")
+	full.queue_free()
+	half.queue_free()
 	await process_frame
 
 

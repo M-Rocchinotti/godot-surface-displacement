@@ -145,6 +145,19 @@ layer uv and its relief, in the vertex stage as in the fragment stage, so its ge
 with the parallax around it. A baked mesh (`gads_baked`) keeps the relief at rest: its geometry
 cannot follow, and textures sliding over still relief would look wrong.
 
+### 3.6 Per-node variation
+
+`gads_relief_scale` and `gads_tint` are instance uniforms (per GeometryInstance3D, stored in the
+renderer's instance buffer), so nodes sharing a material keep batching. The relief scale
+multiplies the relief argument (`height_m x fade x pulse`, or the layered variants' scale) like
+the fade does, so the slab the march walks shrinks with it and 0 equals the faded-out relief;
+the tint multiplies the albedo after the layers are mixed. The baker scales every depth of the
+material's displacement (main, detail, vector, layers: `GADSMeshBaker.scale_relief`) by the
+node's `relief_scale` setting, which is part of the bake key. Internal nodes drawing in a node's
+place (fallback, clusters, prop proxies) copy its two values; a GADSMeshInstance3D's `_set`
+notices inspector or scene edits of them and passes them on. The near-camera field has no node
+to read them from and uses the material's values.
+
 ## 4. `GADSDisplacementField3D`
 
 ### 4.1 Mesh and snapping

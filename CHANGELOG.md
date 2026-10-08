@@ -175,6 +175,11 @@ All notable changes to this project are documented here. The format follows
   triangle budget) while the camera is within `prop_geometry_range`, and draw their parallax again
   beyond it; no conversion or bake needed. Roadmap item (runtime geometry for non-planar surfaces
   near the camera) done.
+- **Per-node material variation**: `GADSMaterials.set_variation(node, relief_scale, tint)`
+  (instance shader parameters `gads_relief_scale`, `gads_tint`) varies the relief depth and the
+  albedo of a shared material per node, in parallax and in a GADSMeshInstance3D's bake (part of
+  its key), passed on to its fallback, clusters and prop geometry. `get_variation()`,
+  `copy_variation()`. Three boulders in the material lab.
 - **Before / after view** (`GADSManager.DebugView.BEFORE_AFTER`, `debug_split`): left of the
   split GADS surfaces draw without their relief and the near-camera field lies flat, right of it
   as usual, with a line at the split; also in the demo's View menu.

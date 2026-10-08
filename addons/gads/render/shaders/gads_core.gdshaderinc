@@ -174,6 +174,11 @@ group_uniforms;
 // normal map adds only the detail finer than the triangles (gads_detail_normal). The bake stores
 // CUSTOM0 = rest position, mip level of the vertex's footprint; CUSTOM1 = rest normal, level / 32.
 instance uniform float gads_baked = 0.0;
+// Per-node variation of a shared material (GeometryInstance3D instance shader parameters): the
+// relief's depth times gads_relief_scale (a GADSMeshInstance3D bakes with it) and the albedo
+// times gads_tint, so many props can share one material, and its batching, and still differ.
+instance uniform float gads_relief_scale = 1.0;
+instance uniform vec4 gads_tint : source_color = vec4(1.0);
 
 // How far the maps have moved (texture tiles) and the relief's depth factor now (see flow_speed,
 // pulse_amount); at rest on a baked mesh, whose geometry cannot follow.

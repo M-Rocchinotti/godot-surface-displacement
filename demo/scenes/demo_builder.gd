@@ -665,6 +665,16 @@ static func build_material_lab() -> Node3D:
 	sil_mi.material_override = sil_mat
 	sil_mi.position = Vector3(-2.0, 0.6, 0.3)
 	root.add_child(sil_mi)
+	# One material, three boulders: each varies its relief depth and tint per node (they batch).
+	var boulder_mat := _procedural("rock", {"size": 512, "tile_m": Vector2(1.7, 1.7), "params": {"seed": 21}}, fallback_ground)
+	boulder_mat.set_shader_parameter("uv_scale", Vector2(2.0, 1.0))
+	var variations := [[0.4, Color(1.0, 0.92, 0.8), "Shallow"], [1.0, Color.WHITE, "Default"], [1.8, Color(0.75, 0.8, 0.9), "Deep"]]
+	for i in variations.size():
+		var boulder := SphereMesh.new()
+		boulder.radius = 0.4
+		boulder.height = 0.8
+		var b := _mesh_node(root, "Boulder_%s" % variations[i][2], boulder, boulder_mat, Vector3(0.2 + 1.1 * i, 0.4, 0.6))
+		GADSMaterials.set_variation(b, variations[i][0], variations[i][1])
 	# Animated relief: a slowly flowing, breathing pool (parallax; nothing to bake).
 	var pool_mat := _procedural("billow", {"size": 512, "mapping": GADSMaterials.Mapping.WORLD, "tile_m": Vector2(2, 2),
 		"params": {"seed": 9}}, fallback_ground)
