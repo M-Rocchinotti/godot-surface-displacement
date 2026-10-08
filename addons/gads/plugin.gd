@@ -29,6 +29,8 @@ const MaterialInspector := preload("res://addons/gads/editor/gads_material_inspe
 const ProfilerPanel := preload("res://addons/gads/editor/gads_profiler_panel.gd")
 const ImportPlugin := preload("res://addons/gads/editor/gads_import_plugin.gd")
 const ExportPlugin := preload("res://addons/gads/editor/gads_export_plugin.gd")
+## Editor setting: offer to create GADS materials when a texture set is imported.
+const OFFER_SETTING := "gads/texture_sets/offer_materials_on_import"
 
 var _mesh_inspector: EditorInspectorPlugin
 var _terrain_inspector: EditorInspectorPlugin
@@ -49,6 +51,11 @@ var _brush := {} # the Sculpt tool's cursor: "camera", "position", "normal", "ra
 var _profiler_panel: Control
 var _import_plugin: EditorScenePostImportPlugin
 var _export_plugin: EditorExportPlugin
+var _creating := 0 # create_materials() calls in progress: their imports are no downloads
+var _offer_armed := false # after the editor's first scan (a fresh project's textures are no downloads)
+var _offered := {} # "dir/name" of the texture sets offered this session
+var _offer_pending := {} # "dir/name" -> texture set, offered together once the imports settle
+var _offer_dialog: ConfirmationDialog
 
 
 func _enable_plugin() -> void:
@@ -88,11 +95,26 @@ func _enter_tree() -> void:
 	add_scene_post_import_plugin(_import_plugin)
 	_export_plugin = ExportPlugin.new()
 	add_export_plugin(_export_plugin)
+	var es := EditorInterface.get_editor_settings()
+	if not es.has_setting(OFFER_SETTING):
+		es.set_setting(OFFER_SETTING, true)
+	es.set_initial_value(OFFER_SETTING, true, false)
+	es.add_property_info({"name": OFFER_SETTING, "type": TYPE_BOOL})
+	var fs := EditorInterface.get_resource_filesystem()
+	fs.resources_reimported.connect(_on_resources_reimported)
+	fs.filesystem_changed.connect(_arm_offers)
 
 
 func _exit_tree() -> void:
 	for item in MENUS:
 		remove_tool_menu_item(item)
+	var fs := EditorInterface.get_resource_filesystem()
+	if fs.resources_reimported.is_connected(_on_resources_reimported):
+		fs.resources_reimported.disconnect(_on_resources_reimported)
+	if fs.filesystem_changed.is_connected(_arm_offers):
+		fs.filesystem_changed.disconnect(_arm_offers)
+	if get_offer_dialog() != null:
+		_offer_dialog.queue_free()
 	remove_inspector_plugin(_mesh_inspector)
 	_mesh_inspector = null
 	remove_inspector_plugin(_terrain_inspector)
@@ -331,11 +353,91 @@ func create_materials_from_selection() -> void:
 	if sets.is_empty():
 		push_warning("GADS: select the images of a texture set (BaseColor, Normal, Roughness, Height, ...) in the FileSystem dock.")
 		return
+	materials_dialog(sets, "Create GADS Materials")
+
+
+# --- Offer on import ------------------------------------------------------------------------------
+
+func _arm_offers() -> void:
+	# The first scan after the editor starts imports what is already there; its imports are
+	# reported right after this signal, so the offers start a frame later.
+	if not EditorInterface.get_resource_filesystem().is_scanning():
+		EditorInterface.get_resource_filesystem().filesystem_changed.disconnect(_arm_offers)
+		set.call_deferred(&"_offer_armed", true)
+
+
+## The texture sets among [param paths] worth a material: outside res://addons, with a colour map
+## and a height or normal map, and no "<name>_gads.tres" next to them yet. Each set is completed
+## with the other images of its folder.
+static func offerable_sets(paths: PackedStringArray) -> Array:
+	var dirs := {}
+	for path in paths:
+		if path.begins_with("res://addons/") or path.get_file().contains("_gads_"):
+			continue
+		if path.get_extension().to_lower() in GADSTextureSet.IMAGE_EXTENSIONS:
+			dirs[path.get_base_dir()] = true
+	var out := []
+	for dir: String in dirs:
+		var files := PackedStringArray()
+		for f in DirAccess.get_files_at(dir):
+			if not f.contains("_gads_"):
+				files.append(dir.path_join(f))
+		for s: Dictionary in GADSTextureSet.detect(files):
+			var roles: Dictionary = s["files"]
+			var touched := false
+			for p: String in roles.values():
+				touched = touched or paths.has(p)
+			if touched and roles.has("albedo") and (roles.has("height") or roles.has("normal")) \
+					and not FileAccess.file_exists(String(s["dir"]).path_join("%s_gads.tres" % s["name"])):
+				out.append(s)
+	return out
+
+
+func _on_resources_reimported(paths: PackedStringArray) -> void:
+	if not _offer_armed or _creating > 0 or DisplayServer.get_name() == "headless" or not EditorInterface.get_editor_settings().get_setting(OFFER_SETTING):
+		return
+	for s: Dictionary in offerable_sets(paths):
+		var key := "%s/%s" % [s["dir"], s["name"]]
+		if not _offered.has(key):
+			_offered[key] = true
+			_offer_pending[key] = s
+	if not _offer_pending.is_empty():
+		_offer.call_deferred()
+
+
+## The dialog offering materials for the texture sets just imported (null when none is open).
+func get_offer_dialog() -> ConfirmationDialog:
+	return _offer_dialog if is_instance_valid(_offer_dialog) else null
+
+
+func _offer() -> void:
+	# Files dropped together may arrive in more than one import: offer them together.
+	await (Engine.get_main_loop() as SceneTree).create_timer(0.5).timeout
+	if _offer_pending.is_empty() or get_offer_dialog() != null:
+		return
+	var sets := []
+	for s: Dictionary in _offer_pending.values():
+		if not FileAccess.file_exists(String(s["dir"]).path_join("%s_gads.tres" % s["name"])):
+			sets.append(s)
+	_offer_pending.clear()
+	if not sets.is_empty():
+		print("GADS: new texture set(s) imported: %s" % ", ".join(sets.map(func(t: Dictionary) -> String: return t["name"])))
+		_offer_dialog = materials_dialog(sets, "New Texture Set: Create GADS Materials?",
+			"Imported textures make up a texture set (turn this off in Editor Settings > %s)." % OFFER_SETTING)
+
+
+## The dialog that proposes a size, depth and mapping for each of [param sets] and creates their
+## materials on Create.
+func materials_dialog(sets: Array, title: String, intro := "") -> ConfirmationDialog:
 	var dialog := ConfirmationDialog.new()
-	dialog.title = "Create GADS Materials"
+	dialog.title = title
 	dialog.ok_button_text = "Create"
 	var box := VBoxContainer.new()
 	dialog.add_child(box)
+	if not intro.is_empty():
+		var intro_label := Label.new()
+		intro_label.text = intro
+		box.add_child(intro_label)
 	var rows := []
 	for s: Dictionary in sets:
 		var rec := GADSTextureSet.recommend(s)
@@ -373,6 +475,7 @@ func create_materials_from_selection() -> void:
 	dialog.canceled.connect(dialog.queue_free)
 	EditorInterface.get_base_control().add_child(dialog)
 	dialog.popup_centered(Vector2i(640, 0))
+	return dialog
 
 
 static func _spin(parent: Control, text: String, lo: float, hi: float, step: float, value: float) -> SpinBox:
@@ -392,6 +495,13 @@ static func _spin(parent: Control, text: String, lo: float, hi: float, step: flo
 ## {"texture_size_m", "height_m", "mapping"}): writes the prepared textures, imports them and saves
 ## "<name>_gads.tres" next to each set. Returns the material paths.
 func create_materials(sets: Array, options: Array) -> PackedStringArray:
+	_creating += 1
+	var created: PackedStringArray = await _create_materials(sets, options)
+	_creating -= 1
+	return created
+
+
+func _create_materials(sets: Array, options: Array) -> PackedStringArray:
 	var fs := EditorInterface.get_resource_filesystem()
 	var created := PackedStringArray()
 	var uses := []

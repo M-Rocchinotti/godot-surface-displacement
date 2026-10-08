@@ -33,6 +33,14 @@ func _check(ok: bool, what: String) -> void:
 		_failures.append(what)
 
 
+## The GADS plugin's offer of materials for a texture set just imported (null: none is open).
+func _find_offer() -> ConfirmationDialog:
+	for d in EditorInterface.get_base_control().find_children("*", "ConfirmationDialog", false, false):
+		if (d as ConfirmationDialog).title.begins_with("New Texture Set") and not d.is_queued_for_deletion():
+			return d as ConfirmationDialog
+	return null
+
+
 func _frames_wait(n: int) -> void:
 	for i in n:
 		await get_tree().process_frame
@@ -218,6 +226,50 @@ func _run() -> void:
 			ok = ok and t != null and t.resource_path.begins_with("res://procedural/wall_") and t.get_image() != null and t.get_image().has_mipmaps()
 		_check(ok and is_equal_approx(wall.get_shader_parameter("height_m"), 0.04) and wall.get_shader_parameter("texture_size_m") == Vector2(2, 2),
 			"with its four maps imported (mipmaps) and the brick depth for a 2 m tile")
+
+	# 11b. Textures that arrive in the project (dragged in, downloaded) and make up a texture set:
+	# once the editor imports them it offers their material; Create makes it. (The texture set of
+	# step 10, imported by Create itself, is not offered.)
+	_check(_find_offer() == null, "a texture set imported by Create is not offered")
+	albedo.save_png(ProjectSettings.globalize_path("res://texset/Moss_BaseColor.png"))
+	disp.save_png(ProjectSettings.globalize_path("res://texset/Moss_Height.png"))
+	nrm.save_png(ProjectSettings.globalize_path("res://texset/Moss_Normal.png"))
+	# Imported as the editor imports dropped or downloaded files (its scan ends in reimport_files();
+	# a folder the editor knows, so no scan has to register it first).
+	var moss_files := PackedStringArray(["res://texset/Moss_BaseColor.png", "res://texset/Moss_Height.png", "res://texset/Moss_Normal.png"])
+	var efs := EditorInterface.get_resource_filesystem()
+	# The editor re-imports the procedural maps of step 11 by itself once they are drawn in 3D:
+	# wait until it has been idle for two seconds.
+	var idle_since := Time.get_ticks_msec()
+	var waited := Time.get_ticks_msec()
+	while Time.get_ticks_msec() - idle_since < 2000 and Time.get_ticks_msec() - waited < 60000:
+		await get_tree().process_frame
+		if efs.is_scanning() or efs.is_importing():
+			idle_since = Time.get_ticks_msec()
+	for f in moss_files:
+		efs.update_file(f)
+	efs.reimport_files(moss_files)
+	var offer: ConfirmationDialog = null
+	waited = Time.get_ticks_msec()
+	while Time.get_ticks_msec() - waited < 60000:
+		await get_tree().process_frame
+		offer = _find_offer()
+		if offer != null:
+			break
+	var offer_text := ""
+	if offer != null:
+		for label in offer.find_children("*", "Label", true, false):
+			offer_text += (label as Label).text + "\n"
+	_check(offer != null and offer.visible and offer_text.contains("moss"), "importing a new texture set offers its material (%s)" % offer_text.get_slice("\n", 1))
+	if offer != null:
+		offer.confirmed.emit()
+		waited = Time.get_ticks_msec()
+		while Time.get_ticks_msec() - waited < 60000:
+			await get_tree().process_frame
+			if FileAccess.file_exists("res://texset/moss_gads.tres") and not efs.is_importing():
+				break
+	var moss := load("res://texset/moss_gads.tres") as ShaderMaterial if FileAccess.file_exists("res://texset/moss_gads.tres") else null
+	_check(moss != null and GADSMaterials.is_gads_material(moss), "Create saves it next to the textures")
 
 	# 12. The Sculpt tool: a stroke on the baked box (as the viewport's left-drag sends it) stores a
 	# sculpt map next to the bakes and bakes again; undo and redo.
