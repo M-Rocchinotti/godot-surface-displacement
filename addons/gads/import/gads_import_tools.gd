@@ -123,9 +123,6 @@ static func _relative_transform(node: Node3D, root: Node) -> Transform3D:
 
 
 static func _bake(node: GADSMeshInstance3D, root: Node, quality: int, report: Dictionary) -> bool:
-	if not GADSMeshBaker.is_available():
-		(report["skipped"] as Array).append("%s: the GADS native library is not loaded; not baked" % node.name)
-		return false
 	node.quality = quality
 	if node.get_relief_depth() <= 0.0:
 		(report["skipped"] as Array).append("%s: no GADS material with a height map; not baked" % node.name)

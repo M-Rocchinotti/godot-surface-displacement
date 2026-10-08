@@ -175,6 +175,14 @@ All notable changes to this project are documented here. The format follows
   triangle budget) while the camera is within `prop_geometry_range`, and draw their parallax again
   beyond it; no conversion or bake needed. Roadmap item (runtime geometry for non-planar surfaces
   near the camera) done.
+- **Baking without the native library**: on platforms the GADS library does not ship for
+  (macOS, Android, iOS, web) `GADSMeshInstance3D` bakes with `GADSTessellatorGD`, a GDScript
+  tessellator with the native one's interface: edges split where their relief leaves the
+  straight line by more than the tolerance (and triangles whose centre leaves their plane),
+  relief evaluated per welded position (UV seams and hard edges stay closed), the materials'
+  mappings, detail, layers, masks and sculpt maps; vector displacement, blend shapes, skinning,
+  clusters and runtime tessellation still need the native library. Its bakes have their own
+  cache key.
 - **Global illumination**: `GADSGI.bake_voxel_gi()` and **GADS: Bake Selected VoxelGI (GADS
   Colours)** bake a VoxelGI with GADS surfaces in their colours (the engine's bake takes them as
   white); `GADSGI.proxy_material()`. README section on how SDFGI, VoxelGI, LightmapGI, reflection

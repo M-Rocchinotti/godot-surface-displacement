@@ -490,6 +490,21 @@ runs it in the background when the camera has moved a quarter of its distance (o
 swaps the mesh when it is ready; heights where refinement stopped early are footprint-filtered as
 in a bake, so far, coarse triangles do not alias.
 
+**Without the native library** `GADSMeshBaker` hands the same calls (`add_height_map`,
+`add_surface`, `set_settings`, `run`, `get_surfaces`, ...) to `GADSTessellatorGD`, so the cache,
+LODs (Godot's `ImporterMesh.generate_lods`), collision and the node's workflow are the same.
+It refines in rounds: an edge is split when the relief at its quarter points leaves the straight
+line between its ends' relief by more than `max_error` (and it spans more than
+`min_edge_texels`), or when it spans more than 32 texels; a triangle none of whose edges split
+but whose centre leaves its plane splits its longest edge. Decisions are per welded edge, so
+both triangles on an edge split it, and a triangle becomes two, three or four (red-green
+refinement): no T-junctions. Relief is evaluated once per welded position, along the welded
+positions' summed normals, so vertices that share a position across UV seams and hard edges
+move together. Normals come from the displaced triangles, shared per (position, source normal);
+tangents from the UVs. It bakes about 7 000 triangles a second and leaves out what the native
+tessellator does beyond that (curvature-aware subdivision, footprint filtering, vector maps,
+blend shapes, skins, clusters, view dependence); its bakes carry its version in the cache key.
+
 ## 10. Runtime deformation (`GADSDeformationField`)
 
 A depth map over a square window of world XZ: `resolution` texels of `size_m / resolution`,

@@ -203,7 +203,7 @@ class BakePanel extends VBoxContainer:
 
 	func _refresh() -> void:
 		var busy := node.is_baking()
-		var available := GADSMeshBaker.is_available()
+		var available := true # without the native library the GDScript tessellator bakes
 		_bake.disabled = busy or not available
 		_rebuild.disabled = busy or not available
 		_clear.disabled = busy or not node.baked

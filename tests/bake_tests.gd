@@ -44,6 +44,7 @@ func _run() -> void:
 	await _test("vector_displacement", test_vector_displacement)
 	await _test("closed_meshes_stay_closed", test_watertight)
 	await _test("smooth_shape_rounds_low_poly_meshes", test_smooth_shape)
+	await _test("gdscript_tessellator", test_gdscript_fallback)
 	await _test("locked_borders_stay", test_locked_borders)
 	await _test("triangle_budget", test_budget)
 	await _test("view_dependent_refinement", test_view_dependent)
@@ -487,6 +488,78 @@ func test_watertight() -> void:
 				open += 1
 		print("  %s: %d triangles, %d edges, %d not shared by exactly two" % [c[0], triangle_count(baker.mesh), edges.size(), open])
 		check(open == 0, "%s stays closed" % c[0])
+
+
+## The GDScript tessellator (platforms without the native library): a bump plane follows the
+## height field within twice the tolerance; closed meshes stay closed (hard edges and UV seams
+## are displaced together); its bakes carry the rest data the shaders read and their own cache
+## key; what needs the native library is reported.
+func test_gdscript_fallback() -> void:
+	var field := bump_field(128, 0.08)
+	var amp := 0.06
+	var tolerance := 0.001
+	var mat := uv_material(field, amp)
+	var native_key := GADSMeshBaker.cache_key(plane(), [mat] as Array[Material], Transform3D.IDENTITY, {"max_error": tolerance})
+	GADSMeshBaker.force_gdscript = true
+	var gd_key := GADSMeshBaker.cache_key(plane(), [mat] as Array[Material], Transform3D.IDENTITY, {"max_error": tolerance})
+	check(native_key != gd_key, "its bakes have their own cache key")
+	var started := Time.get_ticks_msec()
+	var baker := bake_with(plane(), mat, {"max_error": tolerance, "max_triangles": 60000})
+	var ms := Time.get_ticks_msec() - started
+	check(baker.mesh != null and baker.stats.get("tessellator", "") == GADSTessellatorGD.VERSION, "a plane bakes with it (%s)" % baker.error)
+	if baker.mesh != null:
+		var arrays := baker.mesh.surface_get_arrays(0)
+		var v: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+		var uv: PackedVector2Array = arrays[Mesh.ARRAY_TEX_UV]
+		var idx: PackedInt32Array = arrays[Mesh.ARRAY_INDEX]
+		var errors := []
+		var rng := RandomNumberGenerator.new()
+		rng.seed = 3
+		for i in range(0, idx.size(), 3):
+			var a := rng.randf()
+			var b := rng.randf() * (1.0 - a)
+			var c := 1.0 - a - b
+			var p := v[idx[i]] * a + v[idx[i + 1]] * b + v[idx[i + 2]] * c
+			var t := uv[idx[i]] * a + uv[idx[i + 1]] * b + uv[idx[i + 2]] * c
+			errors.append(absf(p.y - amp * Harness.sample_field(field, t)))
+		errors.sort()
+		var p95: float = errors[int(errors.size() * 0.95)]
+		print("  %d triangles in %d ms; distance to the height field: 95th percentile %.2f mm, largest %.2f mm (tolerance %.1f mm)" % [
+			idx.size() / 3, ms, p95 * 1000.0, errors[-1] * 1000.0, tolerance * 1000.0])
+		check(p95 < 2.0 * tolerance, "it follows the height field (95 % within twice the tolerance)")
+		var custom0: PackedFloat32Array = arrays[Mesh.ARRAY_CUSTOM0]
+		check(custom0.size() == v.size() * 4 and (arrays[Mesh.ARRAY_TANGENT] as PackedFloat32Array).size() == v.size() * 4,
+			"with the rest positions and tangents the shaders read")
+	var wave := ImageTexture.create_from_image(Harness.make_wave_field(64)["image"])
+	for c: Array in [["box, triplanar", BoxMesh.new(), GADSMaterials.Mapping.TRIPLANAR], ["sphere, uv", SphereMesh.new(), GADSMaterials.Mapping.UV]]:
+		var m := GADSMaterials.create(c[2], {"height": wave}, {"height_m": 0.04, "height_center": 0.5, "texture_size_m": Vector2(0.5, 0.5)}, GADSMaterials.Quality.POM)
+		var t_closed := Time.get_ticks_msec()
+		var closed := bake_with(c[1], m, {"max_error": 0.002, "max_triangles": 20000})
+		t_closed = Time.get_ticks_msec() - t_closed
+		if closed.mesh == null:
+			check(false, "%s bakes (%s)" % [c[0], closed.error])
+			continue
+		var edges := {}
+		for t: Array in triangles_of(closed.mesh):
+			var keys := [_weld(t[0]), _weld(t[1]), _weld(t[2])]
+			if keys[0] == keys[1] or keys[1] == keys[2] or keys[0] == keys[2]:
+				continue
+			for k in 3:
+				var a: Vector3i = keys[k]
+				var b: Vector3i = keys[(k + 1) % 3]
+				var key := [a, b] if [a.x, a.y, a.z] < [b.x, b.y, b.z] else [b, a]
+				edges[key] = edges.get(key, 0) + 1
+		var open := 0
+		for key in edges:
+			if edges[key] != 2:
+				open += 1
+		print("  %s: %d triangles in %d ms, %d edges not shared by exactly two" % [c[0], triangle_count(closed.mesh), t_closed, open])
+		check(open == 0, "%s stays closed" % c[0])
+	var vector := GADSMaterials.create(GADSMaterials.Mapping.UV, {}, {"vector_displacement_texture": wave, "vector_displacement_m": 0.1, "height_m": 0.0},
+		GADSMaterials.Quality.POM)
+	var refused := bake_with(plane(), vector, {"max_error": 0.001})
+	check(refused.mesh == null and refused.error.contains("native library"), "vector displacement says it needs the native library (%s)" % refused.error)
+	GADSMeshBaker.force_gdscript = false
 
 
 ## smooth_shape (curvature-aware subdivision): a low-poly sphere with a flat material bakes round

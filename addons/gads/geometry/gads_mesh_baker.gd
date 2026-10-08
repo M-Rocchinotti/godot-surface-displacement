@@ -52,9 +52,20 @@ var _started_ms := 0
 var _cancelled := false
 
 
-## Whether the native library is loaded (it ships for Linux and Windows x86_64; see README).
+## Bake with the GDScript tessellator even where the native library is loaded (tests).
+static var force_gdscript := false
+
+
+## Whether the native library is loaded (it ships for Linux x86_64 and ARM64 and Windows x86_64;
+## see README). Without it bakes use the slower GDScript tessellator ([GADSTessellatorGD]);
+## runtime tessellation, clusters and the other native features need it.
 static func is_available() -> bool:
 	return ClassDB.class_exists(NATIVE_CLASS)
+
+
+## Whether bakes run on the native tessellator (else on [GADSTessellatorGD]).
+static func is_native() -> bool:
+	return is_available() and not force_gdscript
 
 
 ## The material each surface of [param mesh] draws with on [param node] (override, then surface
@@ -205,10 +216,10 @@ static func cache_key(mesh: Mesh, materials: Array[Material], xform: Transform3D
 	return ctx.finish().hex_encode()
 
 
-## The native library's algorithm version and build, or "" without it.
+## The native library's algorithm version and build, or the GDScript tessellator's version.
 static func native_version() -> String:
-	if not is_available():
-		return ""
+	if not is_native():
+		return GADSTessellatorGD.VERSION
 	return "%d-%s" % [ClassDB.class_call_static(NATIVE_CLASS, "get_algorithm_version"), ClassDB.class_call_static(NATIVE_CLASS, "get_build_hash")]
 
 
@@ -365,9 +376,6 @@ func _prepare() -> bool:
 	mesh = null
 	collision_shape = null
 	stats = {}
-	if not is_available():
-		error = "the GADS native library is not loaded (addons/gads/native/; see README, Baked displacement)"
-		return false
 	error = check_mesh(_source)
 	if not error.is_empty():
 		return false
@@ -389,7 +397,7 @@ func _prepare() -> bool:
 
 
 func _make_tessellator(settings: Dictionary) -> RefCounted:
-	var tess := ClassDB.instantiate(NATIVE_CLASS) as RefCounted
+	var tess: RefCounted = ClassDB.instantiate(NATIVE_CLASS) as RefCounted if is_native() else GADSTessellatorGD.new()
 	var maps := {}
 	for s in _source.get_surface_count():
 		var d := displacement_of(_materials[s] if s < _materials.size() else null)

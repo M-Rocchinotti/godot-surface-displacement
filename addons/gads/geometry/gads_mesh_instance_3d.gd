@@ -271,7 +271,7 @@ func _validate_property(property: Dictionary) -> void:
 func _get_configuration_warnings() -> PackedStringArray:
 	var out := PackedStringArray()
 	if not GADSMeshBaker.is_available():
-		out.append("The GADS native library is not loaded on this platform: the mesh cannot be baked (see README).")
+		out.append("The GADS native library is not loaded on this platform: bakes use the slower GDScript tessellator (no vector displacement, blend shapes, skinning, clusters or runtime tessellation; see README).")
 	var problem := GADSMeshBaker.check_mesh(source_mesh)
 	if not problem.is_empty():
 		out.append("Cannot bake: %s." % problem)
@@ -508,9 +508,6 @@ func _begin(force: bool) -> Error:
 	if _baker != null:
 		return ERR_BUSY
 	_pending = {}
-	if not GADSMeshBaker.is_available():
-		push_warning("GADS: %s: the native library is not loaded; cannot bake." % name)
-		return ERR_UNAVAILABLE
 	if _max_depth() <= 0.0:
 		push_warning("GADS: %s: no surface uses a GADS material with a height map and a height_m above 0; nothing to bake." % name)
 		return FAILED
