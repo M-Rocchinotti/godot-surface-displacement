@@ -36,6 +36,9 @@ static var tool_mode := Mode.PAINT
 static var tool_channel := 0
 static var tool_radius := 0.25
 static var tool_strength := 0.5
+## The dummy renderer (--headless) keeps meshes on the CPU and ignores buffer region updates: there
+## the colours go in by rebuilding the surfaces (without LODs; nothing draws anyway).
+static var _cpu_meshes: bool = DisplayServer.get_name() == "headless"
 
 var mesh: ArrayMesh
 var _colors: Array[PackedColorArray] = [] # per surface, as floats
@@ -91,9 +94,7 @@ static func make_paintable(source: Mesh) -> ArrayMesh:
 		for b in shapes:
 			im.add_blend_shape(am.get_blend_shape_name(b))
 		im.set_blend_shape_mode(am.blend_shape_mode)
-	var keep := Mesh.ARRAY_FLAG_USE_8_BONE_WEIGHTS | Mesh.ARRAY_FLAG_COMPRESS_ATTRIBUTES
-	for shift in [Mesh.ARRAY_FORMAT_CUSTOM0_SHIFT, Mesh.ARRAY_FORMAT_CUSTOM1_SHIFT, Mesh.ARRAY_FORMAT_CUSTOM2_SHIFT, Mesh.ARRAY_FORMAT_CUSTOM3_SHIFT]:
-		keep |= Mesh.ARRAY_FORMAT_CUSTOM_MASK << shift
+	var keep := _kept_flags()
 	for s in source.get_surface_count():
 		var arrays := source.surface_get_arrays(s)
 		var n := (arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()
@@ -220,7 +221,10 @@ func set_colors(colors: Array) -> void:
 func _upload(s: int, vertices: PackedInt32Array) -> void:
 	var bytes := _attributes[s]
 	var colors := _colors[s]
-	if bytes.is_empty() or colors.is_empty():
+	if colors.is_empty():
+		return
+	if _cpu_meshes or bytes.is_empty():
+		_rebuild()
 		return
 	var off := _offset[s]
 	var stride := _stride[s]
@@ -232,6 +236,35 @@ func _upload(s: int, vertices: PackedInt32Array) -> void:
 			_write_color(bytes, off + i * stride, colors[i])
 	_attributes[s] = bytes
 	mesh.surface_update_attribute_region(s, 0, bytes)
+
+
+## The format flags a copy of a surface keeps (8 bone weights, compression, custom formats).
+static func _kept_flags() -> int:
+	var keep := Mesh.ARRAY_FLAG_USE_8_BONE_WEIGHTS | Mesh.ARRAY_FLAG_COMPRESS_ATTRIBUTES
+	for shift in [Mesh.ARRAY_FORMAT_CUSTOM0_SHIFT, Mesh.ARRAY_FORMAT_CUSTOM1_SHIFT, Mesh.ARRAY_FORMAT_CUSTOM2_SHIFT, Mesh.ARRAY_FORMAT_CUSTOM3_SHIFT]:
+		keep |= Mesh.ARRAY_FORMAT_CUSTOM_MASK << shift
+	return keep
+
+
+## Puts the colours in by adding the surfaces again (where region updates do nothing).
+func _rebuild() -> void:
+	var surfaces := []
+	var keep := _kept_flags()
+	for s in mesh.get_surface_count():
+		var arrays := mesh.surface_get_arrays(s)
+		if not _colors[s].is_empty():
+			arrays[Mesh.ARRAY_COLOR] = _colors[s].duplicate()
+		var blend: Array[Array] = []
+		if mesh.get_blend_shape_count() > 0:
+			blend = mesh.surface_get_blend_shape_arrays(s)
+		surfaces.append([mesh.surface_get_primitive_type(s), arrays, blend, mesh.surface_get_material(s),
+			mesh.surface_get_name(s), mesh.surface_get_format(s) & keep])
+	mesh.clear_surfaces()
+	for e: Array in surfaces:
+		mesh.add_surface_from_arrays(e[0], e[1], e[2], {}, e[5])
+		var i := mesh.get_surface_count() - 1
+		mesh.surface_set_material(i, e[3])
+		mesh.surface_set_name(i, e[4])
 
 
 static func _write_color(bytes: PackedByteArray, at: int, c: Color) -> void:
