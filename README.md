@@ -106,7 +106,7 @@ what the engine allows:
   collision, holes for cave entrances, sculpting, painting, roads, erosion, streaming and the
   near-camera displacement field on its own ground data.
 - A demo with seven scenes (gravel path, cobblestone street, rocky ground, brick wall and props,
-  hills with a rover leaving tracks, a cliff tessellated for the camera, a material lab of
+  hills with a rover leaving tracks and a shaft cut into the terrain, a cliff tessellated for the camera, a material lab of
   procedural materials, surface effects and vector displacement), a flat / POM / POM + geometry
   comparison, a before / after view, mip level and cluster views, runtime prop geometry, impacts
   (C), weather and a frame-time overlay.

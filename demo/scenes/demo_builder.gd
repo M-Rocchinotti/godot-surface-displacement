@@ -414,6 +414,19 @@ static func hills_height(x: float, z: float) -> float:
 	return 1.6 * sin(x / 11.0) * cos(z / 13.0) + 0.6 * sin((x + 2.0 * z) / 6.3) + ridge
 
 
+## The terrain's hole map: white within [param radius] metres of [param at] (XZ), one texel per
+## terrain vertex (0.5 m).
+static func hills_hole_map(at: Vector2, radius: float) -> ImageTexture:
+	var n := int(HILLS_SIZE / 0.5) + 1
+	var img := Image.create(n, n, false, Image.FORMAT_L8)
+	for z in n:
+		for x in n:
+			var p := Vector2(x, z) * 0.5 - Vector2(HILLS_SIZE, HILLS_SIZE) * 0.5
+			if p.distance_to(at) <= radius:
+				img.set_pixel(x, z, Color.WHITE)
+	return ImageTexture.create_from_image(img)
+
+
 ## The terrain's heightmap: hills_height() over HILLS_SIZE, 0..1 between HILLS_LOW and HILLS_HIGH.
 static func hills_heightmap(size := 257) -> ImageTexture:
 	var img := Image.create(size, size, false, Image.FORMAT_RF)
@@ -441,7 +454,25 @@ static func build_hills() -> Node3D:
 	terrain.layers = [ground, rock, gravel] as Array[ShaderMaterial]
 	terrain.slope_range = Vector2(22.0, 32.0)
 	terrain.height_band = Vector2(5.0, 6.5)
+	# A shaft into the hillside: a hole in the terrain (its hole map) over a rock-lined pit.
+	var shaft := Vector2(14.0, -6.0)
+	terrain.holes = hills_hole_map(shaft, 2.4)
 	root.add_child(terrain)
+	var pit_mat := rock.duplicate() as ShaderMaterial
+	pit_mat.shader = GADSMaterials.get_shader(GADSMaterials.Mapping.TRIPLANAR, GADSMaterials.Quality.POM_SELF_SHADOW)
+	pit_mat.set_shader_parameter("albedo_tint", Color(0.6, 0.55, 0.5))
+	var pit_mesh := CylinderMesh.new()
+	pit_mesh.top_radius = 3.0
+	pit_mesh.bottom_radius = 2.6
+	pit_mesh.height = 9.0
+	pit_mesh.radial_segments = 32
+	pit_mesh.cap_top = false
+	pit_mesh.flip_faces = true
+	var lowest := INF
+	for k in 16:
+		var a := TAU * k / 16.0
+		lowest = minf(lowest, hills_height(shaft.x + 3.0 * cos(a), shaft.y + 3.0 * sin(a)))
+	_mesh_node(root, "Shaft", pit_mesh, pit_mat, Vector3(shaft.x, lowest - 0.05 - pit_mesh.height * 0.5, shaft.y))
 	# A gravel road winding from the viewpoint up towards the ridge (flattened when the scene starts).
 	var road := GADSTerrainPath3D.new()
 	road.name = "Road"

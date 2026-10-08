@@ -191,7 +191,7 @@ All notable changes to this project are documented here. The format follows
   Cut holes / Fill holes brushes (undoable, saved next to the other edited maps) and
   `cut_holes()` at runtime. The chunks (every LOD, skirts, occluders), the collision (trimesh
   for chunks with holes) and the detail field's ground data leave them out;
-  `intersect_ray()` passes through, `is_hole()` tells.
+  `intersect_ray()` passes through, `is_hole()` tells. The hills demo has a rock-lined shaft.
 - **Validate Setup** notes materials that read vertex colours (layer masks, the displacement
   mask, the effects mask) on meshes without them (they read 1 everywhere until painted).
 - **Materials offered on import**: when the editor imports images that make up a texture set
