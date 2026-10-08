@@ -362,6 +362,18 @@ func test_validator() -> void:
 		mi.mesh = st.commit()
 		mi.material_override = uv_mat
 		bad.add_child(mi)
+	# A displacement mask on a mesh without vertex colours.
+	var unpainted_st := SurfaceTool.new()
+	unpainted_st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for v in [Vector3(0, 0, 0), Vector3(1, 0, 0), Vector3(0, 0, 1)]:
+		unpainted_st.set_normal(Vector3.UP)
+		unpainted_st.set_uv(Vector2(v.x, v.z))
+		unpainted_st.add_vertex(v)
+	var unpainted := MeshInstance3D.new()
+	unpainted.name = "Unpainted"
+	unpainted.mesh = unpainted_st.commit()
+	unpainted.material_override = GADSMaterials.create(GADSMaterials.Mapping.UV, {"height": height}, {"relief_vertex_mask": 1})
+	bad.add_child(unpainted)
 	var layer := GADSMaterials.create(GADSMaterials.Mapping.WORLD, {"height": height}, {"height_center": 0.0})
 	var other_ground := GADSMaterials.create(GADSMaterials.Mapping.WORLD, {"height": height}, {"height_center": 0.0})
 	other_ground.resource_name = "other_ground"
@@ -419,6 +431,7 @@ func test_validator() -> void:
 		"a vector map without a height map": "its bake follows the vector map, the parallax fallback draws flat",
 		"an animated material on a baked mesh": "GADSMeshInstance3D Animated: its material is animated",
 		"stream_bake without a geometry range": "GADSMeshInstance3D Animated: stream_bake needs a geometry_range",
+		"a displacement mask without vertex colours": "Unpainted, surface 0: the material reads vertex colour R (relief_vertex_mask) but the mesh has no vertex colours",
 	}
 	var missing: Array[String] = []
 	for what: String in expected:

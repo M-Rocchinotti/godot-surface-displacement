@@ -175,6 +175,8 @@ All notable changes to this project are documented here. The format follows
   triangle budget) while the camera is within `prop_geometry_range`, and draw their parallax again
   beyond it; no conversion or bake needed. Roadmap item (runtime geometry for non-planar surfaces
   near the camera) done.
+- **Validate Setup** notes materials that read vertex colours (layer masks, the displacement
+  mask, the effects mask) on meshes without them (they read 1 everywhere until painted).
 - **Materials offered on import**: when the editor imports images that make up a texture set
   (dropped in or downloaded), GADS opens the Create GADS Materials dialog for them (once per set
   and session; Editor Settings `gads/texture_sets/offer_materials_on_import`).

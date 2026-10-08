@@ -118,7 +118,9 @@ static func _check_material(m: ShaderMaterial, node: Node) -> Array:
 
 
 ## A UV-mapped GADS material needs UVs on the surfaces it shades. (Missing tangents cannot be
-## told from the mesh: Godot reports and fills in arbitrary ones.)
+## told from the mesh: Godot reports and fills in arbitrary ones.) A material that reads vertex
+## colours (layer masks, the displacement mask, the effects mask) on a mesh without them reads
+## white: worth knowing before painting.
 static func _check_mesh_attributes(mi: MeshInstance3D) -> Array:
 	var issues := []
 	# Primitive meshes always have UVs and tangents; an ArrayMesh says what it has.
@@ -128,12 +130,32 @@ static func _check_mesh_attributes(mi: MeshInstance3D) -> Array:
 	for s in mesh.get_surface_count():
 		var m := GADSGroundBake.surface_material(mi, s) as ShaderMaterial
 		var info := GADSMaterials.parse(m.shader) if m != null else {}
-		if info.is_empty() or info["mapping"] != GADSMaterials.Mapping.UV:
+		if info.is_empty():
 			continue
 		var format: int = mesh.surface_get_format(s)
-		if format & Mesh.ARRAY_FORMAT_TEX_UV == 0:
+		if info["mapping"] == GADSMaterials.Mapping.UV and format & Mesh.ARRAY_FORMAT_TEX_UV == 0:
 			issues.append(_issue("error", "%s, surface %d: UV-mapped GADS material on a mesh without UVs. Use world-planar or triplanar mapping, or give the mesh UVs." % [mi.name, s]))
+		var reads := _vertex_colour_reads(m, info["layered"])
+		if not reads.is_empty() and format & Mesh.ARRAY_FORMAT_COLOR == 0:
+			issues.append(_issue("info", "%s, surface %d: the material reads vertex colour %s but the mesh has no vertex colours, so it reads 1 everywhere. Paint them with Paint Layers." % [
+				mi.name, s, ", ".join(reads)]))
 	return issues
+
+
+## The vertex colour channels [param m] reads, as "R (relief_vertex_mask)" and the like.
+static func _vertex_colour_reads(m: ShaderMaterial, layered: bool) -> Array:
+	const CHANNELS := ["R", "G", "B", "A"]
+	var reads := []
+	for key: String in ["relief_vertex_mask", "effects_vertex_mask"]:
+		var ch := int(GADSMaterials.get_param(m, key))
+		if ch > 0 and ch <= 4:
+			reads.append("%s (%s)" % [CHANNELS[ch - 1], key])
+	if layered:
+		for k in [1, 2]:
+			var ch := int(GADSMaterials.get_param(m, "layer%d_mask_channel" % k))
+			if ch >= 0 and ch < 4 and float(GADSMaterials.get_param(m, "layer%d_amount" % k)) > 0.0:
+				reads.append("%s (layer %d)" % [CHANNELS[ch], k])
+	return reads
 
 
 static func _check_field(field: GADSDisplacementField3D) -> Array:
