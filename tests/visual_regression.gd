@@ -59,12 +59,12 @@ func _run() -> void:
 			continue
 		print("== %s" % shot[0])
 		var img := await _render(shot[1], shot[2])
-		var ref_path := REFERENCE_DIR + shot[0] + ".webp"
+		var ref_path: String = REFERENCE_DIR + shot[0] + ".webp"
 		if update:
 			img.save_webp(ProjectSettings.globalize_path(ref_path), false)
 			print("  wrote %s" % ref_path)
 			continue
-		var ref := Image.load_from_file(ProjectSettings.globalize_path(ref_path)) if FileAccess.file_exists(ref_path) else null
+		var ref: Image = Image.load_from_file(ProjectSettings.globalize_path(ref_path)) if FileAccess.file_exists(ref_path) else null
 		if ref == null:
 			check(false, "a reference image exists (%s; run with --update)" % ref_path)
 			continue
