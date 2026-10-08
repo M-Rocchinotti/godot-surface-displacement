@@ -175,7 +175,7 @@ All notable changes to this project are documented here. The format follows
   triangle budget) while the camera is within `prop_geometry_range`, and draw their parallax again
   beyond it; no conversion or bake needed. Roadmap item (runtime geometry for non-planar surfaces
   near the camera) done.
-- **Visual regression suite** (`tests/visual_regression.gd`): nine fixed shots
+- **Visual regression suite** (`tests/visual_regression.gd`, in `run_all.py`): nine fixed shots
   of the demo scenes and two debug views compared with reference images in `tests/reference/`;
   failing shots and difference images go to `build/visual/`, `--update` writes new references.
 - **Debug views** `MIP_LEVEL` (the height map's mip level the march samples, as a heat map)

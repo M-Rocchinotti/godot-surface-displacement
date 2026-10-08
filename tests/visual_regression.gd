@@ -1,9 +1,11 @@
 extends SceneTree
 ## Visual regression: renders fixed views of the demo scenes (and two debug views) and compares
-## each with its reference image in tests/reference/. A shot fails when its mean colour difference
-## or its share of clearly changed pixels exceeds the limits below (forgiving enough for another
-## machine's driver, not for cracks, missing relief, broken normals or shadows); the shot and a
-## difference image are then written to build/visual/.
+## each with its reference image in tests/reference/. A shot fails when its mean colour difference,
+## the worst 16 x 16 pixel block's mean difference (a local defect: a crack, a missing prop) or
+## its share of clearly changed pixels exceeds the limits below; the shot and a difference image
+## are then written to build/visual/. The same machine renders the shots bit for bit the same; the
+## limits leave room for another driver but catch, for example, the normal maps of UV-mapped
+## surfaces going missing.
 ##     python tools/godot.py --fixed-fps 30 --script tests/visual_regression.gd
 ##     python tools/godot.py --fixed-fps 30 --script tests/visual_regression.gd -- --update
 ##     ... -- --only=brick_wall,material_lab_tessellation
@@ -15,10 +17,13 @@ const REFERENCE_DIR := "res://tests/reference/"
 const OUTPUT_DIR := "res://build/visual/"
 const SIZE := Vector2i(480, 270)
 ## Largest mean difference (0..1, the RGB channels' average) a shot may have.
-const MAX_MEAN := 0.015
+const MAX_MEAN := 0.003
+## Largest mean difference of a 16 x 16 pixel block.
+const MAX_BLOCK := 0.03
+const BLOCK := 16
 ## Largest share of pixels whose largest channel differs by more than CHANGED_BY.
-const MAX_CHANGED := 0.03
-const CHANGED_BY := 0.12
+const MAX_CHANGED := 0.005
+const CHANGED_BY := 0.1
 ## [name, scene index, debug view]
 const SHOTS := [
 	["gravel_path", 0, GADSManager.DebugView.OFF],
@@ -70,9 +75,9 @@ func _run() -> void:
 			continue
 		ref.convert(Image.FORMAT_RGBA8)
 		var d := compare(img, ref)
-		print("  mean difference %.4f (limit %.3f), %.2f %% of pixels changed by more than %.2f (limit %.1f %%)" % [
-			d["mean"], MAX_MEAN, d["changed"] * 100.0, CHANGED_BY, MAX_CHANGED * 100.0])
-		var ok: bool = d["mean"] <= MAX_MEAN and d["changed"] <= MAX_CHANGED
+		print("  mean difference %.4f (limit %.3f), worst block %.4f (limit %.2f), %.2f %% of pixels changed by more than %.2f (limit %.1f %%)" % [
+			d["mean"], MAX_MEAN, d["block"], MAX_BLOCK, d["changed"] * 100.0, CHANGED_BY, MAX_CHANGED * 100.0])
+		var ok: bool = d["mean"] <= MAX_MEAN and d["block"] <= MAX_BLOCK and d["changed"] <= MAX_CHANGED
 		check(ok, "%s matches its reference" % shot[0])
 		if not ok:
 			img.save_png(ProjectSettings.globalize_path(OUTPUT_DIR + shot[0] + ".png"))
@@ -95,12 +100,15 @@ func check(condition: bool, what: String) -> void:
 		print("  FAIL %s" % what)
 
 
-## Mean difference, share of changed pixels and a difference image (changes x 4) of two images of
-## the same size.
+## Mean difference, worst block mean, share of changed pixels and a difference image (changes x 4)
+## of two images of the same size.
 static func compare(a: Image, b: Image) -> Dictionary:
 	if a.get_size() != b.get_size():
-		return {"mean": 1.0, "changed": 1.0, "image": a}
+		return {"mean": 1.0, "block": 1.0, "changed": 1.0, "image": a}
 	var diff := Image.create_empty(a.get_width(), a.get_height(), false, Image.FORMAT_RGB8)
+	var blocks := Vector2i(ceili(a.get_width() / float(BLOCK)), ceili(a.get_height() / float(BLOCK)))
+	var block_sums := PackedFloat64Array()
+	block_sums.resize(blocks.x * blocks.y)
 	var sum := 0.0
 	var changed := 0
 	for y in a.get_height():
@@ -110,12 +118,20 @@ static func compare(a: Image, b: Image) -> Dictionary:
 			var dr := absf(ca.r - cb.r)
 			var dg := absf(ca.g - cb.g)
 			var db := absf(ca.b - cb.b)
-			sum += (dr + dg + db) / 3.0
+			var d := (dr + dg + db) / 3.0
+			sum += d
+			block_sums[(y / BLOCK) * blocks.x + x / BLOCK] += d
 			if maxf(dr, maxf(dg, db)) > CHANGED_BY:
 				changed += 1
 			diff.set_pixel(x, y, Color(minf(dr * 4.0, 1.0), minf(dg * 4.0, 1.0), minf(db * 4.0, 1.0)))
+	var worst := 0.0
+	for i in block_sums.size():
+		var bx := i % blocks.x
+		var by := i / blocks.x
+		var pixels := (mini((bx + 1) * BLOCK, a.get_width()) - bx * BLOCK) * (mini((by + 1) * BLOCK, a.get_height()) - by * BLOCK)
+		worst = maxf(worst, block_sums[i] / pixels)
 	var n := float(a.get_width() * a.get_height())
-	return {"mean": sum / n, "changed": changed / n, "image": diff}
+	return {"mean": sum / n, "block": worst, "changed": changed / n, "image": diff}
 
 
 ## Builds demo scene [param index] at the High preset, waits for its bakes and tessellations,

@@ -41,7 +41,8 @@ SCULPT = "addons/gads/geometry/gads_sculpt.gd"
 
 # (name, what it breaks, [(file, old, new)], [(suite, name filter)]); suite is "logic",
 # "render" (tests/render_tests.gd), "field" (tests/field_tests.gd), "bake" (tests/bake_tests.gd),
-# "terrain" (tests/terrain_tests.gd) or "compat" (tests/renderer_tests.gd on Compatibility).
+# "terrain" (tests/terrain_tests.gd), "compat" (tests/renderer_tests.gd on Compatibility) or
+# "visual" (tests/visual_regression.gd against the reference images).
 MUTATIONS = [
     ("no mipmaps", "the demo height map imported without mipmaps (the crater's POM bug)",
      [(HEIGHT_IMPORT, "mipmaps/generate=true", "mipmaps/generate=false")],
@@ -288,6 +289,9 @@ MUTATIONS = [
     ("terrain ground data off the vertices", "the detail field's ground texels sit half a texel off the terrain's vertices",
      [(TERRAIN, "_origin - Vector2(texel, texel) * 0.5 + Vector2(gp.x, gp.z), texel)", "_origin + Vector2(gp.x, gp.z), texel)")],
      [("terrain", "ground_data")]),
+    ("normal maps off", "GADS surfaces drop their normal maps: flat-looking shading everywhere",
+     [(SURFACE, "	NORMAL_MAP_DEPTH = gads_normal_strength();", "	NORMAL_MAP_DEPTH = 0.0;")],
+     [("visual", "")]),
     ("compatibility depth range", "the depth write uses Vulkan's 0..1 clip depth on OpenGL's -1..1",
      [(SURFACE, "	depth = depth * 0.5 + 0.5; // OpenGL clip depth is -1..1; DEPTH (gl_FragDepth) is 0..1", "")],
      [("compat", "")]),
@@ -301,6 +305,7 @@ SUITES = {
     "terrain": (["--script", "tests/terrain_tests.gd"], r"terrain tests: \d+ passed, \d+ failed"),
     "compat": (["--rendering-method", "gl_compatibility", "--script", "tests/renderer_tests.gd"],
                r"renderer tests \(gl_compatibility\): \d+ passed, \d+ failed"),
+    "visual": (["--fixed-fps", "30", "--script", "tests/visual_regression.gd"], r"visual regression: \d+ passed, \d+ failed"),
 }
 
 

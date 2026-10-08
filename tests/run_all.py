@@ -2,8 +2,9 @@
 """Run every GADS test suite and scan the engine logs for problems.
 
     python tests/run_all.py              # import, variants, logic, render, field, bake, terrain, the
-                                         # Compatibility and Mobile renderers, demo and editor
-                                         # smoke, shipped archive, editor plugin, Blender bake
+                                         # Compatibility and Mobile renderers, visual regression,
+                                         # demo and editor smoke, shipped archive, editor plugin,
+                                         # Blender bake
     python tests/run_all.py --bench      # ... plus the 1080p preset benchmark (waits for an idle GPU)
     python tests/run_all.py --mutations  # ... plus tests/run_mutations.py (slow)
 
@@ -38,6 +39,8 @@ SUITES = [
      r"renderer tests \(gl_compatibility\): (\d+) passed, (\d+) failed"),
     ("Mobile renderer", ["--rendering-method", "mobile", "--script", "tests/renderer_tests.gd"],
      r"renderer tests \(mobile\): (\d+) passed, (\d+) failed"),
+    ("visual regression", ["--fixed-fps", "30", "--script", "tests/visual_regression.gd"],
+     r"visual regression: (\d+) passed, (\d+) failed"),
     ("demo smoke", ["res://demo/demo_main.tscn", "--quit-after", "400"], None),
     ("editor smoke", ["--editor", "res://demo/demo_main.tscn", "--quit-after", "300"], None),
 ]
