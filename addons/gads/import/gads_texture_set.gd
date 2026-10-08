@@ -3,20 +3,27 @@ class_name GADSTextureSet
 extends RefCounted
 ## Turns a downloaded PBR texture set (Substance, Quixel, Poly Haven, Blender bakes...) into a
 ## GADS material: [method detect] groups image files into sets and tells each file's role from
-## its name (BaseColor / Albedo / Diffuse, Normal (OpenGL or DirectX), Roughness, Metallic,
-## AO, ORM / ARM, Height / Displacement); [method recommend] proposes the texture size, the relief
+## its name (BaseColor / Albedo / Diffuse / BaseMap, Normal (OpenGL or DirectX), Roughness or
+## Gloss / Smoothness (inverted), Metallic, AO, packed ORM / ARM, RMA and Unity's MaskMap,
+## Height / Displacement, a Bump map only without them); [method recommend] proposes the texture size, the relief
 ## depth and the height remap; [method prepare] writes what the set lacks for GADS next to it (a
 ## remapped 16-bit EXR height, a packed ORM, an OpenGL normal map from a DirectX one) and
 ## [method create_material] builds and saves the material. The editor's Create GADS Material from
 ## Selected Textures runs all four.
 
 const ROLE_WORDS := {
-	"albedo": ["basecolor", "albedo", "diffuse", "diff", "color", "colour", "col"],
+	"albedo": ["basecolor", "albedo", "diffuse", "diff", "color", "colour", "col", "basemap"],
 	"normal": ["normal", "normalgl", "normaldx", "nor", "nrm", "norm", "normalmap"],
 	"roughness": ["roughness", "rough", "rgh"],
+	# Glossiness / smoothness: roughness inverted (Megascans' Gloss, Unity's Smoothness).
+	"gloss": ["gloss", "glossiness", "smoothness"],
 	"metallic": ["metallic", "metalness", "metal", "met"],
 	"ao": ["ambientocclusion", "occlusion", "ao", "occ"],
 	"orm": ["orm", "arm", "occlusionroughnessmetallic"],
+	# Packed the other way round: R roughness, G metallic, B occlusion.
+	"rma": ["rma"],
+	# Unity HDRP / URP mask map: R metallic, G occlusion, B detail mask, A smoothness.
+	"mask": ["maskmap"],
 	"height": ["height", "displacement", "disp", "heightmap", "bump", "depth"],
 }
 ## Name words that are no part of the set's name: resolutions, normal conventions, variants.
@@ -62,8 +69,12 @@ static func detect(paths: PackedStringArray) -> Array:
 		# Prefer the OpenGL normal map when both are there, and an EXR height over an 8-bit one.
 		if role == "normal" and files.has("normal") and dx:
 			continue
-		if role == "height" and files.has("height") and String(files["height"]).get_extension().to_lower() == "exr":
+		# A height over a bump map (Megascans ships both; its Bump is fine detail), then an EXR.
+		var rank := (0 if words[role_at] == "bump" else 2) + (1 if path.get_extension().to_lower() == "exr" else 0)
+		if role == "height" and files.has("height") and int(s.get("height_rank", 0)) >= rank:
 			continue
+		if role == "height":
+			s["height_rank"] = rank
 		files[role] = path
 		if role == "normal":
 			s["normal_dx"] = dx
@@ -95,7 +106,7 @@ static func _words(stem: String) -> PackedStringArray:
 		if i + 2 < words.size() and triple == "occlusionroughnessmetallic":
 			joined.append(triple)
 			i += 3
-		elif i + 1 < words.size() and pair in ["basecolor", "ambientocclusion", "normalgl", "normaldx", "heightmap", "normalmap"]:
+		elif i + 1 < words.size() and pair in ["basecolor", "ambientocclusion", "normalgl", "normaldx", "heightmap", "normalmap", "basemap", "maskmap"]:
 			joined.append(pair)
 			i += 2
 		else:
@@ -160,8 +171,14 @@ static func prepare(texture_set: Dictionary) -> Dictionary:
 			use["normal"] = files["normal"]
 	if files.has("orm"):
 		use["orm"] = files["orm"]
-	elif files.has("roughness") or files.has("ao") or files.has("metallic"):
-		var orm := pack_orm(files.get("ao", ""), files.get("roughness", ""), files.get("metallic", ""))
+	elif files.has("rma") or files.has("mask") or files.has("roughness") or files.has("gloss") or files.has("ao") or files.has("metallic"):
+		var orm: Image
+		if files.has("rma"):
+			orm = repack_orm(files["rma"], "rma")
+		elif files.has("mask"):
+			orm = repack_orm(files["mask"], "mask")
+		else:
+			orm = pack_orm(files.get("ao", ""), files.get("roughness", ""), files.get("metallic", ""), files.get("gloss", ""))
 		if orm != null:
 			var dst := base + "_gads_orm.png"
 			orm.save_png(ProjectSettings.globalize_path(dst))
@@ -171,10 +188,14 @@ static func prepare(texture_set: Dictionary) -> Dictionary:
 
 
 ## An ORM image (R = ambient occlusion, G = roughness, B = metallic) from separate maps (paths;
-## empty: AO 1, roughness 1, metallic 0), at the largest of their sizes.
-static func pack_orm(ao_path: String, roughness_path: String, metallic_path: String) -> Image:
+## empty: AO 1, roughness 1, metallic 0), at the largest of their sizes. Without a roughness map
+## a gloss / smoothness one ([param gloss_path]) gives it inverted.
+static func pack_orm(ao_path: String, roughness_path: String, metallic_path: String, gloss_path := "") -> Image:
 	var sources: Array[Image] = []
 	var size := Vector2i.ZERO
+	var invert_roughness := roughness_path.is_empty() and not gloss_path.is_empty()
+	if invert_roughness:
+		roughness_path = gloss_path
 	for p in [ao_path, roughness_path, metallic_path]:
 		var img: Image = null
 		if not p.is_empty():
@@ -203,6 +224,9 @@ static func pack_orm(ao_path: String, roughness_path: String, metallic_path: Str
 				img.resize(size.x, size.y, Image.INTERPOLATE_BILINEAR)
 			img.convert(Image.FORMAT_L8)
 			values = img.get_data()
+			if k == 1 and invert_roughness:
+				for i in values.size():
+					values[i] = 255 - values[i]
 		channels.append(values)
 	var data := PackedByteArray()
 	data.resize(size.x * size.y * 3)
@@ -211,6 +235,36 @@ static func pack_orm(ao_path: String, roughness_path: String, metallic_path: Str
 		data[i * 3 + 1] = channels[1][i]
 		data[i * 3 + 2] = channels[2][i]
 	return Image.create_from_data(size.x, size.y, false, Image.FORMAT_RGB8, data)
+
+
+## An ORM image from a map packed another way: [param layout] "rma" (R roughness, G metallic,
+## B occlusion) or "mask" (Unity's mask map: R metallic, G occlusion, A smoothness). Null when the
+## file cannot be read.
+static func repack_orm(path: String, layout: String) -> Image:
+	var img := Image.load_from_file(ProjectSettings.globalize_path(path))
+	if img == null or img.is_empty():
+		return null
+	if img.is_compressed():
+		img.decompress()
+	img.clear_mipmaps()
+	img.convert(Image.FORMAT_RGBA8)
+	var src := img.get_data()
+	var data := PackedByteArray()
+	data.resize(img.get_width() * img.get_height() * 3)
+	for i in img.get_width() * img.get_height():
+		var r := src[i * 4]
+		var g := src[i * 4 + 1]
+		var b := src[i * 4 + 2]
+		var a := src[i * 4 + 3]
+		if layout == "mask":
+			data[i * 3] = g
+			data[i * 3 + 1] = 255 - a
+			data[i * 3 + 2] = r
+		else:
+			data[i * 3] = b
+			data[i * 3 + 1] = r
+			data[i * 3 + 2] = g
+	return Image.create_from_data(img.get_width(), img.get_height(), false, Image.FORMAT_RGB8, data)
 
 
 ## Import settings for a written texture: VRAM compressed with mipmaps (a normal map as one).

@@ -735,11 +735,22 @@ func test_texture_sets() -> void:
 			height.set_pixel(x, y, Color(v, v, v))
 	var normal := Image.create(16, 16, false, Image.FORMAT_RGB8)
 	normal.fill(Color8(128, 64, 255))
+	var rgba := func(c: Color) -> Image:
+		var img := Image.create(16, 16, false, Image.FORMAT_RGBA8)
+		img.fill(c)
+		return img
 	var files := {
 		"rocks_ground_05_diff_2k.png": grey.call(0.5), "rocks_ground_05_nor_gl_2k.png": normal, "rocks_ground_05_nor_dx_2k.png": normal,
 		"rocks_ground_05_rough_2k.png": grey.call(0.25), "rocks_ground_05_disp_2k.png": height, "rocks_ground_05_ao_2k.png": grey.call(0.5),
 		"Rock_BaseColor.png": grey.call(0.5), "Rock_Normal.png": normal, "Rock_Height.png": height, "Rock_OcclusionRoughnessMetallic.png": normal,
 		"Rock_preview.png": grey.call(0.1), "Brick_Albedo.png": grey.call(0.5), "Brick_Normal_DX.png": normal,
+		# Megascans: Gloss instead of roughness, a Bump map beside the displacement.
+		"Ground_2K_Albedo.png": grey.call(0.5), "Ground_2K_Bump.png": grey.call(0.5), "Ground_2K_Displacement.png": height,
+		"Ground_2K_Gloss.png": grey.call(0.25), "Ground_2K_Normal.png": normal,
+		# Unity: BaseMap and a MaskMap (metallic 1, occlusion 0.5, smoothness 0.8).
+		"Metal_BaseMap.png": grey.call(0.5), "Metal_MaskMap.png": rgba.call(Color(1.0, 0.5, 0.0, 0.8)),
+		# RMA: roughness 0.3, metallic 0.6, occlusion 0.9.
+		"Crate_Color.png": grey.call(0.5), "Crate_RMA.png": rgba.call(Color(0.3, 0.6, 0.9, 1.0)),
 	}
 	var paths := PackedStringArray()
 	for f: String in files:
@@ -749,8 +760,8 @@ func test_texture_sets() -> void:
 	var sets := {}
 	for s: Dictionary in GADSTextureSet.detect(paths):
 		sets[s["name"]] = s
-	check(sets.keys().size() == 3 and sets.has("rocks_ground_05") and sets.has("rock") and sets.has("brick"),
-		"three sets by name: %s" % [sets.keys()])
+	check(sets.keys().size() == 6 and sets.has("rocks_ground_05") and sets.has("rock") and sets.has("brick") and sets.has("ground")
+		and sets.has("metal") and sets.has("crate"), "six sets by name: %s" % [sets.keys()])
 	var ph: Dictionary = sets.get("rocks_ground_05", {"files": {}})
 	var roles: Array = (ph["files"] as Dictionary).keys()
 	roles.sort()
@@ -767,6 +778,18 @@ func test_texture_sets() -> void:
 	var orm := GADSTextureSet.pack_orm(ph["files"]["ao"], ph["files"]["roughness"], "")
 	var px := orm.get_pixel(3, 3) if orm != null else Color()
 	check(orm != null and absf(px.r - 0.5) < 0.01 and absf(px.g - 0.25) < 0.01 and px.b == 0.0, "ORM packs AO, roughness and metallic (none: 0)")
+	var mega: Dictionary = sets.get("ground", {"files": {}})
+	check(String(mega["files"].get("height", "")).ends_with("Displacement.png") and mega["files"].has("gloss"),
+		"Megascans names: the displacement over the bump map, Gloss")
+	var packed := {}
+	for set_name: String in ["ground", "metal", "crate"]:
+		var u := GADSTextureSet.prepare(sets.get(set_name, {"files": {}, "dir": dir, "name": set_name}))
+		var img := Image.load_from_file(ProjectSettings.globalize_path(u.get("orm", ""))) if u.has("orm") else null
+		packed[set_name] = img.get_pixel(2, 2) if img != null else Color(-1, -1, -1)
+	print("  ORM from Gloss %s, MaskMap %s, RMA %s" % [packed["ground"], packed["metal"], packed["crate"]])
+	var near := func(c: Color, r: float, g: float, b: float) -> bool: return absf(c.r - r) < 0.01 and absf(c.g - g) < 0.01 and absf(c.b - b) < 0.01
+	check(near.call(packed["ground"], 1.0, 0.75, 0.0) and near.call(packed["metal"], 0.5, 0.2, 1.0) and near.call(packed["crate"], 0.9, 0.3, 0.6),
+		"packed ORM from a Gloss map (inverted), a Unity MaskMap and an RMA map")
 	var use := GADSTextureSet.prepare(sets["brick"])
 	var flipped := Image.load_from_file(ProjectSettings.globalize_path(use.get("normal", "")))
 	check(String(use.get("normal", "")).ends_with("brick_gads_normal.png") and flipped != null and flipped.get_pixel(0, 0).g8 == 191,

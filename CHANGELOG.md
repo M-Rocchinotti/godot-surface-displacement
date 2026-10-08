@@ -183,6 +183,10 @@ All notable changes to this project are documented here. The format follows
   mappings, detail, layers, masks and sculpt maps; vector displacement, blend shapes, skinning,
   clusters and runtime tessellation still need the native library. Its bakes have their own
   cache key.
+- **More texture-set conventions** (Create Material from Selected Textures, the import offer):
+  Megascans' Gloss and Unity's Smoothness (roughness inverted), Unity's BaseMap and MaskMap
+  (metallic, occlusion, smoothness repacked to ORM), RMA packing, and a height or displacement
+  map taking precedence over a Bump map (Megascans ships both).
 - **GADS Height Map importer** (Import As in the Import dock; RAW / R16 files by default): 16-bit
   PNGs at their full 16 bits (Godot's importer reads them as 8) and RAW / R16 terrain heightmaps
   (World Machine, Gaea, Unity; width and byte order options), one channel (red, green, blue,
