@@ -148,10 +148,19 @@ static func _replace(mi: MeshInstance3D, root: Node) -> GADSMeshInstance3D:
 	node.owner = root
 	for child in mi.get_children():
 		mi.remove_child(child)
+		# Unowned while it moves (the engine warns about an owner outside the new parent's
+		# scene otherwise); owned by the root again after.
+		_clear_owner(child)
 		node.add_child(child)
 		_set_owner(child, root)
 	mi.free()
 	return node
+
+
+static func _clear_owner(node: Node) -> void:
+	node.owner = null
+	for child in node.get_children():
+		_clear_owner(child)
 
 
 static func _set_owner(node: Node, root: Node) -> void:
