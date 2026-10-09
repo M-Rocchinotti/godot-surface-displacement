@@ -117,9 +117,10 @@ func _process(delta: float) -> void:
 	_gpu_ms = lerpf(_gpu_ms, RenderingServer.viewport_get_measured_render_time_gpu(get_viewport().get_viewport_rid()), 0.1)
 	if Engine.get_process_frames() % 10 == 0 and gads != null:
 		var budget := gads.get_budget_ms()
-		_stats.text = "%d fps   frame %.2f ms   GPU %.2f ms\n%s preset, added-cost target %s, %s (R)   (%s)" % [
+		_stats.text = "%d fps   frame %.2f ms   GPU %.2f ms\n%s preset, added-cost target %s, %s (R)   (%s)\nGADS: %s" % [
 			Engine.get_frames_per_second(), _frame_ms, _gpu_ms, GADSSettings.preset_name(gads.preset),
-			"%.1f ms" % budget if budget < INF else "-", WEATHER[_weather][0], RenderingServer.get_video_adapter_name()]
+			"%.1f ms" % budget if budget < INF else "-", WEATHER[_weather][0], RenderingServer.get_video_adapter_name(),
+			"native library" if gads.get_capabilities()["native_library"] else "GDScript fallback"]
 
 
 func _unhandled_key_input(event: InputEvent) -> void:

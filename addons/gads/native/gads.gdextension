@@ -9,3 +9,6 @@ reloadable = false
 linux.x86_64 = "res://addons/gads/native/bin/libgads.linux.template_release.x86_64.so"
 linux.arm64 = "res://addons/gads/native/bin/libgads.linux.template_release.arm64.so"
 windows.x86_64 = "res://addons/gads/native/bin/libgads.windows.template_release.x86_64.dll"
+android.arm64 = "res://addons/gads/native/bin/libgads.android.template_release.arm64.so"
+android.x86_64 = "res://addons/gads/native/bin/libgads.android.template_release.x86_64.so"
+web.threads.wasm32 = "res://addons/gads/native/bin/libgads.web.template_release.wasm32.wasm"
