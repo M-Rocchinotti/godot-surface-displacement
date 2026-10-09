@@ -680,3 +680,42 @@ from scripts; uncompressed floats are what a height map wants anyway. The logic 
 fixtures written by `tests/data/make_height_fixtures.py` (every row filter, odd sizes, RGBA,
 both byte orders) to their exact values; the editor check imports an R16 and a 16-bit PNG
 through the importer.
+
+## 16. Collision on the relief (`GADSReliefCollider3D`)
+
+The ground's own collision (the terrain's HeightMapShape3D, a ground mesh) is the smooth surface,
+so a character stands below the stones the field draws. The relief collider adds a second,
+small height-field around one target: `resolution` x `resolution` samples of
+`get_surface_height()` (the CPU twin of the drawn relief) on a grid snapped to `spacing`, so a
+sample keeps its world position while the patch moves and only the rows and columns entering it
+are sampled (a walking target needs one strip of `resolution` samples every few frames). A
+HeightMapShape3D always has one unit between samples and is centred on its node, so the shape's
+node gets a uniform scale of `spacing` and the heights are divided by it; uniform scales of
+height-fields work in GodotPhysics and Jolt alike (the terrain tests run on both). Samples
+outside the relief's data sit a metre under the lowest sample, out of the way of the ground's
+own collision. The sampling stays on the main thread: `get_surface_height()` fills a texture
+cache on first use, which a worker thread would race.
+
+## 17. Live rebake
+
+The editor plugin looks at the selected baked GADSMeshInstance3D nodes twice a second. A node
+whose bake key (the hash of its source, materials' displacement inputs, transform and settings)
+differs from its bake's is stale; it bakes again only once the key has stayed the same for two
+looks in a row, so dragging a slider bakes once at the end, not at every step. The bake runs on
+the node's worker thread, reuses the cache for keys baked before (undo is instant) and records
+no undo entry: the edit that made it stale is the undoable step. Computing the key hashes the
+source mesh when it is embedded in the scene; a node whose key took long is looked at no sooner
+than twenty times that time later.
+
+## 18. The GDScript tessellator's skins, blend shapes and clusters
+
+Without the native library, `GADSTessellatorGD` carries per vertex the bone influences
+(`{bone: weight}`) and, with blend shapes, the source vertices it blends (`{source: weight}`).
+A midpoint mixes its ends' sets at half weight each, keeps the strongest (bones: the source's
+influence count; sources: three, which is all a source triangle has) with ties broken by the
+lower key, and normalises: what the native `mix_skins` / `mix_blends` do, so both tessellators
+interpolate the same way. Each blend shape's output vertex is the baked vertex plus the blend of
+the source vertices' shape offsets, its normal turned by theirs. Clusters split the triangles at
+the median of their centres along the longest extent, recursively, ordered by
+`[key, surface, first index]` with the engine's Array sort (a total order: the same bake always
+splits the same), and remap each surface's vertices per cluster.
