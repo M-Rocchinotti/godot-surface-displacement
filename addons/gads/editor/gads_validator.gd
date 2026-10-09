@@ -250,7 +250,7 @@ static func _check_terrain(t: GADSTerrain3D) -> Array:
 static func _check_baked_mesh(mi: GADSMeshInstance3D) -> Array:
 	var issues := []
 	if not GADSMeshBaker.is_available():
-		issues.append(_issue("info", "GADSMeshInstance3D %s: the GADS native library is not loaded on this platform: it bakes with the slower GDScript tessellator (no vector displacement, clusters or runtime tessellation)." % mi.name))
+		issues.append(_issue("info", "GADSMeshInstance3D %s: the GADS native library is not loaded on this platform: it bakes with the slower GDScript tessellator (no vector displacement or runtime tessellation)." % mi.name))
 	var problem := GADSMeshBaker.check_mesh(mi.source_mesh)
 	if not problem.is_empty():
 		issues.append(_issue("error", "GADSMeshInstance3D %s cannot be baked: %s." % [mi.name, problem]))

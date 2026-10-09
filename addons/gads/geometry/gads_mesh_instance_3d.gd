@@ -271,7 +271,7 @@ func _validate_property(property: Dictionary) -> void:
 func _get_configuration_warnings() -> PackedStringArray:
 	var out := PackedStringArray()
 	if not GADSMeshBaker.is_available():
-		out.append("The GADS native library is not loaded on this platform: bakes use the slower GDScript tessellator (no vector displacement, clusters or runtime tessellation; see README).")
+		out.append("The GADS native library is not loaded on this platform: bakes use the slower GDScript tessellator (no vector displacement or runtime tessellation; see README).")
 	var problem := GADSMeshBaker.check_mesh(source_mesh)
 	if not problem.is_empty():
 		out.append("Cannot bake: %s." % problem)

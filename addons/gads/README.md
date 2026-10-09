@@ -79,7 +79,7 @@ header of `gads_core.gdshaderinc` lists the signatures).
 
 Requirements: Godot 4.7+, Forward+ (Vulkan tested). Limitations: POM gives no silhouettes on
 walls and props (bake those); without the native library (Linux, Windows x86_64; Linux ARM64)
-bakes are slower and without vector displacement, clusters or runtime tessellation;
+bakes are slower and without vector displacement or runtime tessellation;
 skinned and morphing meshes bake in their rest pose; the near-camera geometry needs height-field
 ground (world-planar ground materials); feet sink into the relief unless a GADSReliefCollider3D
 follows them; depth write is opt-in and costs

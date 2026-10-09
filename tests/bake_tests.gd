@@ -624,6 +624,18 @@ func test_gdscript_fallback() -> void:
 		for i in bv.size():
 			shape_worst = maxf(shape_worst, (msv[i] - bv[i]).distance_to(Vector3(0, 0.25 * (mrest[i * 4] + 1.0), 0)))
 	check(shape_worst < 1e-4, "a mesh with a blend shape keeps it, each vertex moved by the interpolated offset (within %.4f mm) (%s)" % [shape_worst * 1000.0, morph_bake.error])
+	# Clusters: the same triangles, split into compact groups of at most the target.
+	var whole_gd := bake_with(plane(), mat, {"max_error": tolerance, "max_triangles": 60000})
+	var split_gd := bake_with(plane(), mat, {"max_error": tolerance, "max_triangles": 60000, "cluster_triangles": 80})
+	var parts: Array = [split_gd.mesh] + GADSMeshInstance3D.cluster_meshes_of(split_gd.mesh) if split_gd.mesh != null else []
+	var part_total := 0
+	var part_max := 0
+	for pm: Mesh in parts:
+		part_total += triangle_count(pm)
+		part_max = maxi(part_max, triangle_count(pm))
+	print("  clusters: %d of at most %d triangles, %d together (%d whole)" % [parts.size(), part_max, part_total, triangle_count(whole_gd.mesh) if whole_gd.mesh != null else 0])
+	check(parts.size() >= 3 and part_max <= 80 and whole_gd.mesh != null and part_total == triangle_count(whole_gd.mesh) and int(split_gd.stats.get("clusters", 0)) == parts.size(),
+		"a clustered bake splits into groups of at most cluster_triangles holding every triangle")
 	GADSMeshBaker.force_gdscript = false
 
 

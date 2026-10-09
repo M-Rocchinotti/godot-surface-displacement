@@ -9,10 +9,11 @@ extends RefCounted
 ## evaluated once per welded position (UV seams and hard edges do not open), along the welded
 ## positions' averaged normals (or the axis, for world-planar materials). Skinned meshes keep
 ## their bone weights and blend shapes their offsets, both carried into new vertices as the native
-## tessellator does. Not supported here: vector displacement, clusters, view-dependent
-## tessellation and curvature-aware subdivision (bakes that need them report it).
+## tessellator does, and bakes split into clusters as the native ones. Not supported here: vector
+## displacement and view-dependent tessellation (bakes that need them report it); smooth_shape
+## (curvature-aware subdivision) is ignored: triangles stay flat.
 
-const VERSION := "gd-2"
+const VERSION := "gd-3"
 ## Longer edges (in main-map texels) are split whatever the samples say: a bump narrower than
 ## the samples' spacing on a long edge is found as the edges shorten.
 const MAX_EDGE_TEXELS := 32.0
@@ -113,8 +114,148 @@ func get_surfaces() -> Array:
 	return _out
 
 
-func get_cluster_surfaces(_target: int) -> Array:
-	return [_out]
+## The bake split into spatial clusters of at most [param target] triangles, as the native
+## tessellator splits it: halves at the median of the triangles' centres along the longest
+## extent, recursively (ties by surface and position, so the same bake splits the same). Each
+## cluster: every surface's arrays (a surface without triangles there has none), blend shapes
+## after them.
+func get_cluster_surfaces(target: int) -> Array:
+	var tris := []
+	for s in _out.size():
+		var a: Array = _out[s]
+		var pos: PackedVector3Array = a[Mesh.ARRAY_VERTEX]
+		var idx: PackedInt32Array = a[Mesh.ARRAY_INDEX]
+		for i in range(0, idx.size() - 2, 3):
+			tris.append([(pos[idx[i]] + pos[idx[i + 1]] + pos[idx[i + 2]]) / 3.0, s, i])
+	if tris.is_empty():
+		return [_out]
+	var leaves := []
+	_split_clusters(tris, maxi(target, 1), leaves)
+	var result := []
+	for leaf: Array in leaves:
+		result.append(_cluster_arrays(leaf))
+	return result
+
+
+static func _split_clusters(tris: Array, target: int, leaves: Array) -> void:
+	if tris.size() <= target:
+		leaves.append(tris)
+		return
+	var lo := Vector3(INF, INF, INF)
+	var hi := -lo
+	for t: Array in tris:
+		lo = lo.min(t[0])
+		hi = hi.max(t[0])
+	var ext := hi - lo
+	var axis := 0 if ext.x >= ext.y and ext.x >= ext.z else (1 if ext.y >= ext.z else 2)
+	# The engine's Array sort, on [key, surface, first, triangle]: a total order (surface and
+	# first are unique together).
+	var keyed := []
+	keyed.resize(tris.size())
+	for i in tris.size():
+		var t: Array = tris[i]
+		keyed[i] = [(t[0] as Vector3)[axis], t[1], t[2], i]
+	keyed.sort()
+	var mid := tris.size() / 2
+	var below := []
+	var above := []
+	for i in keyed.size():
+		(below if i < mid else above).append(tris[keyed[i][3]])
+	_split_clusters(below, target, leaves)
+	_split_clusters(above, target, leaves)
+
+
+func _cluster_arrays(leaf: Array) -> Array:
+	# Its triangles in surface and source order.
+	var keyed := []
+	for t: Array in leaf:
+		keyed.append([t[1], t[2]])
+	keyed.sort()
+	var firsts := [] # per surface, an Array (a reference: a packed array would be copied)
+	for s in _out.size():
+		firsts.append([])
+	for k: Array in keyed:
+		(firsts[k[0]] as Array).append(k[1])
+	var out := []
+	for s in _out.size():
+		var src: Array = _out[s]
+		var src_idx: PackedInt32Array = src[Mesh.ARRAY_INDEX]
+		var n := (src[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()
+		var remap := {}
+		var order := PackedInt32Array()
+		var idx := PackedInt32Array()
+		for first: int in firsts[s]:
+			for k in 3:
+				var v := src_idx[first + k]
+				if not remap.has(v):
+					remap[v] = order.size()
+					order.append(v)
+				idx.append(remap[v])
+		var arrays := []
+		arrays.resize(Mesh.ARRAY_MAX)
+		for ch in Mesh.ARRAY_MAX:
+			if ch != Mesh.ARRAY_INDEX:
+				arrays[ch] = _pick(src[ch], order, n)
+		arrays[Mesh.ARRAY_INDEX] = idx
+		if src.size() > Mesh.ARRAY_MAX:
+			var shapes := []
+			for shape: Array in src[Mesh.ARRAY_MAX]:
+				var a := []
+				a.resize(Mesh.ARRAY_MAX)
+				for ch in [Mesh.ARRAY_VERTEX, Mesh.ARRAY_NORMAL, Mesh.ARRAY_TANGENT]:
+					a[ch] = _pick(shape[ch], order, n)
+				shapes.append(a)
+			arrays.append(shapes)
+		out.append(arrays)
+	return out
+
+
+## The values of the vertices in [param order] (of [param n]) from a per-vertex array (any
+## stride: tangents 4 floats, bones and weights 4 or 8).
+static func _pick(data: Variant, order: PackedInt32Array, n: int) -> Variant:
+	if data == null or n == 0:
+		return data
+	match typeof(data):
+		TYPE_PACKED_VECTOR3_ARRAY:
+			var src: PackedVector3Array = data
+			var out := PackedVector3Array()
+			out.resize(order.size())
+			for i in order.size():
+				out[i] = src[order[i]]
+			return out
+		TYPE_PACKED_VECTOR2_ARRAY:
+			var src: PackedVector2Array = data
+			var out := PackedVector2Array()
+			out.resize(order.size())
+			for i in order.size():
+				out[i] = src[order[i]]
+			return out
+		TYPE_PACKED_COLOR_ARRAY:
+			var src: PackedColorArray = data
+			var out := PackedColorArray()
+			out.resize(order.size())
+			for i in order.size():
+				out[i] = src[order[i]]
+			return out
+		TYPE_PACKED_FLOAT32_ARRAY:
+			var src: PackedFloat32Array = data
+			var stride := src.size() / n
+			var out := PackedFloat32Array()
+			out.resize(order.size() * stride)
+			for i in order.size():
+				for k in stride:
+					out[i * stride + k] = src[order[i] * stride + k]
+			return out
+		TYPE_PACKED_INT32_ARRAY:
+			var src: PackedInt32Array = data
+			var stride := src.size() / n
+			var out := PackedInt32Array()
+			out.resize(order.size() * stride)
+			for i in order.size():
+				for k in stride:
+					out[i * stride + k] = src[order[i] * stride + k]
+			return out
+	return data
 
 
 static func _map_of(image: Image) -> Dictionary:

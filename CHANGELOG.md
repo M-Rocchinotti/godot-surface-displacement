@@ -181,9 +181,9 @@ All notable changes to this project are documented here. The format follows
   straight line by more than the tolerance (and triangles whose centre leaves their plane),
   relief evaluated per welded position (UV seams and hard edges stay closed), the materials'
   mappings, detail, layers, masks and sculpt maps, skinned meshes (bone weights mixed into new
-  vertices as the native tessellator mixes them) and blend shapes (offsets carried along); vector
-  displacement, clusters and runtime tessellation still need the native library. Its bakes have
-  their own cache key.
+  vertices as the native tessellator mixes them), blend shapes (offsets carried along) and
+  clusters (the native median split); vector displacement and runtime tessellation still need
+  the native library. Its bakes have their own cache key.
 - **`GADSReliefCollider3D`**: collision on the relief around a character (spec §67, height-field
   collision near the player): a small HeightMapShape3D following a target, sampled from the
   terrain's or field's `get_surface_height()`, only the new rows and columns as it moves; feet
