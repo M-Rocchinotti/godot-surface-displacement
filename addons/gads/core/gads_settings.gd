@@ -49,6 +49,13 @@ enum SelfShadow { OFF, HARD, SOFT }
 	set(value):
 		pom_max_lod = value
 		emit_changed()
+## Fade the relief by its size on screen as well: it starts fading where a material's depth spans
+## x pixels and is gone at y, so shallow relief fades nearer than deep relief (and stops costing
+## its march) while deep relief keeps its shape out to the distance fade. (0, 0): off.
+@export var pom_fade_pixels := Vector2(0, 0):
+	set(value):
+		pom_fade_pixels = value
+		emit_changed()
 @export_group("Self-shadowing")
 ## Height-field shadows from directional lights (and omni and spot lights with
 ## [member self_shadow_local_lights]), computed in a light() that reproduces Godot's own direct
@@ -181,6 +188,7 @@ func apply_globals() -> void:
 	var local_lights := 1.0 if self_shadow_local_lights and self_shadow != SelfShadow.OFF else 0.0
 	GADSGlobals.set_value(GADSGlobals.POM_STEPS, Vector4(pom_min_steps, maxi(pom_max_steps, pom_min_steps), pom_refine_steps, local_lights))
 	GADSGlobals.set_value(GADSGlobals.POM_RANGE, Vector4(pom_fade_start, maxf(pom_fade_end, pom_fade_start + 0.01), pom_lod_bias, pom_max_lod))
+	GADSGlobals.set_value(GADSGlobals.POM_FADE_PX, Vector4(maxf(pom_fade_pixels.x, 0.0), clampf(pom_fade_pixels.y, 0.0, maxf(pom_fade_pixels.x, 0.0)), 0, 0))
 	var softness := self_shadow_softness if self_shadow == SelfShadow.SOFT else 0.0
 	var strength := 0.0 if self_shadow == SelfShadow.OFF else 1.0
 	GADSGlobals.set_value(GADSGlobals.SHADOW, Vector4(self_shadow_steps, self_shadow_distance, softness, strength))

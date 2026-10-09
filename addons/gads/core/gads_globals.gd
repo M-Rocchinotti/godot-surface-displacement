@@ -12,6 +12,8 @@ extends RefCounted
 ## [code]gads_pom_range[/code]  x: distance where the relief starts fading (m), y: distance where it
 ##     is gone (m), z: LOD bias of the march's height samples, w: the height-map mip level at and
 ##     beyond which the march is skipped (the relief is below a pixel there).
+## [code]gads_pom_fade_px[/code]  x: relief size on screen (px) below which the relief starts fading,
+##     y: size at which it is gone (0, 0: off, the distance fade alone), z, w: unused.
 ## [code]gads_shadow[/code]  x: self-shadow steps, y: maximum distance (m), z: softness (0 = hard,
 ##     k > 0 = contact-hardening), w: strength (0 = off).
 ## [code]gads_debug[/code]  x: debug view (0 = off), y: scale in metres (hit offset, world height),
@@ -27,6 +29,7 @@ extends RefCounted
 
 const POM_STEPS := &"gads_pom_steps"
 const POM_RANGE := &"gads_pom_range"
+const POM_FADE_PX := &"gads_pom_fade_px"
 const SHADOW := &"gads_shadow"
 const DEBUG := &"gads_debug"
 const DFG := &"gads_dfg"
@@ -43,6 +46,7 @@ static func definitions() -> Dictionary:
 	return {
 		POM_STEPS: [RenderingServer.GLOBAL_VAR_TYPE_VEC4, "vec4", Vector4(8, 20, 3, 0)],
 		POM_RANGE: [RenderingServer.GLOBAL_VAR_TYPE_VEC4, "vec4", Vector4(18, 30, 0, 6)],
+		POM_FADE_PX: [RenderingServer.GLOBAL_VAR_TYPE_VEC4, "vec4", Vector4(0, 0, 0, 0)],
 		SHADOW: [RenderingServer.GLOBAL_VAR_TYPE_VEC4, "vec4", Vector4(6, 15, 0, 1)],
 		DEBUG: [RenderingServer.GLOBAL_VAR_TYPE_VEC4, "vec4", Vector4(0, 0.1, 0, 0)],
 		DFG: [RenderingServer.GLOBAL_VAR_TYPE_SAMPLER2D, "sampler2D", DFG_PATH],

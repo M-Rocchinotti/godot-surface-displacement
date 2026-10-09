@@ -41,6 +41,7 @@ func _run() -> void:
 	await _test("depth_write_opt_in", test_depth_write)
 	await _test("mip_shimmer_at_distance", test_mip_shimmer)
 	await _test("relief_fades_with_distance", test_distance_fade)
+	await _test("relief_fades_by_size_on_screen", test_screen_fade)
 	await _test("animated_relief_flows_and_breathes", test_animated_relief)
 	await _test("before_after_split_view", test_before_after)
 	await _test("per_node_relief_scale_and_tint", test_variation)
@@ -84,6 +85,7 @@ func _reset_globals() -> void:
 	GADSGlobals.set_value(GADSGlobals.WEATHER, Vector4.ZERO)
 	set_quality(8, 24, 3)
 	GADSGlobals.set_value(GADSGlobals.POM_RANGE, Vector4(1000, 2000, -10, 99))
+	GADSGlobals.set_value(GADSGlobals.POM_FADE_PX, Vector4.ZERO)
 	GADSGlobals.set_value(GADSGlobals.SHADOW, Vector4(8, 20, 0, 0))
 	GADSGlobals.set_value(GADSGlobals.DEBUG, Vector4(0, OFFSET_SCALE, 0, 0))
 
@@ -1110,6 +1112,54 @@ func test_distance_fade() -> void:
 	print("  largest parallax offset: before the fade %.1f mm, beyond it %.3f mm (%d px)" % [near_max * 1000.0, far_max * 1000.0, far_n])
 	check(near_max > 0.02, "the full relief is there before the fade starts")
 	check(far_n > 1000 and far_max < 0.0002, "beyond the fade end the offset is zero (plain normal mapping)")
+
+
+## Fade by size on screen (pom_fade_pixels 6 -> 3 px; at 60 degrees and 540 px a metre spans 468 px
+## at 1 m): a 5 cm relief is full before 3.9 m and gone beyond 7.8 m, while a 20 cm one (full to
+## 15.6 m) is still there at 8.5-14 m: shallow relief fades first.
+func test_screen_fade() -> void:
+	var field := Harness.make_stone_field(256, 40, 2)
+	var tex := ImageTexture.create_from_image(field["image"])
+	var results := {}
+	for depth: float in [0.05, 0.2]:
+		h.new_debug_scene()
+		var mat := GADSMaterials.create(GADSMaterials.Mapping.WORLD, {"height": tex}, {"height_m": depth, "height_center": 0.0, "texture_size_m": Vector2(1, 1)}, GADSMaterials.Quality.POM)
+		var plane := PlaneMesh.new()
+		plane.size = Vector2(120, 120)
+		var mi := MeshInstance3D.new()
+		mi.mesh = plane
+		mi.material_override = mat
+		h.scene.add_child(mi)
+		var cam := h.add_camera(Vector3(0, 1.7, 0), Vector3(0, 0, -8))
+		GADSGlobals.set_value(GADSGlobals.POM_FADE_PX, Vector4(6, 3, 0, 0))
+		debug_view(Harness.DEBUG_HIT_OFFSET)
+		await h.frames(3)
+		var img := await h.capture()
+		var near_max := 0.0
+		var mid_max := 0.0
+		var far_max := 0.0
+		for py in range(0, SIZE.y, 2):
+			for px in range(0, SIZE.x, 4):
+				var o := cam.project_ray_origin(Vector2(px, py) + Vector2(0.5, 0.5))
+				var d := cam.project_ray_normal(Vector2(px, py) + Vector2(0.5, 0.5))
+				if d.y >= 0.0:
+					continue
+				var dist := (o + d * (-o.y / d.y)).distance_to(o)
+				var off := Harness.decode_offset(img, Vector2i(px, py), OFFSET_SCALE).length()
+				if dist < 3.5:
+					near_max = maxf(near_max, off)
+				elif dist > 8.5 and dist < 14.0:
+					mid_max = maxf(mid_max, off)
+				elif dist > 34.0 and dist < 50.0:
+					far_max = maxf(far_max, off)
+		results[depth] = [near_max, mid_max, far_max]
+		debug_view(Harness.DEBUG_OFF)
+		GADSGlobals.set_value(GADSGlobals.POM_FADE_PX, Vector4.ZERO)
+	print("  largest parallax offset (mm) near / 8.5-14 m / beyond 34 m: 5 cm %s, 20 cm %s" % [
+		(results[0.05] as Array).map(func(v: float) -> String: return "%.2f" % (v * 1000.0)),
+		(results[0.2] as Array).map(func(v: float) -> String: return "%.2f" % (v * 1000.0))])
+	check(results[0.05][0] > 0.02 and results[0.05][1] < 0.0002, "a 5 cm relief is there near and gone once it spans under 3 px")
+	check(results[0.2][1] > 0.02 and results[0.2][2] < 0.0002, "a 20 cm relief is still there at that distance, gone four times farther")
 
 
 ## Debug view Before / After: left of the split the surface draws as plain normal mapping (as

@@ -15,6 +15,7 @@
 // registers them). x/y/z/w meanings are listed in core/gads_globals.gd.
 global uniform vec4 gads_pom_steps;   // min steps, max steps, bisection steps, 1 = omni / spot lights self-shadow too
 global uniform vec4 gads_pom_range;   // fade start (m), fade end (m), LOD bias, highest LOD that is marched
+global uniform vec4 gads_pom_fade_px; // relief size on screen (px) where the fade starts, where it ends (0, 0: off), unused, unused
 global uniform vec4 gads_shadow;      // steps, max distance (m), softness (0 = hard), strength
 global uniform vec4 gads_debug;       // view (0 = off), scale (m), reference height (m) of the field's world-height view, unused
 global uniform sampler2D gads_dfg;    // Godot's multiple-scattering term, see tools/make_dfg_lut.py
@@ -62,6 +63,18 @@ vec3 gads_split_line(vec2 frag, vec2 viewport) {
 
 float gads_fade(float view_distance) {
 	return 1.0 - smoothstep(gads_pom_range.x, max(gads_pom_range.y, gads_pom_range.x + 1e-3), view_distance);
+}
+
+// The fade by size on screen (GADSSettings.pom_fade_pixels): 1 while a relief of depth_m spans at
+// least gads_pom_fade_px.x pixels at view_distance, 0 at .y pixels and below; 1 when off. proj:
+// the projection matrix (orthographic: the size does not change with distance), viewport_h in px.
+float gads_screen_fade(float depth_m, float view_distance, mat4 proj, float viewport_h) {
+	if (gads_pom_fade_px.x <= 0.0) {
+		return 1.0;
+	}
+	float px_per_m = abs(proj[1][1]) * 0.5 * viewport_h;
+	float px = depth_m * px_per_m / (proj[3][3] > 0.5 ? 1.0 : max(view_distance, 1e-3));
+	return smoothstep(gads_pom_fade_px.y, max(gads_pom_fade_px.x, gads_pom_fade_px.y + 1e-3), px);
 }
 
 // One texel of the deformation map, wrapped (the window is addressed toroidally: a world cell

@@ -599,6 +599,33 @@ func _run() -> void:
 	var last := h16_img.get_mipmap_count() if h16_img != null else 0
 	_check(h16_img != null and absf(h16_img.get_data().decode_half(h16_img.get_mipmap_offset(last)) - 1.0) < 0.001,
 		"with the Max filter its 1 x 1 mip level is the highest value")
+
+	# 20. Live rebake: a selected baked mesh whose material gets a new depth bakes again by itself
+	# once the change has settled (the real plugin's timer), with no undo entry; off, it stays stale.
+	var es := EditorInterface.get_editor_settings()
+	EditorInterface.get_selection().clear()
+	EditorInterface.get_selection().add_node(baked_box)
+	await _frames_wait(2)
+	var live_mat := GADSMeshBaker.resolve_materials(baked_box, baked_box.source_mesh)[0] as ShaderMaterial
+	var depth_before: float = live_mat.get_shader_parameter("height_m")
+	var version_before: int = ur.get_history_undo_redo(ur.get_object_history_id(baked_box)).get_version()
+	es.set_setting(_sd_plugin.LIVE_SETTING, false)
+	live_mat.set_shader_parameter("height_m", depth_before * 1.5)
+	var waited_live := Time.get_ticks_msec()
+	while Time.get_ticks_msec() - waited_live < 2500:
+		await get_tree().process_frame
+	var stayed_stale := baked_box.is_bake_stale() and not baked_box.is_baking()
+	es.set_setting(_sd_plugin.LIVE_SETTING, true)
+	waited_live = Time.get_ticks_msec()
+	while Time.get_ticks_msec() - waited_live < 60000:
+		await get_tree().process_frame
+		if not baked_box.is_bake_stale() and not baked_box.is_baking():
+			break
+	_check(stayed_stale and baked_box.baked and not baked_box.is_bake_stale()
+		and ur.get_history_undo_redo(ur.get_object_history_id(baked_box)).get_version() == version_before,
+		"Live: a new relief depth on a selected baked mesh bakes again by itself (off: it stays stale), no undo entry")
+	live_mat.set_shader_parameter("height_m", depth_before)
+	EditorInterface.get_selection().clear()
 	_finish()
 
 

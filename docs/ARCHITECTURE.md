@@ -75,7 +75,12 @@ global shader uniforms, so they change without recompiling anything.
 3. **Bisection** of the bracketing interval (`gads_pom_steps.z` steps), then a final **secant** (a
    linear interpolation of ray-minus-relief in the last bracket, no extra sample).
 4. **Distance fade**: `amp *= 1 - smoothstep(fade_start, fade_end, distance)`, and the step count
-   with it. Beyond the fade end the shader does no march at all: plain normal mapping.
+   with it. Beyond the fade end the shader does no march at all: plain normal mapping. With
+   `gads_pom_fade_px` (start, end) set, the fade also multiplies by
+   `smoothstep(end, start, depth_m * px_per_m / distance)`, the relief's size on screen, where
+   `px_per_m = |P[1][1]| * viewport_height / 2` (no division by the distance with an orthographic
+   projection) and `depth_m` is `height_m` (layered: the deepest layer present) times the node's
+   relief scale; the same factor scales the step count.
 
 Final texture samples use `textureGrad` with the rasterized uv's derivatives (the hit uv jumps at
 stone edges). The flat UV and world variants use `texture()`; the flat UV variant then matches ORMMaterial3D

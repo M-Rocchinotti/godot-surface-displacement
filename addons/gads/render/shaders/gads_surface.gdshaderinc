@@ -124,9 +124,14 @@ void fragment() {
 #ifdef GADS_CUSTOM_LAYER_MASKS
 	arg.yz = clamp(gads_custom_layer_masks(arg.yz, gads_world_pos, normalize(gads_world_normal)), 0.0, 1.0);
 #endif
+	// Fade by size on screen: by the deepest layer present here.
+	float screen_fade = gads_screen_fade(gads_layered_depth(arg) * gads_relief_scale, view_distance, PROJECTION_MATRIX, VIEWPORT_SIZE.y);
+	fade *= screen_fade;
+	arg.x *= screen_fade;
 	// Masks for the texture blend, also on a baked mesh (whose relief scale is 0).
 	GADS_RELIEF_ARG sample_arg = vec3(1.0, arg.yz);
 #else
+	fade *= gads_screen_fade(height_m * gads_relief_scale, view_distance, PROJECTION_MATRIX, VIEWPORT_SIZE.y);
 	GADS_RELIEF_ARG arg = gads_baked > 0.5 ? 0.0 : height_m * fade * gads_pulse_now() * gads_relief_scale * gads_relief_mask(COLOR);
 	GADS_RELIEF_ARG sample_arg = arg;
 #endif

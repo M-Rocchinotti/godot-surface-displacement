@@ -33,6 +33,12 @@ const HeightImporter := preload("res://addons/gads/editor/gads_height_importer.g
 const ExportPlugin := preload("res://addons/gads/editor/gads_export_plugin.gd")
 ## Editor setting: offer to create GADS materials when a texture set is imported.
 const OFFER_SETTING := "gads/texture_sets/offer_materials_on_import"
+## Editor setting: bake a selected GADSMeshInstance3D again by itself once its bake is stale (a
+## material's depth, a setting or, for world-mapped materials, its place changed) and the change
+## has settled, so the viewport shows the edit.
+const LIVE_SETTING := "gads/bake/live_rebake"
+## Seconds between looks at the selection for live rebakes.
+const LIVE_INTERVAL := 0.5
 
 var _mesh_inspector: EditorInspectorPlugin
 var _terrain_inspector: EditorInspectorPlugin
@@ -59,6 +65,12 @@ var _offer_armed := false # after the editor's first scan (a fresh project's tex
 var _offered := {} # "dir/name" of the texture sets offered this session
 var _offer_pending := {} # "dir/name" -> texture set, offered together once the imports settle
 var _offer_dialog: ConfirmationDialog
+var _live_timer := 0.0
+## Instance id -> the stale key seen at the last look (a key must hold for two looks).
+var _live_keys := {}
+## Instance id -> when (msec) to look at it next: a mesh whose key is slow to compute (a large
+## mesh embedded in the scene is hashed) is looked at less often, at most 5 % of the time.
+var _live_next := {}
 
 
 func _enable_plugin() -> void:
@@ -106,6 +118,10 @@ func _enter_tree() -> void:
 		es.set_setting(OFFER_SETTING, true)
 	es.set_initial_value(OFFER_SETTING, true, false)
 	es.add_property_info({"name": OFFER_SETTING, "type": TYPE_BOOL})
+	if not es.has_setting(LIVE_SETTING):
+		es.set_setting(LIVE_SETTING, true)
+	es.set_initial_value(LIVE_SETTING, true, false)
+	es.add_property_info({"name": LIVE_SETTING, "type": TYPE_BOOL})
 	var fs := EditorInterface.get_resource_filesystem()
 	fs.resources_reimported.connect(_on_resources_reimported)
 	fs.filesystem_changed.connect(_arm_offers)
@@ -443,6 +459,52 @@ func _on_resources_reimported(paths: PackedStringArray) -> void:
 
 
 ## The dialog offering materials for the texture sets just imported (null when none is open).
+func _process(delta: float) -> void:
+	_live_timer += delta
+	if _live_timer >= LIVE_INTERVAL:
+		_live_timer = 0.0
+		live_rebake_step()
+
+
+## One look at the selection for live rebakes ([constant LIVE_SETTING]): a selected, baked
+## GADSMeshInstance3D whose bake is stale with the same inputs as at the last look (the change has
+## settled: a slider is no longer moving) bakes again in the background, from the cache when it
+## can. No undo entry: undoing the edit makes the bake stale again and it follows. Returns how
+## many bakes it started.
+func live_rebake_step() -> int:
+	if not bool(EditorInterface.get_editor_settings().get_setting(LIVE_SETTING)):
+		_live_keys.clear()
+		return 0
+	var started := 0
+	var seen := {}
+	for n in EditorInterface.get_selection().get_selected_nodes():
+		var mi := n as GADSMeshInstance3D
+		if mi == null or not mi.baked or mi.is_baking() or not mi.is_inside_tree() or mi.get_relief_depth() <= 0.0:
+			continue
+		var id := mi.get_instance_id()
+		seen[id] = true
+		if Time.get_ticks_msec() < int(_live_next.get(id, 0)):
+			continue
+		var t0 := Time.get_ticks_usec()
+		var key := mi.compute_bake_key()
+		_live_next[id] = Time.get_ticks_msec() + int((Time.get_ticks_usec() - t0) * 20 / 1000)
+		if key == mi.bake_key:
+			_live_keys.erase(id)
+		elif _live_keys.get(id, "") != key:
+			_live_keys[id] = key
+		else:
+			_live_keys.erase(id)
+			if mi.bake_async() == OK:
+				started += 1
+	for id: int in _live_keys.keys():
+		if not seen.has(id):
+			_live_keys.erase(id)
+	for id: int in _live_next.keys():
+		if not seen.has(id):
+			_live_next.erase(id)
+	return started
+
+
 func get_offer_dialog() -> ConfirmationDialog:
 	return _offer_dialog if is_instance_valid(_offer_dialog) else null
 

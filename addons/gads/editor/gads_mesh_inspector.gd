@@ -60,6 +60,13 @@ class BakePanel extends VBoxContainer:
 		_paint = _button(row, "Paint", "Paint vertex colours in the 3D viewport (left-drag): the layered materials' layer masks (layer 1 red, layer 2 green); each stroke bakes again.", _on_paint)
 		_paint.toggle_mode = true
 		_paint.button_pressed = PaintInspector.PaintPanel.is_painting(node)
+		var live := CheckBox.new()
+		live.text = "Live"
+		live.tooltip_text = "Bake again by itself when the bake goes stale (a material's depth, a setting, or for world-mapped materials the node's place changed), once the change settles. An editor setting (gads/bake/live_rebake) for every GADSMeshInstance3D."
+		var es := EditorInterface.get_editor_settings()
+		live.button_pressed = bool(es.get_setting("gads/bake/live_rebake")) if es.has_setting("gads/bake/live_rebake") else true
+		live.toggled.connect(func(on: bool) -> void: EditorInterface.get_editor_settings().set_setting("gads/bake/live_rebake", on))
+		row.add_child(live)
 		var profile := OptionButton.new()
 		profile.add_item("Apply Profile...")
 		for label in PROFILE_LABELS:

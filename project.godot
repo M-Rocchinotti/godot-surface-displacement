@@ -64,3 +64,7 @@ gads_weather={
 "type": "vec4",
 "value": Vector4(0, 0, 0, 0)
 }
+gads_pom_fade_px={
+"type": "vec4",
+"value": Vector4(0, 0, 0, 0)
+}

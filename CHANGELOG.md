@@ -183,6 +183,16 @@ All notable changes to this project are documented here. The format follows
   mappings, detail, layers, masks and sculpt maps; vector displacement, blend shapes, skinning,
   clusters and runtime tessellation still need the native library. Its bakes have their own
   cache key.
+- **Relief fade by size on screen** (spec §11): `GADSSettings.pom_fade_pixels` (start, end px;
+  off by default) fades each material's relief where its depth spans fewer pixels than that, on
+  top of the distance fade, so shallow relief stops costing its march near the camera while deep
+  relief keeps its shape farther (new global `gads_pom_fade_px`). Layered materials fade by the
+  deepest layer present.
+- **Live rebake in the editor** (spec §102): a selected GADSMeshInstance3D whose bake goes stale
+  (material depth, layers, bake settings, sculpt map, a world-mapped node's place) bakes again in
+  the background once the change settles, so the viewport follows the edit. Editor setting
+  `gads/bake/live_rebake` (on), a Live checkbox in the bake inspector; no undo entries; nodes
+  whose bake key is slow to compute are looked at less often.
 - **GADS profiles** (`GADSProfile`): the bake settings for a kind of asset in one resource,
   built in as prop, rock (High, rounded, collision), wall (modular kit: locked borders), terrain
   (locked borders, along +Y, collision) and character (parallax only), or saved as a .tres with a
