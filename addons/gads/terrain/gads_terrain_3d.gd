@@ -782,12 +782,25 @@ func flatten_path(points: PackedVector3Array, width: float, falloff := 2.0, laye
 func erode(params := {}) -> Rect2i:
 	if _nx < 2 or height_scale <= 0.0:
 		return Rect2i()
+	return apply_heights(GADSProcedural.erode_image(get_height_image(), erosion_params(params)))
+
+
+## The parameters [method erode] gives GADSProcedural.erode_image() for [param params]: the
+## defaults merged with them, at the terrain's scale. With [method get_height_image] and
+## [method apply_heights], erosion can run on a worker thread (the editor does without the native
+## library).
+func erosion_params(params := {}) -> Dictionary:
 	var p := {"droplets": _nx * _nz / 2, "thermal_iterations": 20, "talus_deg": 38.0}
 	p.merge(params, true)
 	p["cell_m"] = _spacing
 	p["height_m"] = height_scale
-	var img := GADSProcedural.erode_image(get_height_image(), p)
-	if img == null:
+	return p
+
+
+## Replaces all heights by [param img] (one texel per vertex, as [method get_height_image]
+## gives): persistent like [method sculpt]. Returns the grid rectangle it changed (empty: none).
+func apply_heights(img: Image) -> Rect2i:
+	if img == null or _nx < 2:
 		return Rect2i()
 	set_height_region(Vector2i.ZERO, img)
 	return Rect2i(0, 0, _nx, _nz)

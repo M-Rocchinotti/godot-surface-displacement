@@ -33,6 +33,7 @@ class ToolPanel extends VBoxContainer:
 	var _row: HBoxContainer
 	var _kind: OptionButton
 	var _seed: SpinBox
+	var _erode_button: Button
 	var _features: SpinBox
 
 	func _ready() -> void:
@@ -74,6 +75,7 @@ class ToolPanel extends VBoxContainer:
 		generate.pressed.connect(_on_generate)
 		gen.add_child(generate)
 		var erode := Button.new()
+		_erode_button = erode
 		erode.text = "Erode"
 		erode.tooltip_text = "Erode the heights: water carves gullies and fills valleys, steep slopes slide into scree (undoable)."
 		erode.pressed.connect(_on_erode)
@@ -127,7 +129,26 @@ class ToolPanel extends VBoxContainer:
 		_edit("Generate GADS Terrain", func() -> void: terrain.generate_heights(kind, params))
 
 	func _on_erode() -> void:
-		_edit("Erode GADS Terrain", func() -> void: terrain.erode({"seed": int(_seed.value)}))
+		var params := {"seed": int(_seed.value)}
+		if GADSProcedural.is_available() and not GADSProcedural.force_gdscript:
+			_edit("Erode GADS Terrain", func() -> void: terrain.erode(params))
+			return
+		# The GDScript erosion takes seconds: on a worker thread, applied (undoably) when done.
+		var button := _erode_button
+		var height := terrain.get_height_image()
+		var p := terrain.erosion_params(params)
+		var result := []
+		var task := WorkerThreadPool.add_task(func() -> void: result.append(GADSProcedural.erode_image(height, p)), false, "GADS terrain erosion")
+		button.disabled = true
+		button.text = "Eroding..."
+		while not WorkerThreadPool.is_task_completed(task):
+			await get_tree().process_frame
+		WorkerThreadPool.wait_for_task_completion(task)
+		button.disabled = false
+		button.text = "Erode"
+		if is_instance_valid(terrain) and not result.is_empty() and result[0] != null:
+			var img: Image = result[0]
+			_edit("Erode GADS Terrain", func() -> void: terrain.apply_heights(img))
 
 	func _on_export() -> void:
 		var dialog := EditorFileDialog.new()

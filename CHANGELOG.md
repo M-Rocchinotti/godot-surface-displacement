@@ -239,7 +239,8 @@ All notable changes to this project are documented here. The format follows
   seeded, 0..1) and the derived maps (normals, occlusion, curvature, albedo, ORM), so the
   Generate Procedural Material dialog and `GADSTerrain3D.generate_heights()` work everywhere;
   erosion too (`GADSProceduralGD.erode()`, the native algorithm and random sequence in
-  GDScript: the same result, about 40 times slower).
+  GDScript: the same result, about 40 times slower); the terrain inspector's Erode runs it on a
+  worker thread (the button reads Eroding...) and applies it as one undoable action.
 - **Global illumination**: `GADSGI.bake_voxel_gi()` and **GADS: Bake Selected VoxelGI (GADS
   Colours)** bake a VoxelGI with GADS surfaces in their colours (the engine's bake takes them as
   white); `GADSGI.proxy_material()`. README section on how SDFGI, VoxelGI, LightmapGI, reflection

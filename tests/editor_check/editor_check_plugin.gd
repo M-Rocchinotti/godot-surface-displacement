@@ -424,6 +424,26 @@ func _run() -> void:
 	await _frames_wait(2)
 	_check(absf(generated_h - sculpted_h) > 1e-3 and absf(undone_h - sculpted_h) < 1e-4 and absf(terrain.get_height(aim) - generated_h) < 1e-4,
 		"Generate replaces the heights, undo and redo")
+	# Erode without the native library (the GDScript erosion, forced): on a worker thread while the
+	# button reads Eroding..., then one undoable action.
+	var ter_panel = load("res://addons/gads/editor/gads_terrain_inspector.gd").ToolPanel.new()
+	ter_panel.terrain = terrain
+	ter_panel.edit_heights = _sd_plugin.edit_terrain_heights
+	EditorInterface.get_base_control().add_child(ter_panel)
+	await _frames_wait(1)
+	GADSProcedural.force_gdscript = true
+	var before_erode := terrain.get_height_image().get_data()
+	await ter_panel._on_erode()
+	GADSProcedural.force_gdscript = false
+	var eroded := terrain.get_height_image().get_data()
+	ur.undo()
+	await _frames_wait(2)
+	var erode_undone := terrain.get_height_image().get_data() == before_erode
+	ur.redo()
+	await _frames_wait(2)
+	_check(eroded != before_erode and erode_undone and terrain.get_height_image().get_data() == eroded,
+		"Erode without the native library runs on a worker thread and is one undoable action")
+	ter_panel.queue_free()
 	# A road (GADSTerrainPath3D's Apply to Terrain, the editor's undo).
 	var road := GADSTerrainPath3D.new()
 	road.name = "Road"
