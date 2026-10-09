@@ -338,6 +338,7 @@ func test_validator() -> void:
 	field.layers = [ground_mat]
 	field.add_child(GADSPebbleScatter3D.new())
 	good.add_child(field)
+	good.add_child(GADSReliefCollider3D.new())
 	root.add_child(good)
 	var clean := GADSValidator.validate(good).filter(func(i: Dictionary) -> bool: return i["level"] != "info")
 	for i: Dictionary in clean:
@@ -416,6 +417,12 @@ func test_validator() -> void:
 	animated.stream_bake = true
 	animated.set_bake_state({"baked": true, "mesh": PlaneMesh.new(), "bake_stats": {"path": "res://gads_baked/animated_0123456789abcdef.mesh"}})
 	bad.add_child(animated)
+	# A relief collider whose source draws no relief, without a collision layer.
+	var feet := GADSReliefCollider3D.new()
+	feet.name = "Feet"
+	feet.collision_layer = 0
+	feet.source = NodePath("../VectorOnly")
+	bad.add_child(feet)
 	root.add_child(bad)
 	var messages := "\n".join(GADSValidator.validate(bad).map(func(i: Dictionary) -> String: return i["message"]))
 	var expected := {
@@ -435,6 +442,8 @@ func test_validator() -> void:
 		"an animated material on a baked mesh": "GADSMeshInstance3D Animated: its material is animated",
 		"stream_bake without a geometry range": "GADSMeshInstance3D Animated: stream_bake needs a geometry_range",
 		"a displacement mask without vertex colours": "Unpainted, surface 0: the material reads vertex colour R (relief_vertex_mask) but the mesh has no vertex colours",
+		"a relief collider whose source draws no relief": "GADSReliefCollider3D Feet: its source is not a GADSTerrain3D or GADSDisplacementField3D",
+		"a relief collider without a collision layer": "GADSReliefCollider3D Feet: collision_layer is 0",
 	}
 	var missing: Array[String] = []
 	for what: String in expected:

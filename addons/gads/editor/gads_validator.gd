@@ -53,7 +53,21 @@ static func validate(root: Node) -> Array:
 	for node in root.find_children("*", "GADSPebbleScatter3D", true, false):
 		if not node.get_parent() is GADSDisplacementField3D:
 			issues.append(_issue("error", "GADSPebbleScatter3D %s draws nothing: it must be a child of a GADSDisplacementField3D." % node.name))
+	for node in root.find_children("*", "GADSReliefCollider3D", true, false):
+		issues.append_array(_check_relief_collider(node as GADSReliefCollider3D, root, terrains))
 	return issues
+
+
+static func _check_relief_collider(c: GADSReliefCollider3D, root: Node, terrains: Array) -> Array:
+	var out := []
+	var source: Node = c.get_node_or_null(c.source) if not c.source.is_empty() else null
+	if not c.source.is_empty() and (source == null or not source.has_method(&"get_surface_height")):
+		out.append(_issue("error", "GADSReliefCollider3D %s: its source is not a GADSTerrain3D or GADSDisplacementField3D (nothing to sample)." % c.name))
+	elif c.source.is_empty() and terrains.is_empty() and root.find_children("*", "GADSDisplacementField3D", true, false).is_empty():
+		out.append(_issue("warning", "GADSReliefCollider3D %s: no GADSTerrain3D or GADSDisplacementField3D in the scene to sample (it needs one at runtime)." % c.name))
+	if c.collision_layer == 0:
+		out.append(_issue("warning", "GADSReliefCollider3D %s: collision_layer is 0, so nothing collides with it; give it a layer that the characters' collision_mask includes." % c.name))
+	return out
 
 
 static func print_report(issues: Array) -> void:
