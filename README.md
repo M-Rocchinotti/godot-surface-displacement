@@ -165,9 +165,13 @@ what the engine allows:
    GADSManager Node). Pick a preset.
 2. Give your surfaces GADS materials:
    - Drop a downloaded texture set (`Rock_BaseColor.png`, `Rock_Normal.png`, `Rock_Height.png`,
-     ...) into the FileSystem dock: GADS offers to make it a material, with a proposed size and
-     depth (or select the files and run **Create Material from Selected Textures**; see
+     ...) into the FileSystem dock: GADS offers to make it a material, with the kind of surface
+     its name suggests (Rock, Brick, Terrain...), a proposed size and depth (or select the files
+     and run **Create Material from Selected Textures**; see
      [From a downloaded texture set](#from-a-downloaded-texture-set)).
+   - Or start from a surface preset, with procedural maps until you have textures:
+     `GADSSurfacePresets.create("brick")`; a GADS material's inspector has a **Surface Preset**
+     menu for the displacement of a kind of surface.
    - **Convert Materials** turns every StandardMaterial3D / ORMMaterial3D with a height map in
      the selection (or scene), on meshes and CSG shapes, into the matching UV or triplanar GADS
      material (undoable). Then
@@ -189,9 +193,13 @@ what the engine allows:
    Set the ground material's `height_center` to 0 (relief above the ground; see below).
    Add a **GADSPebbleScatter3D** as the field's child for loose pebbles.
 4. For a prop whose outline, shadows or collision should follow the relief (a rock, a wall end, a
-   statue), select it and run **Make Selected Meshes GADSMeshInstance3D**, then press **Bake** in
-   the inspector (see [GADSMeshInstance3D](#gadsmeshinstance3d-baked-displacement)).
-5. Run **Validate Setup** if something looks wrong; it lists missing globals, wrong texture
+   statue), select it and run **Make Selected Meshes GADSMeshInstance3D**, pick **Apply Profile**
+   (Rock, Wall...) if it is one of those, then press **Bake** in the inspector (see
+   [GADSMeshInstance3D](#gadsmeshinstance3d-baked-displacement)); with **Live** on it bakes again
+   as you tune its material. Meshes named `Rock-gads-rock` in your modelling tool arrive baked.
+5. Game code: `GADS.set_quality(level)` from your settings menu; a `GADSReliefCollider3D` on the
+   player keeps their feet on the stones.
+6. Run **Validate Setup** if something looks wrong; it lists missing globals, wrong texture
    imports, UV-mapped materials on meshes without UVs, materials the field cannot
    use, ground materials the field leaves flat, a bake made for other layers, a pebble scatter
    outside a field and more.
