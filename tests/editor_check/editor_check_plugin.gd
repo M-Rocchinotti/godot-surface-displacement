@@ -608,7 +608,7 @@ func _run() -> void:
 	await _frames_wait(2)
 	var live_mat := GADSMeshBaker.resolve_materials(baked_box, baked_box.source_mesh)[0] as ShaderMaterial
 	var depth_before: float = live_mat.get_shader_parameter("height_m")
-	var version_before: int = ur.get_history_undo_redo(ur.get_object_history_id(baked_box)).get_version()
+	var version_before: int = ur.get_version()
 	es.set_setting(_sd_plugin.LIVE_SETTING, false)
 	live_mat.set_shader_parameter("height_m", depth_before * 1.5)
 	var waited_live := Time.get_ticks_msec()
@@ -622,7 +622,7 @@ func _run() -> void:
 		if not baked_box.is_bake_stale() and not baked_box.is_baking():
 			break
 	_check(stayed_stale and baked_box.baked and not baked_box.is_bake_stale()
-		and ur.get_history_undo_redo(ur.get_object_history_id(baked_box)).get_version() == version_before,
+		and ur.get_version() == version_before,
 		"Live: a new relief depth on a selected baked mesh bakes again by itself (off: it stays stale), no undo entry")
 	live_mat.set_shader_parameter("height_m", depth_before)
 	EditorInterface.get_selection().clear()
