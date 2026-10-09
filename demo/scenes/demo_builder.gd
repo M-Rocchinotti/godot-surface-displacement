@@ -729,9 +729,30 @@ static func build_material_lab() -> Node3D:
 	var curl_node := baked(panel_mi, "VectorDisplaced")
 	curl_node.quality = GADSMeshInstance3D.Quality.MEDIUM
 	root.add_child(curl_node)
+	# Surface presets (GADSSurfacePresets), behind the wall: one of each kind of surface, from its
+	# procedural pattern; ground presets on low slabs (their world-planar maps face up).
+	var ids := GADSSurfacePresets.ids()
+	for i in ids.size():
+		var id: String = ids[i]
+		var pm: ShaderMaterial = fallback_ground
+		if GADSProcedural.is_available():
+			pm = GADSSurfacePresets.create(id, {}, {"size": 256, "tile_m": 1.0, "seed": 3 + i})
+		var ground: bool = GADSMaterials.parse(pm.shader).get("mapping", 0) == GADSMaterials.Mapping.WORLD
+		var block := BoxMesh.new()
+		block.size = Vector3(1.2, 0.25 if ground else 1.2, 1.2)
+		var at := Vector3(-3.75 + 1.5 * (i % 6), block.size.y * 0.5, -8.0 - 2.2 * (i / 6))
+		_mesh_node(root, "Preset_%s" % id, block, pm, at)
+		var label := Label3D.new()
+		label.text = GADSSurfacePresets.label(id)
+		label.font_size = 28
+		label.pixel_size = 0.004
+		label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+		label.position = at + Vector3(0, block.size.y * 0.5 + 0.25, 0)
+		root.add_child(label)
 	_views(root, {
 		"Eye level": [Vector3(0.5, 1.6, 3.5), Vector3(0.0, 0.8, -3.0)],
 		"Grazing": [Vector3(4.1, 0.5, 4.7), Vector3(4.6, 0.12, 1.5)],
 		"Overview": [Vector3(0.0, 6.0, 7.0), Vector3(0.0, 0.0, -2.0)],
+		"Surface presets": [Vector3(0.0, 3.2, -15.5), Vector3(0.0, 0.3, -8.8)],
 	})
 	return root

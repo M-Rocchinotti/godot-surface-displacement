@@ -1136,7 +1136,9 @@ The material lab is made without texture files: a procedural tile floor with dir
 and worn edges, a procedural brick wall with moss in the joints, six baked spheres (rock,
 stones, craters, cracks, ridged, scales), the stones sphere again unbaked with silhouette parallax (its
 outline shows the stones), a pool whose billowing relief flows and breathes, and a panel whose
-vector displacement curls into overhanging ridges (view Grazing).
+vector displacement curls into overhanging ridges (view Grazing). Behind the wall (view Surface
+presets) stand the twelve surface presets, each from its own procedural pattern: blocks for the
+wall, rock and prop kinds, low slabs for the ground kinds.
 
 ![The material lab: baked procedural spheres, the stones sphere with silhouette parallax in front, the flowing pool and the vector-displaced panel](docs/images/material_lab.jpg)
 
