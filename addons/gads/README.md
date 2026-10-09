@@ -17,23 +17,32 @@ scattered stones, cobblestones as real stones, brick walls with deep joints.
   and hard edges, rebuilt normals and tangents, LODs, optional collision). Non-destructive and
   cached; Bake / Rebuild / Clear in the inspector; bakes can stream in near the camera
   (`stream_bake`); paint the layered materials' layers on any mesh (vertex colours, on a copy of
-  the mesh). The native library ships for Linux and
-  Windows x86_64 and Linux ARM64 (`native/`).
+  the mesh); a selected baked mesh bakes again by itself when its material changes (Live). The
+  native library ships for Linux and Windows x86_64 and Linux ARM64 (`native/`); elsewhere a
+  slower GDScript tessellator bakes.
 - **GADSDeformationField** / **GADSDeformer3D**: footprints, tracks and craters written at runtime,
   pressing the field's geometry and the ground's parallax down; persistent, recovering.
 - **GADSTerrain3D**: a heightmap terrain with chunk LODs by screen-space error, up to three
   height-blended GADS layers (splat map or slope / height rules), HeightMapShape3D collision and
   the near-camera displacement field on its own ground data; sculpt and paint it in the viewport
   (undoable) or from scripts at runtime; roads along curves (GADSTerrainPath3D); generate
-  landscapes, erode them (native hydraulic and thermal erosion) and export the heights as EXR.
+  landscapes, erode them (native hydraulic and thermal erosion), cut holes (cave and tunnel
+  entrances) and export the heights as EXR. **GADSReliefCollider3D** puts characters' feet on
+  the relief instead of the smooth ground collision.
 - **GADSManager** node: Low / Medium / High / Ultra presets (measured on a GTX 1080 at
   1080p: 0.47 / 1.15 / 1.58 / 2.86 ms added; near-camera geometry and pebbles only at Ultra),
   feature switches, adaptive quality against a frame-time target, a shared runtime triangle
-  budget, weather (rain, snow, puddles), a script API for settings menus.
+  budget, weather (rain, snow, puddles); `GADS.set_quality()` for a game's settings menu and
+  `GADS.surface(node)` for one node's relief in metres.
 - **Materials**: detail layers, height-blended layered materials, surface effects (snow / dust /
-  sand cover, wetness, puddles, cavity and edge colours), vector displacement maps for bakes;
-  materials from downloaded texture sets or **procedural** ones (eleven tileable patterns with
-  normal, occlusion, albedo and ORM maps, generated natively).
+  sand cover, wetness, puddles, cavity and edge colours), vector displacement maps for bakes,
+  per-node depth and tint; twelve **surface presets** (Brick, Rock, Cliff, Snow, Metal Damage...)
+  that set how the relief is drawn; materials from downloaded texture sets (the surface detected
+  from the name) or **procedural** ones (thirteen tileable patterns with normal, occlusion,
+  albedo and ORM maps). The **GADS Height Map** importer reads 16-bit PNGs and RAW / R16
+  heightmaps at full precision, with Max / Min mip filters.
+- **Import profiles**: name meshes `Rock-gads-rock`, `Wall-gads-wall` (rock, wall, terrain, prop,
+  character) or pick a profile in the scene import options.
 - **Baked meshes** (GADSMeshInstance3D) also re-tessellate for the camera at runtime, split into
   clusters for culling and LOD, show their topology problems (Diagnose), can be **sculpted** by
   hand in the viewport (raise, lower, smooth, flatten; undoable, baked again per stroke) and
@@ -44,8 +53,8 @@ scattered stones, cobblestones as real stones, brick walls with deep joints.
 ## Quick start
 
 1. Enable **GADS** in Project Settings > Plugins. It registers the shader
-   globals `gads_pom_steps`, `gads_pom_range`, `gads_shadow`, `gads_debug`, `gads_dfg`, the three
-   `gads_deform*` of runtime deformation and `gads_weather`; keep them.
+   globals `gads_pom_steps`, `gads_pom_range`, `gads_pom_fade_px`, `gads_shadow`, `gads_debug`,
+   `gads_dfg`, the three `gads_deform*` of runtime deformation and `gads_weather`; keep them.
 2. Add a **GADSManager** node (Project > Tools > GADS: Add
    GADSManager Node) and pick a preset.
 3. **Create Material from Selected Textures** makes a GADS material from a downloaded texture set
@@ -69,9 +78,11 @@ Your own shaders: `render_mode diffuse_burley, specular_schlick_ggx;`, define `G
 header of `gads_core.gdshaderinc` lists the signatures).
 
 Requirements: Godot 4.7+, Forward+ (Vulkan tested). Limitations: POM gives no silhouettes on
-walls and props (bake those); baking needs the native library (Linux, Windows x86_64; Linux ARM64) (skinned and
-morphing meshes bake in their rest pose); the near-camera geometry needs height-field ground (world-planar ground
-materials); feet sink into the relief by up to its depth; depth write is opt-in and costs
+walls and props (bake those); without the native library (Linux, Windows x86_64; Linux ARM64)
+bakes are slower and without vector displacement, skinning, clusters or runtime tessellation;
+skinned and morphing meshes bake in their rest pose; the near-camera geometry needs height-field
+ground (world-planar ground materials); feet sink into the relief unless a GADSReliefCollider3D
+follows them; depth write is opt-in and costs
 early-Z; omni and spot lights self-shadow only at High and Ultra (each one costs a march per
 pixel it lights); fields follow one camera. The project README on the repository page has the
 measured costs, accuracy figures, texture tools, an offline Blender bake tool, troubleshooting

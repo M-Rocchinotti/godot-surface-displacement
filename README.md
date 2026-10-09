@@ -98,7 +98,16 @@ what the engine allows:
   dropped into the project are offered their material.
 - Global illumination: SDFGI, SSAO and SSIL draw GADS surfaces as they are; VoxelGI bakes with
   their colours (the engine's own bake takes custom shaders as white).
-- Bakes everywhere: the native tessellator where it ships, a GDScript one elsewhere.
+- Bakes everywhere: the native tessellator where it ships, a GDScript one elsewhere. In the
+  editor a selected baked mesh bakes again by itself when its material or settings change (Live).
+- Twelve surface presets (Brick, Concrete, Rock, Cliff, Asphalt, Mud, Snow, Sand, Wood / Bark,
+  Metal Damage, Terrain, Organic) that set how the relief is drawn, detected from a texture
+  set's name; bake profiles per kind of asset on import (`Rock-gads-rock`, `Wall-gads-wall`).
+- The GADS Height Map importer: 16-bit PNGs and RAW / R16 terrain heightmaps at full precision,
+  Max / Min mip filters that keep peaks and grooves at a distance.
+- Gameplay: `GADS.set_quality()` for a settings menu, `GADS.surface(node)` for one node's depth
+  in metres, `GADSReliefCollider3D` so characters stand on the stones, relief queries and impacts.
+- An optional fade by size on screen: shallow relief fades sooner than deep relief.
 - Runtime: view-dependent re-tessellation of baked meshes around the camera, and deformation
   (footprints, tracks, craters) of the near-camera geometry and the ground's parallax.
 - `GADSTerrain3D`: a heightmap terrain with chunk LODs chosen by screen-space error, up to three
@@ -110,7 +119,7 @@ what the engine allows:
   procedural materials, surface effects and vector displacement), a flat / POM / POM + geometry
   comparison, a before / after view, mip level and cluster views, runtime prop geometry, impacts
   (C), weather and a frame-time overlay.
-- Tests: about 740 checks in 14 suites, among them POM against a CPU ray tracer, visual
+- Tests: about 800 checks in 14 suites, among them POM against a CPU ray tracer, visual
   regression against reference images and the editor tools driven in a real editor.
 
 ## Requirements
