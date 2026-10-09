@@ -37,6 +37,8 @@ func _ready() -> void:
 	RenderingServer.viewport_set_measure_render_time(get_viewport().get_viewport_rid(), true)
 	_build_ui()
 	load_scene(0)
+	var caps := gads.get_capabilities()
+	print("[GADS] native_library=%s renderer=%s tags=%s" % [caps["native_library"], caps["renderer"], caps["tags"]])
 	_overlay = GADSStatsOverlay.new()
 	_overlay.shown = false
 	add_child(_overlay)
