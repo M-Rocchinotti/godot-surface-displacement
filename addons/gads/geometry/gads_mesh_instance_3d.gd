@@ -21,7 +21,8 @@ extends MeshInstance3D
 ## loads in the background when the camera comes near and is let go when it leaves, so a level
 ## with many baked props holds only the near ones' geometry.
 ##
-## Needs the GADS native library (addons/gads/native/, Linux and Windows x86_64).
+## Needs the GADS native library (addons/gads/native/, ships for Linux x86_64 and ARM64,
+## Windows x86_64, Android and Web; not macOS or iOS).
 
 signal bake_started
 ## While a background bake runs: progress 0..1 of the main pass and its triangles so far.

@@ -4,6 +4,35 @@ A brief for a Claude Code session running on the developer's own machine (Window
 branch `claude/kind-lovelace-8rgsvw` of `M-Rocchinotti/godot-surface-displacement`; commit and
 push there; do not open a pull request unless asked.
 
+## Status (2026-10-09, Windows build host)
+
+Done and verified at build level:
+
+- **Android** arm64 + x86_64 `.so` built with NDK `28.1.13356709` (API 24) and **Web** wasm32
+  (threaded) built with Emscripten **4.0.20** (matches the 4.7.2 web templates). All five
+  committed binaries plus the two new Android ones and the Web one share source hash
+  `550b27f6e07c8b97` (no native source was changed, so the Linux/Windows binaries did not need
+  rebuilding and WSL was not required).
+- `tools/build_native.py` has `android`, `web`, `web_nothreads`, `macos`, `ios` targets.
+- `gads.gdextension` lists `android.arm64`, `android.x86_64` and `web.threads.wasm32`.
+- Desktop logic tests pass (163/0), including the build-hash and native/GDScript parity checks.
+- The demo exports to Web; Godot packages **only** `libgads.web...wasm32.wasm` into the threaded
+  export, confirming the `web.threads.wasm32` tag matches. The demo overlay now shows "GADS:
+  native library" / "GADS: GDScript fallback".
+
+Pending (need hardware this build host does not have):
+
+- **In-browser run of the Web export.** This host is headless for the GUI (browsers run on a
+  separate machine that cannot reach this host's localhost, and a threaded build needs a secure
+  context). Serve `build/web/` with COOP/COEP and open it on a machine with a browser; confirm the
+  overlay reads "native library" and the Cliff scene's Tessellation view re-tessellates.
+- **Android on-device run.** No device/emulator attached. Install the exported APK on a phone (or
+  a Forward+-capable emulator) and run the same checks.
+- **macOS / iOS** libraries: build on a Mac (`python tools/build_native.py macos ios`) and add
+  `macos` / `ios` lines to `gads.gdextension`; left out here so a Mac export does not try to load
+  a missing library. The nothreads Web variant (`web_nothreads`) is not built: it needs a native
+  source change, which would force a rebuild of every platform (Linux via WSL).
+
 ## Why
 
 GADS is a Godot 4.7 addon (`addons/gads/`). Its fast paths are a C++ GDExtension in `native/`

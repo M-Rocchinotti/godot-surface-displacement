@@ -334,8 +334,8 @@ exit.
 The relief of the GADS materials made into real geometry, offline, for any triangle mesh.
 
 **Native tessellator** (`native/src/tess/`, engine-independent C++17, exposed as
-`GADSTessellator` by a GDExtension built with godot-cpp; binaries for Linux and Windows x86_64 in
-`addons/gads/native/bin/`):
+`GADSTessellator` by a GDExtension built with godot-cpp; binaries for Linux x86_64 and ARM64,
+Windows x86_64, Android (arm64 and x86_64) and Web (wasm32) in `addons/gads/native/bin/`):
 
 - *Topology on welded positions.* Corners at the same position (UV seams, hard edges, surface
   borders) form one position group; edges are keyed by groups. Every corner of a group moves by

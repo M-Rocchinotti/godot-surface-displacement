@@ -18,8 +18,8 @@ scattered stones, cobblestones as real stones, brick walls with deep joints.
   cached; Bake / Rebuild / Clear in the inspector; bakes can stream in near the camera
   (`stream_bake`); paint the layered materials' layers on any mesh (vertex colours, on a copy of
   the mesh); a selected baked mesh bakes again by itself when its material changes (Live). The
-  native library ships for Linux and Windows x86_64 and Linux ARM64 (`native/`); elsewhere a
-  slower GDScript tessellator bakes.
+  native library ships for Linux x86_64 and ARM64, Windows x86_64, Android and Web (`native/`);
+  on macOS and iOS a slower GDScript tessellator bakes.
 - **GADSDeformationField** / **GADSDeformer3D**: footprints, tracks and craters written at runtime,
   pressing the field's geometry and the ground's parallax down; persistent, recovering.
 - **GADSTerrain3D**: a heightmap terrain with chunk LODs by screen-space error, up to three
@@ -78,7 +78,8 @@ Your own shaders: `render_mode diffuse_burley, specular_schlick_ggx;`, define `G
 header of `gads_core.gdshaderinc` lists the signatures).
 
 Requirements: Godot 4.7+, Forward+ (Vulkan tested). Limitations: POM gives no silhouettes on
-walls and props (bake those); without the native library (Linux, Windows x86_64; Linux ARM64)
+walls and props (bake those); without the native library (shipped for Linux x86_64 and ARM64,
+Windows x86_64, Android and Web; not macOS or iOS)
 bakes are slower and without vector displacement or runtime tessellation;
 skinned and morphing meshes bake in their rest pose; the near-camera geometry needs height-field
 ground (world-planar ground materials); feet sink into the relief unless a GADSReliefCollider3D

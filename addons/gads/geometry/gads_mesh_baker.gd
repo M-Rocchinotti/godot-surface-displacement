@@ -56,8 +56,8 @@ var _cancelled := false
 static var force_gdscript := false
 
 
-## Whether the native library is loaded (it ships for Linux x86_64 and ARM64 and Windows x86_64;
-## see README). Without it bakes use the slower GDScript tessellator ([GADSTessellatorGD]);
+## Whether the native library is loaded (it ships for Linux x86_64 and ARM64, Windows x86_64,
+## Android and Web; see README). Without it bakes use the slower GDScript tessellator ([GADSTessellatorGD]);
 ## runtime tessellation, clusters and the other native features need it.
 static func is_available() -> bool:
 	return ClassDB.class_exists(NATIVE_CLASS)

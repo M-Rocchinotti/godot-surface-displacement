@@ -136,14 +136,16 @@ what the engine allows:
   Godot's own importer reads 16-bit PNGs as 8 bits). 8-bit height maps work but terrace visibly
   once displaced by more than a few centimetres.
 - Baked displacement (`GADSMeshInstance3D`) runs on the GADS native library, which ships for
-  **Linux and Windows x86_64 and Linux ARM64** (`addons/gads/native/`). Elsewhere (macOS,
-  Android, iOS, web) bakes run on a GDScript tessellator (`GADSTessellatorGD`, the same adaptive
-  idea, simpler; skinned meshes, blend shapes and clusters included): about 7 000 triangles a
-  second, no vector displacement or runtime tessellation; procedural maps run on a GDScript generator
-  (`GADSProceduralGD`, about ten times slower), terrain erosion in GDScript too (13 s instead of
-  0.3 s for a 257 x 257 terrain); everything else
-  works, and bakes made on a supported platform draw anywhere. Build the library from `native/` for the full set
-  (see [Building the native library](#building-the-native-library)).
+  **Linux x86_64 and ARM64, Windows x86_64, Android (arm64 and x86_64) and Web (wasm32)**
+  (`addons/gads/native/`). On the remaining platforms (**macOS, iOS**) bakes run on a GDScript
+  tessellator (`GADSTessellatorGD`, the same adaptive idea, simpler; skinned meshes, blend shapes
+  and clusters included): about 7 000 triangles a second, no vector displacement or runtime
+  tessellation; procedural maps run on a GDScript generator (`GADSProceduralGD`, about ten times
+  slower), terrain erosion in GDScript too (13 s instead of 0.3 s for a 257 x 257 terrain);
+  everything else works, and bakes made on a supported platform draw anywhere. The Web library is
+  the threaded build, so a web export needs Thread Support and cross-origin isolation (COOP/COEP);
+  see [Building the native library](#building-the-native-library). Build the library from `native/`
+  for macOS and iOS (a Mac is required).
 - Optional: Python 3.10+ with numpy and Pillow for the texture tools, Blender 4.5 LTS for the
   offline hero bake.
 
@@ -1061,8 +1063,8 @@ against the height map. The demo's brick wall scene shows a baked hero wall next
 
 The tessellator behind GADSMeshInstance3D is C++ in `native/` (not shipped with the addon),
 built as a GDExtension with [godot-cpp](https://github.com/godotengine/godot-cpp) into
-`addons/gads/native/bin/`. The repository holds release builds for Linux and Windows x86_64 and
-Linux ARM64 (cross-built and checked here, not run on ARM hardware); to rebuild them (or build for
+`addons/gads/native/bin/`. The repository holds release builds for Linux x86_64 and ARM64,
+Windows x86_64, Android (arm64 and x86_64) and Web (wasm32); to rebuild them (or build for
 another platform), with Python, SCons and a C++17 compiler:
 
 ```
@@ -1070,7 +1072,17 @@ pip install scons
 python tools/build_native.py                 # this platform
 python tools/build_native.py linux windows   # on Linux, Windows with MinGW (x86_64-w64-mingw32-g++-posix)
 python tools/build_native.py linux windows linux_arm64   # and ARM64 Linux (g++-aarch64-linux-gnu)
+python tools/build_native.py android         # arm64 + x86_64; needs the Android NDK (ANDROID_HOME set)
+python tools/build_native.py web             # wasm32, threaded; needs Emscripten (emsdk_env sourced)
+python tools/build_native.py macos ios       # on a Mac with Xcode command line tools
 ```
+
+The native sources are the same for every platform, so the committed binaries must all be built
+from the same source (they carry a shared hash a test checks). Android needs the NDK godot-cpp
+expects (`28.1.13356709`) under `$ANDROID_HOME/ndk/`; Web needs the Emscripten version matching
+the engine's web templates (4.0.20 for Godot 4.7.2) and a web export built with **Extensions
+Support** and **Thread Support**, served with `Cross-Origin-Opener-Policy: same-origin` and
+`Cross-Origin-Embedder-Policy: require-corp`. macOS and iOS can only be built on a Mac.
 
 The script fetches godot-cpp at a pinned revision into `native/godot-cpp/`. The library embeds a
 hash of its sources, and the bake tests fail when a committed library (any platform's) was not
@@ -1233,8 +1245,9 @@ pass because two errors cancel.
   no longer matches the world-space texture; UV-mapped bakes move freely) until a runtime
   tessellation (`view_dependent`) replaces it. A runtime tessellation takes a worker thread for
   tens to hundreds of milliseconds; the old mesh shows meanwhile. The native
-  library ships for Linux and Windows x86_64 and Linux ARM64 only (elsewhere the slower GDScript
-  tessellator bakes, see Requirements). Earlier bakes stay in the cache directory
+  library ships for Linux x86_64 and ARM64, Windows x86_64, Android and Web (on macOS and iOS the
+  slower GDScript tessellator bakes and runtime tessellation is unavailable, see Requirements).
+  Earlier bakes stay in the cache directory
   until Clean Bake Cache removes them. Collision is a static body.
 - **The near-camera geometry needs height-field ground**: world-planar ground materials on
   terrain that is a function of XZ within the bake (no overhangs, caves, vertical walls). Slopes

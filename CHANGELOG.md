@@ -16,8 +16,17 @@ All notable changes to this project are documented here. The format follows
   triangle budget) or a custom tolerance in metres; locked borders; displacement direction; hard
   edges kept; LODs; optional trimesh or convex collision from a coarser pass of its own, as an
   internal static body. Bakes run on a worker thread with progress and cancel.
+- **Native library for Android and Web.** The native tessellator (and procedural maps, erosion,
+  terrain chunk builder) now ships for Android (arm64 and x86_64) and Web (wasm32, threaded)
+  besides Linux x86_64/ARM64 and Windows x86_64, so phones and the browser get full-speed bakes
+  and runtime view-dependent tessellation instead of the GDScript fallback (which would take
+  ~20 s per runtime update). `tools/build_native.py android` and `web` build them; a web export
+  needs Extensions Support, Thread Support and cross-origin isolation (COOP/COEP). macOS and iOS
+  still use the GDScript fallback until built on a Mac. The demo's overlay now reports whether the
+  native library or the GDScript fallback is in use.
 - **Native adaptive tessellator** (`native/`, a GDExtension built with godot-cpp; libraries for
-  Linux and Windows x86_64 in `addons/gads/native/bin/`, `tools/build_native.py` to rebuild):
+  Linux x86_64 and ARM64, Windows x86_64, Android (arm64 and x86_64) and Web (wasm32) in
+  `addons/gads/native/bin/`, `tools/build_native.py` to rebuild):
   Rivara longest-edge bisection on position-welded topology (crack-free across UV seams, hard
   edges and surface borders, angles of the source kept), refinement driven by how far each
   triangle's height field deviates from it in world metres (min / max mip pyramid first), worst
