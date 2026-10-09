@@ -635,7 +635,10 @@ Its blur (occlusion, curvature) halves the map with bilinear filtering (2 x 2 av
 the radius and scales it back up, wrapped the same way; occlusion is the slope down from that
 blurred surround rather than a horizon search. The patterns differ from the native ones in
 detail, not in parameters, range or tiling; the logic tests run every check on both generators.
-Erosion stays native only.
+Erosion without the native library runs `GADSProceduralGD.erode()`, a line-for-line port of
+`erosion.cpp`: the same xorshift64* sequence (GDScript's integers are signed 64-bit, so its right
+shifts are masked to stay logical; multiplications wrap alike) and the same double arithmetic,
+so it gives the native result (the logic tests compare them); about 40 times slower.
 
 ## 14. Surface effects
 

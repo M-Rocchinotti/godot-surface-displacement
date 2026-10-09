@@ -77,9 +77,8 @@ class ToolPanel extends VBoxContainer:
 		erode.text = "Erode"
 		erode.tooltip_text = "Erode the heights: water carves gullies and fills valleys, steep slopes slide into scree (undoable)."
 		erode.pressed.connect(_on_erode)
-		erode.disabled = not GADSProcedural.is_available()
-		if erode.disabled:
-			erode.tooltip_text = "Erosion needs the GADS native library, which is not loaded on this platform."
+		if not GADSProcedural.is_available():
+			erode.tooltip_text += " Without the GADS native library it runs in GDScript and takes a while."
 		gen.add_child(erode)
 		var export_button := Button.new()
 		export_button.text = "Export Heightmap"

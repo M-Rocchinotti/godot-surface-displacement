@@ -1409,6 +1409,29 @@ func test_erosion() -> void:
 	print("  hydraulic: lowest tenth %+.4f, highest tenth %+.4f (mean change in units)" % [(low_after - low_before) / tenth, (high_after - high_before) / tenth])
 	check(low_after > low_before and high_after < high_before, "water erosion takes the high ground down and fills the low")
 	check(a.get_data() == b.get_data() and a.get_data() != c.get_data(), "the same seed erodes the same way, another seed differently")
+	# The GDScript erosion (without the native library) is the same algorithm and random sequence:
+	# on a small cone and small hills it gives the native result.
+	var small := Image.create(41, 41, false, Image.FORMAT_RF)
+	for y in 41:
+		for x in 41:
+			small.set_pixel(x, y, Color(maxf(0.0, 1.0 - Vector2(x - 20, y - 20).length() / 20.0), 0, 0))
+	var small_hills := GADSProcedural.height_image("noise", 64, {"seed": 5, "scale": 3.0})
+	var cases := [[small, {"thermal_iterations": 200, "talus_deg": 30.0, "cell_m": 1.0, "height_m": 30.0}],
+		[small_hills, {"droplets": 3000, "seed": 7, "cell_m": 1.0, "height_m": 20.0, "thermal_iterations": 5}],
+		[small_hills, {"droplets": 1000, "seed": 2, "cell_m": 1.0, "height_m": 20.0, "wrap": true}]]
+	var worst := 0.0
+	var started := Time.get_ticks_msec()
+	for case: Array in cases:
+		var native_img := GADSProcedural.erode_image(case[0], case[1])
+		GADSProcedural.force_gdscript = true
+		var gd_img := GADSProcedural.erode_image(case[0], case[1])
+		GADSProcedural.force_gdscript = false
+		var nd := native_img.get_data().to_float32_array()
+		var gd := gd_img.get_data().to_float32_array()
+		for i in nd.size():
+			worst = maxf(worst, absf(nd[i] - gd[i]))
+	print("  GDScript erosion vs native: largest difference %s (three fields, %d ms with the native runs)" % [String.num_scientific(worst), Time.get_ticks_msec() - started])
+	check(worst < 1e-5, "the GDScript erosion gives the native result (thermal, hydraulic, wrapped)")
 
 
 func test_sculpt_brush() -> void:

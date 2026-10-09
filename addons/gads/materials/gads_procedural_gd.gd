@@ -425,3 +425,219 @@ static func _blurred(img: Image, radius: float) -> PackedFloat32Array:
 	var sy := float(h) / smallh
 	padded.resize(roundi((small + 2 * PAD) * sx), roundi((smallh + 2 * PAD) * sy), Image.INTERPOLATE_CUBIC)
 	return padded.get_region(Rect2i(roundi(PAD * sx), roundi(PAD * sy), w, h)).get_data().to_float32_array()
+
+
+## Hydraulic, then thermal erosion of [param height]'s red channel, as the native
+## GADSHeightGenerator.erode (the same algorithm, parameters and random sequence): FORMAT_RF.
+## Much slower: a 257 x 257 terrain's default 33 000 droplets take tens of seconds.
+static func erode(height: Image, params: Dictionary) -> Image:
+	var w := height.get_width()
+	var h := height.get_height()
+	var src := _floats(height)
+	var cell_m := float(params.get("cell_m", 1.0))
+	var height_m := float(params.get("height_m", 1.0))
+	if w < 2 or h < 2 or cell_m <= 0.0 or height_m <= 0.0:
+		return Image.create_from_data(w, h, false, Image.FORMAT_RF, src.to_byte_array())
+	# In texel units vertically too, so slopes are rise over run.
+	var to_texels := height_m / cell_m
+	var v := PackedFloat64Array()
+	v.resize(w * h)
+	for i in v.size():
+		v[i] = src[i] * to_texels
+	var wrap := bool(params.get("wrap", false))
+	_hydraulic(v, w, h, wrap, params)
+	_thermal(v, w, h, wrap, params)
+	var out := PackedFloat32Array()
+	out.resize(v.size())
+	for i in v.size():
+		out[i] = v[i] / to_texels
+	return Image.create_from_data(w, h, false, Image.FORMAT_RF, out.to_byte_array())
+
+
+# xorshift64* as the native library runs it on unsigned 64-bit integers: GDScript's are signed, so
+# right shifts are masked to stay logical (multiplications wrap the same way).
+const _RNG_SEED_MUL := -7046029254386353131 # 0x9E3779B97F4A7C15
+const _RNG_SEED_ADD := 7146057691288625177 # 0x632BE59BD9B4E019
+const _RNG_MUL := 2685821657736338717
+
+
+static func _rng_next(state: PackedInt64Array) -> float:
+	var s := state[0]
+	s ^= (s >> 12) & ((1 << 52) - 1)
+	s ^= s << 25
+	s ^= (s >> 27) & ((1 << 37) - 1)
+	state[0] = s
+	return float(((s * _RNG_MUL) >> 11) & ((1 << 53) - 1)) * (1.0 / 9007199254740992.0)
+
+
+static func _hydraulic(v: PackedFloat64Array, w: int, h: int, wrap: bool, p: Dictionary) -> void:
+	var droplets := int(p.get("droplets", 0))
+	if droplets <= 0:
+		return
+	var max_steps := int(p.get("max_steps", 64))
+	var inertia := clampf(float(p.get("inertia", 0.05)), 0.0, 1.0)
+	var capacity := float(p.get("capacity", 0.3))
+	var min_capacity := float(p.get("min_capacity", 0.01))
+	var erosion := float(p.get("erosion", 0.3))
+	var deposition := float(p.get("deposition", 0.3))
+	var evaporation := float(p.get("evaporation", 0.02))
+	var gravity := float(p.get("gravity", 4.0))
+	var r := maxi(int(p.get("radius", 3)), 1)
+	var bdx := PackedInt32Array()
+	var bdy := PackedInt32Array()
+	var bw := PackedFloat64Array()
+	for dy in range(-r, r + 1):
+		for dx in range(-r, r + 1):
+			var d := sqrt(float(dx * dx + dy * dy))
+			if d < r:
+				bdx.append(dx)
+				bdy.append(dy)
+				bw.append(r - d)
+	var nb := bdx.size()
+	var state := PackedInt64Array([int(p.get("seed", 1)) * _RNG_SEED_MUL + _RNG_SEED_ADD])
+	var wmax := float(w if wrap else w - 1)
+	var hmax := float(h if wrap else h - 1)
+	for drop in droplets:
+		var x := _rng_next(state) * wmax
+		var y := _rng_next(state) * hmax
+		var dir_x := 0.0
+		var dir_y := 0.0
+		var speed := 1.0
+		var water := 1.0
+		var sediment := 0.0
+		var left := false
+		for step in max_steps:
+			var ix := floori(x)
+			var iy := floori(y)
+			var u := x - ix
+			var t := y - iy
+			# Bilinear height and gradient here.
+			var x0 := posmod(ix, w) if wrap else ix
+			var x1 := posmod(ix + 1, w) if wrap else ix + 1
+			var y0 := (posmod(iy, h) if wrap else iy) * w
+			var y1 := (posmod(iy + 1, h) if wrap else iy + 1) * w
+			var h00 := v[y0 + x0]
+			var h10 := v[y0 + x1]
+			var h01 := v[y1 + x0]
+			var h11 := v[y1 + x1]
+			var gx := (h10 - h00) * (1.0 - t) + (h11 - h01) * t
+			var gy := (h01 - h00) * (1.0 - u) + (h11 - h10) * u
+			var here := h00 * (1.0 - u) * (1.0 - t) + h10 * u * (1.0 - t) + h01 * (1.0 - u) * t + h11 * u * t
+			dir_x = dir_x * inertia - gx * (1.0 - inertia)
+			dir_y = dir_y * inertia - gy * (1.0 - inertia)
+			var length := sqrt(dir_x * dir_x + dir_y * dir_y)
+			if length < 1e-12:
+				break
+			dir_x /= length
+			dir_y /= length
+			var nx := x + dir_x
+			var ny := y + dir_y
+			if not wrap and (nx < 0.0 or ny < 0.0 or nx >= w - 1 or ny >= h - 1):
+				left = true # what it carries flows off the field
+				break
+			var jx := floori(nx)
+			var jy := floori(ny)
+			var nu := nx - jx
+			var nt := ny - jy
+			var a0 := posmod(jx, w) if wrap else jx
+			var a1 := posmod(jx + 1, w) if wrap else jx + 1
+			var b0 := (posmod(jy, h) if wrap else jy) * w
+			var b1 := (posmod(jy + 1, h) if wrap else jy + 1) * w
+			var new_height := v[b0 + a0] * (1.0 - nu) * (1.0 - nt) + v[b0 + a1] * nu * (1.0 - nt) + v[b1 + a0] * (1.0 - nu) * nt + v[b1 + a1] * nu * nt
+			var delta := new_height - here
+			var cap := maxf(-delta * speed * water * capacity, min_capacity)
+			if sediment > cap or delta > 0.0:
+				# Uphill: fill the pit behind it (at most to its level); else drop the excess.
+				var amount := minf(delta, sediment) if delta > 0.0 else (sediment - cap) * deposition
+				sediment -= amount
+				v[y0 + x0] += amount * (1.0 - u) * (1.0 - t)
+				v[y0 + x1] += amount * u * (1.0 - t)
+				v[y1 + x0] += amount * (1.0 - u) * t
+				v[y1 + x1] += amount * u * t
+			else:
+				# Take sediment from around it (never more than the drop to the next step).
+				var amount := minf((cap - sediment) * erosion, -delta)
+				var total := 0.0
+				for k in nb:
+					var bx := ix + bdx[k]
+					var by := iy + bdy[k]
+					if wrap or (bx >= 0 and by >= 0 and bx < w and by < h):
+						total += bw[k]
+				for k in nb:
+					var bx := ix + bdx[k]
+					var by := iy + bdy[k]
+					if wrap:
+						bx = posmod(bx, w)
+						by = posmod(by, h)
+					elif bx < 0 or by < 0 or bx >= w or by >= h:
+						continue
+					var take := amount * bw[k] / total
+					v[by * w + bx] -= take
+					sediment += take
+			# Faster going down, slower going up.
+			speed = sqrt(maxf(0.0, speed * speed - delta * gravity))
+			water *= 1.0 - evaporation
+			x = fmod(nx + w, float(w)) if wrap else nx
+			y = fmod(ny + h, float(h)) if wrap else ny
+		# A droplet that stops (stalls or runs out of steps) leaves its sediment where it is.
+		if not left and sediment > 0.0:
+			var ix := floori(x)
+			var iy := floori(y)
+			var u := x - ix
+			var t := y - iy
+			var x0 := posmod(ix, w) if wrap else ix
+			var x1 := posmod(ix + 1, w) if wrap else ix + 1
+			var y0 := (posmod(iy, h) if wrap else iy) * w
+			var y1 := (posmod(iy + 1, h) if wrap else iy + 1) * w
+			v[y0 + x0] += sediment * (1.0 - u) * (1.0 - t)
+			v[y0 + x1] += sediment * u * (1.0 - t)
+			v[y1 + x0] += sediment * (1.0 - u) * t
+			v[y1 + x1] += sediment * u * t
+
+
+static func _thermal(v: PackedFloat64Array, w: int, h: int, wrap: bool, p: Dictionary) -> void:
+	var iterations := int(p.get("thermal_iterations", 0))
+	if iterations <= 0:
+		return
+	var talus := tan(deg_to_rad(clampf(float(p.get("talus_deg", 35.0)), 0.0, 89.0)))
+	var rate := clampf(float(p.get("thermal_rate", 0.5)), 0.0, 1.0)
+	var ndx := [1, -1, 0, 0, 1, -1, 1, -1]
+	var ndy := [0, 0, 1, -1, 1, 1, -1, -1]
+	var delta := PackedFloat64Array()
+	delta.resize(v.size())
+	var excess := PackedFloat64Array()
+	excess.resize(8)
+	for it in iterations:
+		delta.fill(0.0)
+		for y in h:
+			for x in w:
+				var hc := v[y * w + x]
+				var total := 0.0
+				var most := 0.0
+				for k in 8:
+					excess[k] = 0.0
+					var nx: int = x + ndx[k]
+					var ny: int = y + ndy[k]
+					if wrap:
+						nx = posmod(nx, w)
+						ny = posmod(ny, h)
+					elif nx < 0 or ny < 0 or nx >= w or ny >= h:
+						continue
+					var e := hc - v[ny * w + nx] - talus * (1.0 if k < 4 else 1.41421356237309505)
+					if e > 0.0:
+						excess[k] = e
+						total += e
+						most = maxf(most, e)
+				if total <= 0.0:
+					continue
+				# Half the steepest excess (so the two cells end level at most), shared by excess.
+				var move := rate * most * 0.5
+				for k in 8:
+					if excess[k] > 0.0:
+						var share := move * excess[k] / total
+						var nx: int = posmod(x + ndx[k], w)
+						var ny: int = posmod(y + ndy[k], h)
+						delta[ny * w + nx] += share
+						delta[y * w + x] -= share
+		for i in v.size():
+			v[i] += delta[i]

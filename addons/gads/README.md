@@ -26,7 +26,7 @@ scattered stones, cobblestones as real stones, brick walls with deep joints.
   height-blended GADS layers (splat map or slope / height rules), HeightMapShape3D collision and
   the near-camera displacement field on its own ground data; sculpt and paint it in the viewport
   (undoable) or from scripts at runtime; roads along curves (GADSTerrainPath3D); generate
-  landscapes, erode them (native hydraulic and thermal erosion), cut holes (cave and tunnel
+  landscapes, erode them (hydraulic and thermal erosion), cut holes (cave and tunnel
   entrances) and export the heights as EXR. **GADSReliefCollider3D** puts characters' feet on
   the relief instead of the smooth ground collision.
 - **GADSManager** node: Low / Medium / High / Ultra presets (measured on a GTX 1080 at

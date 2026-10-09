@@ -237,7 +237,8 @@ All notable changes to this project are documented here. The format follows
   `GADSProceduralGD`, a GDScript generator with the same kinds and parameters (tileable,
   seeded, 0..1) and the derived maps (normals, occlusion, curvature, albedo, ORM), so the
   Generate Procedural Material dialog and `GADSTerrain3D.generate_heights()` work everywhere;
-  only erosion still needs the native library.
+  erosion too (`GADSProceduralGD.erode()`, the native algorithm and random sequence in
+  GDScript: the same result, about 40 times slower).
 - **Global illumination**: `GADSGI.bake_voxel_gi()` and **GADS: Bake Selected VoxelGI (GADS
   Colours)** bake a VoxelGI with GADS surfaces in their colours (the engine's bake takes them as
   white); `GADSGI.proxy_material()`. README section on how SDFGI, VoxelGI, LightmapGI, reflection

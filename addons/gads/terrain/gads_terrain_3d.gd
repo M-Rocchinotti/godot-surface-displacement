@@ -773,14 +773,14 @@ func flatten_path(points: PackedVector3Array, width: float, falloff := 2.0, laye
 	return box
 
 
-## Erodes the heights (needs the native library): water droplets that carve gullies and fill
+## Erodes the heights (without the native library in GDScript, much slower): water droplets that carve gullies and fill
 ## valleys, then material sliding off slopes steeper than a talus angle, at the terrain's own
 ## scale (the vertex spacing and [member height_scale] make the slopes physical).
 ## [param params] as [method GADSProcedural.erode_image]; by default one droplet per two vertices
 ## and 20 iterations of sliding at 38 degrees. Persistent like [method sculpt]. Returns the grid
 ## rectangle it changed (empty: nothing).
 func erode(params := {}) -> Rect2i:
-	if _nx < 2 or height_scale <= 0.0 or not GADSProcedural.is_available():
+	if _nx < 2 or height_scale <= 0.0:
 		return Rect2i()
 	var p := {"droplets": _nx * _nz / 2, "thermal_iterations": 20, "talus_deg": 38.0}
 	p.merge(params, true)
