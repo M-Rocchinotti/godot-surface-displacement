@@ -281,6 +281,20 @@ func _run() -> void:
 	var moss := load("res://texset/moss_gads.tres") as ShaderMaterial if FileAccess.file_exists("res://texset/moss_gads.tres") else null
 	_check(moss != null and GADSMaterials.is_gads_material(moss), "Create saves it next to the textures")
 
+	# The Create dialog names the surface it detects in the cliff set (Cliff) and creates with that
+	# preset; the depth chosen stays. (After the moss set, once the editor's own re-imports of the
+	# cliff textures, used in 3D by the previews, are done.)
+	var offer_dialog: ConfirmationDialog = _sd_plugin.materials_dialog(texture_sets, "Create GADS Materials")
+	var surface_menus: Array[Node] = offer_dialog.find_children("Surface", "OptionButton", true, false)
+	var detected_text := (surface_menus[0] as OptionButton).get_item_text((surface_menus[0] as OptionButton).selected) if surface_menus.size() == 1 else ""
+	offer_dialog.queue_free()
+	var cliff_preset: PackedStringArray = await _sd_plugin.create_materials(texture_sets, [{"texture_size_m": 3.0, "height_m": 0.09,
+		"mapping": GADSMaterials.Mapping.TRIPLANAR, "surface": "cliff"}])
+	var cliff2 := load(cliff_preset[0]) as ShaderMaterial if cliff_preset.size() == 1 else null
+	_check(detected_text == "Cliff" and cliff2 != null and is_equal_approx(float(cliff2.get_shader_parameter("height_center")), 0.5)
+		and is_equal_approx(float(cliff2.get_shader_parameter("cavity_amount")), 0.55) and is_equal_approx(float(cliff2.get_shader_parameter("height_m")), 0.09),
+		"the dialog detects the surface (%s) and creates with its preset, the chosen depth kept" % detected_text)
+
 	# 12. The Sculpt tool: a stroke on the baked box (as the viewport's left-drag sends it) stores a
 	# sculpt map next to the bakes and bakes again; undo and redo.
 	var sculpted := root.get_node("HeightBox") as GADSMeshInstance3D

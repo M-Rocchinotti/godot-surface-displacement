@@ -117,10 +117,15 @@ static func _words(stem: String) -> PackedStringArray:
 
 ## Proposed material parameters for [param texture_set]: {"texture_size_m": Vector2,
 ## "height_m", "height_remap": Vector2 (the height map's 1st / 99th percentiles, or (0, 1)),
-## "height_levels" (distinct values: under 1024 means 8-bit), "notes": [String]}.
+## "height_levels" (distinct values: under 1024 means 8-bit), "surface" (the surface preset its
+## name suggests, [method GADSSurfacePresets.detect], or ""), "mapping" (that preset's, else UV),
+## "notes": [String]}. With a surface the depth is that preset's per metre of texture.
 static func recommend(texture_set: Dictionary, texture_size_m := 2.0) -> Dictionary:
-	var out := {"texture_size_m": Vector2(texture_size_m, texture_size_m), "height_m": snappedf(DEPTH_PER_METRE * texture_size_m, 0.001),
-		"height_remap": Vector2(0, 1), "height_levels": 0, "notes": []}
+	var surface := GADSSurfacePresets.detect(String(texture_set.get("name", "")))
+	var per_metre := GADSSurfacePresets.depth_per_metre(surface) if not surface.is_empty() else DEPTH_PER_METRE
+	var out := {"texture_size_m": Vector2(texture_size_m, texture_size_m), "height_m": snappedf(per_metre * texture_size_m, 0.001),
+		"height_remap": Vector2(0, 1), "height_levels": 0, "surface": surface,
+		"mapping": GADSSurfacePresets.PRESETS[surface]["mapping"] if not surface.is_empty() else GADSMaterials.Mapping.UV, "notes": []}
 	var files: Dictionary = texture_set["files"]
 	if not files.has("height"):
 		(out["notes"] as Array).append("no height map: the material will be flat (normal mapped only)")
@@ -141,13 +146,16 @@ static func recommend(texture_set: Dictionary, texture_size_m := 2.0) -> Diction
 ## (remapped half float, with mipmaps), "<name>_gads_orm.png" when there is no ORM / ARM texture
 ## but roughness, AO or metallic maps, "<name>_gads_normal.png" with the green channel flipped
 ## when the normal map is DirectX. Returns {role: path} of the files the material should use
-## (the written ones and the set's own). Import them (the editor does) before create_material().
+## (the written ones and the set's own; the set's own albedo, normal and ORM maps get the import
+## settings of a 3D material, see [method _use_in_3d]). Import them (the editor does) before
+## create_material().
 static func prepare(texture_set: Dictionary) -> Dictionary:
 	var files: Dictionary = texture_set["files"]
 	var base := String(texture_set["dir"]).path_join(texture_set["name"])
 	var use := {}
 	if files.has("albedo"):
 		use["albedo"] = files["albedo"]
+		_use_in_3d(files["albedo"], false)
 	if files.has("height"):
 		var dst := base + "_gads_height.exr"
 		if not GADSHeightTools.convert_to_half_exr(files["height"], dst).is_empty():
@@ -169,8 +177,10 @@ static func prepare(texture_set: Dictionary) -> Dictionary:
 				use["normal"] = dst
 		else:
 			use["normal"] = files["normal"]
+			_use_in_3d(files["normal"], true)
 	if files.has("orm"):
 		use["orm"] = files["orm"]
+		_use_in_3d(files["orm"], false)
 	elif files.has("rma") or files.has("mask") or files.has("roughness") or files.has("gloss") or files.has("ao") or files.has("metallic"):
 		var orm: Image
 		if files.has("rma"):
@@ -267,6 +277,20 @@ static func repack_orm(path: String, layout: String) -> Image:
 	return Image.create_from_data(img.get_width(), img.get_height(), false, Image.FORMAT_RGB8, data)
 
 
+## Gives a source texture of the set the import settings a 3D material wants (as [method
+## _write_import]) when it has none yet or still has Godot's defaults (no mipmaps, detection of
+## 3D use on): otherwise the first preview drawing it in 3D re-imports it later, and the
+## material starts out without mipmaps. A texture imported with settings of its own keeps them.
+static func _use_in_3d(path: String, normal_map: bool) -> void:
+	var existing := ConfigFile.new()
+	if existing.load(path + ".import") == OK:
+		if existing.get_value("remap", "importer", "texture") != "texture":
+			return
+		if int(existing.get_value("params", "detect_3d/compress_to", 1)) == 0 or bool(existing.get_value("params", "mipmaps/generate", false)):
+			return
+	_write_import(path, normal_map)
+
+
 ## Import settings for a written texture: VRAM compressed with mipmaps (a normal map as one).
 static func _write_import(path: String, normal_map: bool) -> void:
 	var cfg := ConfigFile.new()
@@ -287,7 +311,7 @@ static func _write_import(path: String, normal_map: bool) -> void:
 ## [param save_path] when it is not empty. The height map from prepare() is remapped already, so
 ## the height remap stays (0, 1).
 static func create_material(use: Dictionary, params: Dictionary, mapping := GADSMaterials.Mapping.UV,
-		quality := GADSMaterials.Quality.POM_SELF_SHADOW, save_path := "") -> ShaderMaterial:
+		quality := GADSMaterials.Quality.POM_SELF_SHADOW, save_path := "", surface := "") -> ShaderMaterial:
 	var textures := {}
 	for role: String in ["albedo", "normal", "orm", "height"]:
 		if use.has(role):
@@ -306,6 +330,9 @@ static func create_material(use: Dictionary, params: Dictionary, mapping := GADS
 	if not textures.has("orm"):
 		p["ao_strength"] = 0.0
 	var material := GADSMaterials.create(mapping, textures, p, quality)
+	# A surface preset sets how the relief is drawn; the chosen depth stays.
+	if not surface.is_empty() and GADSSurfacePresets.apply(material, surface, Vector2(params.get("texture_size_m", Vector2(2, 2))).x):
+		material.set_shader_parameter("height_m", p["height_m"])
 	if not save_path.is_empty():
 		material.resource_name = save_path.get_file().get_basename()
 		var err := ResourceSaver.save(material, save_path)

@@ -187,6 +187,13 @@ All notable changes to this project are documented here. The format follows
   collision near the player): a small HeightMapShape3D following a target, sampled from the
   terrain's or field's `get_surface_height()`, only the new rows and columns as it moves; feet
   stand on the stones instead of sinking to the smooth ground collision.
+- **Surface detection for texture sets** (spec §128, "Surface detected: Rock"): Create Material
+  from Selected Textures and the import offer show the surface preset a set's name suggests
+  (`GADSSurfacePresets.detect()`: rocks_ground is Terrain, Rock_Cliff Cliff, brick_wall Brick),
+  propose its depth and mapping, and create the material with it (a Surface menu changes it).
+  The set's own albedo, normal and ORM maps get a 3D material's import settings when they still
+  have Godot's defaults, so they have mipmaps from the start and are not re-imported when a
+  preview first draws them in 3D (which could collide with the Create import).
 - **Scripting API** (spec §88/§90): `GADS.set_quality(GADS.QUALITY_HIGH)` / `get_quality()` /
   `QUALITY_NAMES` for a graphics settings menu (adds a GADSManager when there is none, changes
   apply at runtime), and `GADS.surface(node)`, a `GADSSurface` with `displacement_strength` in

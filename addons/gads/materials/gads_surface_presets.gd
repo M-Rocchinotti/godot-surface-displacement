@@ -41,12 +41,12 @@ const PRESETS := {
 			"edge_amount": 0.25, "roughness_scale": 0.9, "triplanar_sharpness": 6.0},
 		"pattern": "ridged", "profile": "rock"},
 	"asphalt": {"label": "Asphalt", "mapping": M.WORLD, "quality": Q.POM, "depth_per_m": 0.002,
-		"params": {"height_center": 0.5, "pom_steps_scale": 0.5, "self_shadow_strength": 0.4, "cavity_amount": 0.2,
+		"params": {"height_center": 0.0, "pom_steps_scale": 0.5, "self_shadow_strength": 0.4, "cavity_amount": 0.2,
 			"edge_amount": 0.0, "roughness_scale": 0.9, "weather_response": 1.0},
 		"pattern": "noise", "pattern_params": {"scale": 16, "octaves": 4}, "colors": [Color(0.08, 0.08, 0.085), Color(0.24, 0.24, 0.25)],
 		"profile": "terrain"},
 	"mud": {"label": "Mud", "mapping": M.WORLD, "quality": Q.POM_SELF_SHADOW, "depth_per_m": 0.02,
-		"params": {"height_center": 0.5, "pom_steps_scale": 1.0, "self_shadow_strength": 0.7, "cavity_amount": 0.3,
+		"params": {"height_center": 0.0, "pom_steps_scale": 1.0, "self_shadow_strength": 0.7, "cavity_amount": 0.3,
 			"edge_amount": 0.0, "roughness_scale": 0.75, "wetness": 0.35, "puddle_level": 0.2},
 		"pattern": "billow", "colors": [Color(0.16, 0.12, 0.08), Color(0.36, 0.28, 0.2)], "profile": "terrain"},
 	"snow": {"label": "Snow", "mapping": M.WORLD, "quality": Q.POM_SELF_SHADOW, "depth_per_m": 0.015,
@@ -76,6 +76,42 @@ const PRESETS := {
 			"edge_amount": 0.0, "roughness_scale": 0.6},
 		"pattern": "scales", "profile": "character"},
 }
+
+
+## Name words that tell the kind of surface, in the order they are tried (a cliff before rock,
+## ground words before rock: "rocks_ground" is ground).
+const DETECT_WORDS := [
+	["cliff", ["cliff", "rockface", "crag"]],
+	["brick", ["brick", "bricks", "masonry"]],
+	["concrete", ["concrete", "cement", "plaster", "stucco"]],
+	["asphalt", ["asphalt", "tarmac", "road"]],
+	["snow", ["snow", "ice", "frost"]],
+	["sand", ["sand", "beach", "desert", "dune", "dunes"]],
+	["mud", ["mud", "dirt", "soil", "clay", "muddy"]],
+	["wood", ["wood", "wooden", "bark", "plank", "planks", "timber", "log", "tree"]],
+	["metal_damage", ["metal", "rust", "rusty", "steel", "iron", "scratched", "painted"]],
+	["organic", ["scales", "skin", "leather", "reptile", "organic", "flesh"]],
+	["terrain", ["ground", "gravel", "pebbles", "forest", "grass", "terrain", "floor", "cobblestone", "cobble", "path"]],
+	["rock", ["rock", "rocks", "rocky", "stone", "stones", "boulder", "boulders"]],
+]
+
+
+## The preset a texture set's or material's name suggests ("rocks_ground_05": terrain,
+## "Rock_Cliff": cliff, "brick_wall_001": brick), or "" when no word tells.
+static func detect(name: String) -> String:
+	var words := PackedStringArray()
+	for w in name.to_lower().replace("-", "_").replace(" ", "_").replace(".", "_").split("_", false):
+		words.append(w)
+	for entry: Array in DETECT_WORDS:
+		for w in words:
+			if w in entry[1]:
+				return entry[0]
+	return ""
+
+
+## The relief depth per metre of texture preset [param id] gives (0 for an unknown id).
+static func depth_per_metre(id: String) -> float:
+	return float((PRESETS.get(id, {}) as Dictionary).get("depth_per_m", 0.0))
 
 
 ## The preset ids, in menu order.
@@ -110,12 +146,15 @@ static func tile_of(material: ShaderMaterial, uv_tile_m := 2.0) -> float:
 
 ## Sets [param material]'s displacement to preset [param id] (see the class description): its
 ## parameters, height_m for its texture size (UV mapping: [param uv_tile_m] metres per repeat) and
-## parallax variant; textures and mapping stay. Returns false for an unknown id or a material
-## that is not a GADS material.
+## parallax variant; textures and mapping stay. World-planar materials keep height_center 0 (the
+## ground convention the near-camera field relies on). Returns false for an unknown id or a
+## material that is not a GADS material.
 static func apply(material: ShaderMaterial, id: String, uv_tile_m := 2.0) -> bool:
 	if not PRESETS.has(id) or not GADSMaterials.is_gads_material(material):
 		return false
 	var values := params_for(id, tile_of(material, uv_tile_m))
+	if GADSMaterials.parse(material.shader).get("mapping", M.UV) == M.WORLD:
+		values["height_center"] = 0.0
 	for key: String in values:
 		material.set_shader_parameter(key, values[key])
 	GADSMaterials.set_quality(material, PRESETS[id]["quality"])

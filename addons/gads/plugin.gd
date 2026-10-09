@@ -550,8 +550,21 @@ func materials_dialog(sets: Array, title: String, intro := "") -> ConfirmationDi
 			n.modulate = Color(1, 1, 1, 0.7)
 			box.add_child(n)
 		var grid := GridContainer.new()
-		grid.columns = 6
+		grid.columns = 8
 		box.add_child(grid)
+		# The kind of surface its name suggests (Surface detected: Rock): how the relief is drawn.
+		var surface_label := Label.new()
+		surface_label.text = "Surface"
+		grid.add_child(surface_label)
+		var surface := OptionButton.new()
+		surface.name = "Surface"
+		surface.add_item("None")
+		var ids := GADSSurfacePresets.ids()
+		for id in ids:
+			surface.add_item(GADSSurfacePresets.label(id))
+		surface.select(ids.find(rec["surface"]) + 1)
+		surface.tooltip_text = "The surface preset: depth per metre of texture, inward / outward relief, steps, self-shadow, cavity and edge shading (GADSSurfacePresets). Detected from the name."
+		grid.add_child(surface)
 		var size := _spin(grid, "Texture size (m)", 0.05, 100.0, 0.05, rec["texture_size_m"].x)
 		var depth := _spin(grid, "Relief depth (cm)", 0.1, 100.0, 0.1, rec["height_m"] * 100.0)
 		var mapping_label := Label.new()
@@ -560,15 +573,26 @@ func materials_dialog(sets: Array, title: String, intro := "") -> ConfirmationDi
 		var mapping := OptionButton.new()
 		for m in ["UV", "World-planar (ground)", "Triplanar"]:
 			mapping.add_item(m)
+		mapping.select(rec["mapping"])
 		grid.add_child(mapping)
-		# The depth follows the texture size until it is edited.
-		size.value_changed.connect(func(v: float) -> void: depth.value = snappedf(GADSTextureSet.DEPTH_PER_METRE * v * 100.0, 0.1))
-		rows.append({"set": s, "size": size, "depth": depth, "mapping": mapping})
+		# The depth follows the texture size and the surface until it is edited.
+		var follow := func(_v: Variant = null) -> void:
+			var id: String = ids[surface.selected - 1] if surface.selected > 0 else ""
+			var per_m := GADSSurfacePresets.depth_per_metre(id) if not id.is_empty() else GADSTextureSet.DEPTH_PER_METRE
+			depth.value = snappedf(per_m * size.value * 100.0, 0.1)
+		size.value_changed.connect(follow)
+		surface.item_selected.connect(func(i: int) -> void:
+			follow.call()
+			if i > 0:
+				mapping.select(GADSSurfacePresets.PRESETS[ids[i - 1]]["mapping"]))
+		rows.append({"set": s, "size": size, "depth": depth, "mapping": mapping, "surface": surface})
 	dialog.confirmed.connect(func() -> void:
 		var options := []
 		for r: Dictionary in rows:
+			var surface_index := (r["surface"] as OptionButton).selected
 			options.append({"texture_size_m": (r["size"] as SpinBox).value, "height_m": (r["depth"] as SpinBox).value / 100.0,
-				"mapping": (r["mapping"] as OptionButton).selected})
+				"mapping": (r["mapping"] as OptionButton).selected,
+				"surface": GADSSurfacePresets.ids()[surface_index - 1] if surface_index > 0 else ""})
 		create_materials(sets, options)
 		dialog.queue_free())
 	dialog.canceled.connect(dialog.queue_free)
@@ -591,7 +615,7 @@ static func _spin(parent: Control, text: String, lo: float, hi: float, step: flo
 
 
 ## Creates the materials of [param sets] (GADSTextureSet.detect()) with [param options] (per set:
-## {"texture_size_m", "height_m", "mapping"}): writes the prepared textures, imports them and saves
+## {"texture_size_m", "height_m", "mapping", "surface" (a GADSSurfacePresets id, optional)}): writes the prepared textures, imports them and saves
 ## "<name>_gads.tres" next to each set. Returns the material paths.
 func create_materials(sets: Array, options: Array) -> PackedStringArray:
 	_creating += 1
@@ -606,12 +630,13 @@ func _create_materials(sets: Array, options: Array) -> PackedStringArray:
 	var uses := []
 	for s: Dictionary in sets:
 		uses.append(GADSTextureSet.prepare(s))
-	# Import what is new: the written files (*_gads_*, afresh even when an older version was
-	# imported) and source files the editor has not imported yet.
+	# Import every file the materials use: the written ones (*_gads_*, afresh even when an older
+	# version was imported), and the set's own, whose import settings prepare() may have set for
+	# 3D use (a few textures; unchanged ones import quickly).
 	var pending := PackedStringArray()
 	for use: Dictionary in uses:
 		for path: String in use.values():
-			if (path.get_file().contains("_gads_") or not is_imported(path)) and not pending.has(path):
+			if not pending.has(path):
 				pending.append(path)
 	await import_files(pending)
 	for i in sets.size():
@@ -621,7 +646,8 @@ func _create_materials(sets: Array, options: Array) -> PackedStringArray:
 		var size := float(o.get("texture_size_m", 2.0))
 		var params := {"texture_size_m": Vector2(size, size), "height_m": float(o.get("height_m", GADSTextureSet.DEPTH_PER_METRE * size))}
 		var path := String(s["dir"]).path_join("%s_gads.tres" % s["name"])
-		var material := GADSTextureSet.create_material(use, params, int(o.get("mapping", GADSMaterials.Mapping.UV)), GADSMaterials.Quality.POM_SELF_SHADOW, path)
+		var material := GADSTextureSet.create_material(use, params, int(o.get("mapping", GADSMaterials.Mapping.UV)), GADSMaterials.Quality.POM_SELF_SHADOW, path,
+			String(o.get("surface", "")))
 		if material != null and FileAccess.file_exists(path):
 			fs.update_file(path)
 			created.append(path)
@@ -784,10 +810,15 @@ func import_files(paths: PackedStringArray) -> void:
 	var fs := EditorInterface.get_resource_filesystem()
 	var tree := Engine.get_main_loop() as SceneTree
 	await tree.process_frame
-	for i in 1200:
-		if not fs.is_scanning() and not fs.is_importing():
-			break
+	# Wait until the editor has been idle for half a second (at most 20 s): it starts imports of
+	# its own (a texture a preview just drew) a frame after looking idle, and two reimports at once
+	# fail ("Task 'reimport' already exists").
+	var idle_since := Time.get_ticks_msec()
+	var started := idle_since
+	while Time.get_ticks_msec() - idle_since < 500 and Time.get_ticks_msec() - started < 20000:
 		await tree.process_frame
+		if fs.is_scanning() or fs.is_importing():
+			idle_since = Time.get_ticks_msec()
 	var known := PackedStringArray()
 	var unknown := PackedStringArray()
 	for path in paths:

@@ -775,8 +775,11 @@ func test_texture_sets() -> void:
 	check(sets.get("brick", {}).get("normal_dx", false), "a DirectX normal map is recognised")
 	var rec := GADSTextureSet.recommend(ph)
 	print("  recommended %s" % rec)
-	check(is_equal_approx(rec["height_m"], 0.07) and absf(rec["height_remap"].x - 0.2) < 0.03 and absf(rec["height_remap"].y - 0.8) < 0.03
-		and (rec["notes"] as Array).size() == 1, "7 cm for a 2 m texture, the height remap from its percentiles, a note on its 8 bits")
+	check(rec["surface"] == "terrain" and rec["mapping"] == GADSMaterials.Mapping.WORLD and is_equal_approx(rec["height_m"], 0.03)
+		and absf(rec["height_remap"].x - 0.2) < 0.03 and absf(rec["height_remap"].y - 0.8) < 0.03 and (rec["notes"] as Array).size() == 1,
+		"surface detected: Terrain (rocks_ground), so 3 cm for a 2 m texture, world-planar; the height remap from its percentiles, a note on its 8 bits")
+	var plain := GADSTextureSet.recommend({"name": "moss", "files": {}})
+	check(plain["surface"] == "" and is_equal_approx(plain["height_m"], 0.07), "no surface in the name: 3.5 % of the texture size (7 cm for 2 m)")
 	var orm := GADSTextureSet.pack_orm(ph["files"]["ao"], ph["files"]["roughness"], "")
 	var px := orm.get_pixel(3, 3) if orm != null else Color()
 	check(orm != null and absf(px.r - 0.5) < 0.01 and absf(px.g - 0.25) < 0.01 and px.b == 0.0, "ORM packs AO, roughness and metallic (none: 0)")
@@ -801,6 +804,10 @@ func test_texture_sets() -> void:
 	check(exr != null and exr.get_format() == Image.FORMAT_RH and exr.get_pixel(0, 0).r < 0.02 and exr.get_pixel(15, 0).r > 0.98
 		and String(use.get("orm", "")).ends_with("_gads_orm.png") and FileAccess.file_exists(String(use.get("orm", "")) + ".import"),
 		"prepare writes the remapped 16-bit height and the packed ORM with their import settings")
+	var albedo_import := ConfigFile.new()
+	albedo_import.load(String(use.get("albedo", "")) + ".import")
+	check(bool(albedo_import.get_value("params", "mipmaps/generate", false)) and int(albedo_import.get_value("params", "detect_3d/compress_to", 1)) == 0,
+		"the set's own albedo gets a 3D material's import settings (mipmaps, no later re-import on first 3D use)")
 	for f in DirAccess.get_files_at(dir):
 		DirAccess.remove_absolute(ProjectSettings.globalize_path(dir.path_join(f)))
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(dir))
@@ -1016,6 +1023,15 @@ func test_surface_presets() -> void:
 		and GADSMaterials.parse(own.shader)["quality"] == GADSMaterials.Quality.POM_SELF_SHADOW
 		and is_equal_approx(float(own.get_shader_parameter("metallic_scale")), 1.0) and is_equal_approx(float(own.get_shader_parameter("height_m")), 0.008),
 		"apply() keeps the textures and mapping and sets the rest (Metal Damage: metallic, 8 mm for a 2 m repeat)")
+	var names := {"rocks_ground_05": "terrain", "Rock_Cliff_01": "cliff", "brick_wall_001": "brick", "Rock": "rock", "Moss": "",
+		"Metal_Plate_Rusty": "metal_damage", "forest_ground_04": "terrain", "SnowField": "", "snow_02": "snow", "bark_willow": "wood"}
+	var detected := true
+	for n: String in names:
+		detected = detected and GADSSurfacePresets.detect(n) == names[n]
+	check(detected, "the surface a name suggests: rocks_ground is Terrain, Rock_Cliff Cliff, brick_wall Brick, Moss nothing")
+	var world := GADSMaterials.create(GADSMaterials.Mapping.WORLD, {}, {"height_m": 0.03, "height_center": 0.0}, GADSMaterials.Quality.POM)
+	GADSSurfacePresets.apply(world, "brick")
+	check(float(world.get_shader_parameter("height_center")) == 0.0, "world-planar ground keeps height_center 0 whatever the preset")
 	check(GADSSurfacePresets.profile_for("cliff").quality == GADSMeshInstance3D.Quality.HIGH and GADSSurfacePresets.profile_for("brick").lock_borders
 		and not GADSSurfacePresets.profile_for("organic").geometry and not GADSSurfacePresets.apply(own, "castle"),
 		"bake profiles: Cliff as rock, Brick as a wall kit, Organic parallax only")
