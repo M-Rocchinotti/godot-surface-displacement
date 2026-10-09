@@ -180,7 +180,9 @@ MUTATIONS = [
      [("bake", "staleness")]),
     ("occluders above the surface", "terrain occluders raised instead of lowered: they would hide visible ground",
      [(TERRAIN, "			points.append(verts[z * n + x] - Vector3(0, drop, 0))", "			points.append(verts[z * n + x] + Vector3(0, drop, 0))")],
-     [("terrain", "occluders")]),
+     # With the native library loaded the terrain builds its occluders natively; the GDScript
+     # chunk builder (without it) is held to the native one's output.
+     [("terrain", "occluders,native_chunks")]),
     ("field lattice on the CPU", "the field's lattice mesh has real positions, which a navigation bake takes for ground",
      [(FIELD, "				positions.append(Vector3.ZERO)", "				positions.append(Vector3(i * step, 0.0, j * step))")],
      [("terrain", "navigation")]),
@@ -287,7 +289,9 @@ MUTATIONS = [
      [("render", "deformation")]),
     ("terrain skirts too shallow", "skirts as deep as half the largest LOD error leave gaps between chunks",
      [(TERRAIN, "	var skirt := 2.0 * largest + _spacing * 0.05 + 0.01", "	var skirt := 0.5 * largest")],
-     [("terrain", "chunk_lods")]),
+     # Natively built chunks (the library loaded) do not run this line; the GDScript chunk builder
+     # is held to the native one's output.
+     [("terrain", "chunk_lods,native_chunks")]),
     ("terrain ground data off the vertices", "the detail field's ground texels sit half a texel off the terrain's vertices",
      [(TERRAIN, "* texel - Vector2(texel, texel) * 0.5 + Vector2(gp.x, gp.z), texel)", "* texel + Vector2(gp.x, gp.z), texel)")],
      [("terrain", "ground_data")]),
