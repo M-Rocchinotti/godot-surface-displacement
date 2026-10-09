@@ -560,6 +560,70 @@ func test_gdscript_fallback() -> void:
 		GADSMaterials.Quality.POM)
 	var refused := bake_with(plane(), vector, {"max_error": 0.001})
 	check(refused.mesh == null and refused.error.contains("native library"), "vector displacement says it needs the native library (%s)" % refused.error)
+	# Skinned: bone weights interpolated linearly across a strip (bones 0 and 1), summing to 1.
+	var skin_arrays := plane().get_mesh_arrays()
+	var sv0: PackedVector3Array = skin_arrays[Mesh.ARRAY_VERTEX]
+	var sbones := PackedInt32Array()
+	var sweights := PackedFloat32Array()
+	for q in sv0:
+		var right := (q.x + 1.0) * 0.5
+		sbones.append_array([0, 1, 0, 0])
+		sweights.append_array([1.0 - right, right, 0.0, 0.0])
+	skin_arrays[Mesh.ARRAY_BONES] = sbones
+	skin_arrays[Mesh.ARRAY_WEIGHTS] = sweights
+	var skinned := ArrayMesh.new()
+	skinned.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, skin_arrays)
+	var skin_bake := bake_with(skinned, mat, {"max_error": 0.002})
+	var skin_worst := INF
+	var skin_sums := INF
+	var skin_count := 0
+	if skin_bake.mesh != null:
+		var out := skin_bake.mesh.surface_get_arrays(0)
+		var ov: PackedVector3Array = out[Mesh.ARRAY_VERTEX]
+		var ob: PackedInt32Array = out[Mesh.ARRAY_BONES] if out[Mesh.ARRAY_BONES] != null else PackedInt32Array()
+		var ow: PackedFloat32Array = out[Mesh.ARRAY_WEIGHTS] if out[Mesh.ARRAY_WEIGHTS] != null else PackedFloat32Array()
+		var rest: PackedFloat32Array = out[Mesh.ARRAY_CUSTOM0]
+		if ob.size() == ov.size() * 4:
+			skin_worst = 0.0
+			skin_sums = 0.0
+			for i in ov.size():
+				var right := 0.0
+				var total := 0.0
+				for k in 4:
+					total += ow[i * 4 + k]
+					if ob[i * 4 + k] == 1:
+						right += ow[i * 4 + k]
+				skin_worst = maxf(skin_worst, absf(right - (rest[i * 4] + 1.0) * 0.5))
+				skin_sums = maxf(skin_sums, absf(total - 1.0))
+			skin_count = ov.size()
+	check(skin_count > 100 and skin_worst < 1e-4 and skin_sums < 1e-4,
+		"a skinned mesh bakes with its bone weights interpolated and summing to 1 (%d vertices, within %.6f) (%s)" % [skin_count, skin_worst, skin_bake.error])
+	# Blend shapes: each baked vertex moves by the shape's offset interpolated from the source.
+	var shape_arrays := plane().get_mesh_arrays()
+	var base_v: PackedVector3Array = shape_arrays[Mesh.ARRAY_VERTEX]
+	var lifted := base_v.duplicate()
+	for i in lifted.size():
+		lifted[i].y += 0.25 * (base_v[i].x + 1.0)
+	var shape := []
+	shape.resize(Mesh.ARRAY_MAX)
+	shape[Mesh.ARRAY_VERTEX] = lifted
+	shape[Mesh.ARRAY_NORMAL] = shape_arrays[Mesh.ARRAY_NORMAL]
+	shape[Mesh.ARRAY_TANGENT] = shape_arrays[Mesh.ARRAY_TANGENT]
+	var morph := ArrayMesh.new()
+	morph.add_blend_shape("lift")
+	morph.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, shape_arrays, [shape])
+	var morph_bake := bake_with(morph, mat, {"max_error": 0.002})
+	var shape_worst := INF
+	if morph_bake.mesh != null and morph_bake.mesh.get_blend_shape_count() == 1:
+		var mb := morph_bake.mesh.surface_get_arrays(0)
+		var mshapes := morph_bake.mesh.surface_get_blend_shape_arrays(0)
+		var bv: PackedVector3Array = mb[Mesh.ARRAY_VERTEX]
+		var msv: PackedVector3Array = mshapes[0][Mesh.ARRAY_VERTEX]
+		var mrest: PackedFloat32Array = mb[Mesh.ARRAY_CUSTOM0]
+		shape_worst = 0.0
+		for i in bv.size():
+			shape_worst = maxf(shape_worst, (msv[i] - bv[i]).distance_to(Vector3(0, 0.25 * (mrest[i * 4] + 1.0), 0)))
+	check(shape_worst < 1e-4, "a mesh with a blend shape keeps it, each vertex moved by the interpolated offset (within %.4f mm) (%s)" % [shape_worst * 1000.0, morph_bake.error])
 	GADSMeshBaker.force_gdscript = false
 
 

@@ -7,17 +7,18 @@ extends RefCounted
 ## edge), in rounds until nothing is left to split or the triangle budget is reached; a triangle
 ## splits into two, three or four as its edges are split, so neighbours always match. Relief is
 ## evaluated once per welded position (UV seams and hard edges do not open), along the welded
-## positions' averaged normals (or the axis, for world-planar materials). Not supported here:
-## vector displacement, blend shapes, skinned meshes, clusters, view-dependent tessellation and
-## curvature-aware subdivision (bakes that need them report it).
+## positions' averaged normals (or the axis, for world-planar materials). Skinned meshes keep
+## their bone weights and blend shapes their offsets, both carried into new vertices as the native
+## tessellator does. Not supported here: vector displacement, clusters, view-dependent
+## tessellation and curvature-aware subdivision (bakes that need them report it).
 
-const VERSION := "gd-1"
+const VERSION := "gd-2"
 ## Longer edges (in main-map texels) are split whatever the samples say: a bump narrower than
 ## the samples' spacing on a long edge is found as the edges shorten.
 const MAX_EDGE_TEXELS := 32.0
 
 var _maps: Array[Dictionary] = [] # {"w", "h", "data": PackedFloat32Array (red channel)}
-var _surfaces: Array[Dictionary] = [] # {"arrays", "d"}
+var _surfaces: Array[Dictionary] = [] # {"arrays", "d", "dp", "dn" (blend shape offsets per source vertex)}
 var _xform := Transform3D.IDENTITY
 var _offset := {} # the sculpt map, as _maps' entries
 var _settings := {}
@@ -40,14 +41,38 @@ func add_vector_map(_image: Image) -> Array:
 	return [-1, -1, -1]
 
 
-func set_blend_shapes(_surface: int, _arrays: Array, _relative: bool) -> void:
-	_unsupported = "blend shapes"
+## Blend shapes of surface [param surface] (as Mesh.surface_get_blend_shape_arrays(); positions
+## absolute unless [param relative]): kept as offsets from the source vertices.
+func set_blend_shapes(surface: int, arrays: Array, relative: bool) -> void:
+	if surface < 0 or surface >= _surfaces.size():
+		return
+	var base: PackedVector3Array = _surfaces[surface]["arrays"][Mesh.ARRAY_VERTEX]
+	var base_n: Variant = _surfaces[surface]["arrays"][Mesh.ARRAY_NORMAL]
+	var dp: Array[PackedVector3Array] = []
+	var dn: Array[PackedVector3Array] = []
+	for a: Array in arrays:
+		var sp: PackedVector3Array = a[Mesh.ARRAY_VERTEX] if a.size() > Mesh.ARRAY_VERTEX and a[Mesh.ARRAY_VERTEX] is PackedVector3Array else PackedVector3Array()
+		var sn: PackedVector3Array = a[Mesh.ARRAY_NORMAL] if a.size() > Mesh.ARRAY_NORMAL and a[Mesh.ARRAY_NORMAL] is PackedVector3Array else PackedVector3Array()
+		var has_normals := false
+		for n in sn:
+			has_normals = has_normals or n.length_squared() > 0.0
+		var op := PackedVector3Array()
+		var on := PackedVector3Array()
+		op.resize(base.size())
+		on.resize(base.size())
+		for i in base.size():
+			var pos := sp[i] if i < sp.size() else (Vector3.ZERO if relative else base[i])
+			op[i] = pos if relative else pos - base[i]
+			if has_normals and i < sn.size():
+				on[i] = sn[i] if relative else sn[i] - ((base_n as PackedVector3Array)[i] if base_n != null and i < (base_n as PackedVector3Array).size() else Vector3.ZERO)
+		dp.append(op)
+		dn.append(on)
+	_surfaces[surface]["dp"] = dp
+	_surfaces[surface]["dn"] = dn
 
 
 func add_surface(arrays: Array, displacement: Dictionary) -> void:
-	if arrays[Mesh.ARRAY_BONES] != null and not (arrays[Mesh.ARRAY_BONES] as PackedInt32Array).is_empty():
-		_unsupported = "skinned meshes"
-	_surfaces.append({"arrays": arrays, "d": displacement})
+	_surfaces.append({"arrays": arrays, "d": displacement, "dp": [], "dn": []})
 
 
 func set_transform(xform: Transform3D) -> void:
@@ -302,6 +327,12 @@ func run() -> bool:
 		var col: Variant = arrays[Mesh.ARRAY_COLOR]
 		var idx: Variant = arrays[Mesh.ARRAY_INDEX]
 		var indices := PackedInt32Array(idx) if idx != null else PackedInt32Array(range(pos.size()))
+		var bones: Variant = arrays[Mesh.ARRAY_BONES]
+		var weights: Variant = arrays[Mesh.ARRAY_WEIGHTS]
+		var bone_count := 0
+		if bones is PackedInt32Array and weights is PackedFloat32Array and not (weights as PackedFloat32Array).is_empty() and pos.size() > 0:
+			bone_count = mini((weights as PackedFloat32Array).size() / pos.size(), 8)
+		var shaped := not (s["dp"] as Array).is_empty()
 		var verts: Array[Dictionary] = []
 		for i in pos.size():
 			var key := Vector3i((pos[i] / weld).round())
@@ -313,6 +344,17 @@ func run() -> bool:
 				"uv2": (uv2 as PackedVector2Array)[i] if uv2 != null and i < (uv2 as PackedVector2Array).size() else Vector2.ZERO,
 				"c": (col as PackedColorArray)[i] if col != null and i < (col as PackedColorArray).size() else Color.WHITE,
 				"w": wid_of[key], "level": 0}
+			if bone_count > 0:
+				var sk := {}
+				for k in bone_count:
+					var wk: float = (weights as PackedFloat32Array)[i * bone_count + k]
+					if wk > 0.0:
+						var bk: int = (bones as PackedInt32Array)[i * bone_count + k]
+						sk[bk] = float(sk.get(bk, 0.0)) + wk
+				v["sk"] = sk
+				v["skn"] = bone_count
+			if shaped:
+				v["bl"] = {i: 1.0}
 			verts.append(v)
 		var tris := PackedInt32Array()
 		for t in range(0, indices.size() - 2, 3):
@@ -329,7 +371,8 @@ func run() -> bool:
 					n = -face.normalized() # Godot's front faces wind clockwise
 				welded[verts[k]["w"]]["dir"] += (normal_basis * n).normalized()
 		source_triangles += tris.size() / 3
-		meshes.append({"verts": verts, "tris": tris, "d": s["d"], "has_uv": uv != null, "has_uv2": uv2 != null, "has_color": col != null})
+		meshes.append({"verts": verts, "tris": tris, "d": s["d"], "has_uv": uv != null, "has_uv2": uv2 != null, "has_color": col != null,
+			"bone_count": bone_count, "dp": s["dp"], "dn": s["dn"]})
 	# Open edges (one triangle on them, counted on welded positions) for lock_borders.
 	var edge_use := {}
 	for m in meshes:
@@ -547,6 +590,55 @@ func run() -> bool:
 			arrays[Mesh.ARRAY_COLOR] = colors
 		arrays[Mesh.ARRAY_INDEX] = tris
 		arrays[Mesh.ARRAY_TANGENT] = _tangents(positions, normals, uvs if m["has_uv"] else PackedVector2Array(), tris)
+		var bone_count: int = m["bone_count"]
+		if bone_count > 0:
+			# The strongest influences first (mixing keeps them sorted), padded with weight 0.
+			var out_bones := PackedInt32Array()
+			var out_weights := PackedFloat32Array()
+			out_bones.resize(count * bone_count)
+			out_weights.resize(count * bone_count)
+			for i in count:
+				var sk: Dictionary = verts[i].get("sk", {})
+				var k := 0
+				for b: int in sk:
+					if k >= bone_count:
+						break
+					out_bones[i * bone_count + k] = b
+					out_weights[i * bone_count + k] = sk[b]
+					k += 1
+			arrays[Mesh.ARRAY_BONES] = out_bones
+			arrays[Mesh.ARRAY_WEIGHTS] = out_weights
+		var dp: Array = m["dp"]
+		if not dp.is_empty():
+			# Each blend shape: the baked vertex moved by the shape's offset there (the blend of the
+			# source vertices' offsets), its normal turned by theirs; after the Mesh arrays.
+			var shapes := []
+			var dn: Array = m["dn"]
+			for sh in dp.size():
+				var offsets: PackedVector3Array = dp[sh]
+				var turns: PackedVector3Array = dn[sh]
+				var sv := PackedVector3Array()
+				var sn := PackedVector3Array()
+				sv.resize(count)
+				sn.resize(count)
+				for i in count:
+					var o := Vector3.ZERO
+					var t := Vector3.ZERO
+					var bl: Dictionary = verts[i].get("bl", {})
+					for src: int in bl:
+						if src < offsets.size():
+							o += offsets[src] * float(bl[src])
+							t += turns[src] * float(bl[src])
+					sv[i] = positions[i] + o
+					var n := normals[i] + t
+					sn[i] = n.normalized() if not n.is_zero_approx() else normals[i]
+				var a := []
+				a.resize(Mesh.ARRAY_MAX)
+				a[Mesh.ARRAY_VERTEX] = sv
+				a[Mesh.ARRAY_NORMAL] = sn
+				a[Mesh.ARRAY_TANGENT] = arrays[Mesh.ARRAY_TANGENT]
+				shapes.append(a)
+			arrays.append(shapes)
 		_out.append(arrays)
 		vertex_count += count
 	_progress = 1.0
@@ -579,6 +671,11 @@ static func _midpoint(verts: Array[Dictionary], mid_of: Dictionary, mid_wid: Dic
 	var va: Dictionary = verts[a]
 	var vb: Dictionary = verts[b]
 	var v := _lerp_vertex(va, vb, 0.5)
+	if va.has("sk") and vb.has("sk"):
+		v["sk"] = _mix_weights(va["sk"], vb["sk"], va["skn"])
+		v["skn"] = va["skn"]
+	if va.has("bl") and vb.has("bl"):
+		v["bl"] = _mix_weights(va["bl"], vb["bl"], 3)
 	var wkey := _edge_key(va["w"], vb["w"])
 	if not mid_wid.has(wkey):
 		mid_wid[wkey] = welded.size()
@@ -588,6 +685,26 @@ static func _midpoint(verts: Array[Dictionary], mid_of: Dictionary, mid_wid: Dic
 	verts.append(v)
 	mid_of[key] = verts.size() - 1
 	return verts.size() - 1
+
+
+## Halfway between two weight sets ({key: weight}, a bone or a source vertex): both at half weight
+## (a key in both adds up), the [param keep] strongest kept (ties: the lower key first, so it does
+## not depend on order), normalised, strongest first. As the native tessellator mixes skins and
+## blend sources.
+static func _mix_weights(x: Dictionary, y: Dictionary, keep: int) -> Dictionary:
+	var sum := {}
+	for d: Dictionary in [x, y]:
+		for k: int in d:
+			sum[k] = float(sum.get(k, 0.0)) + 0.5 * float(d[k])
+	var keys := sum.keys()
+	keys.sort_custom(func(a: int, b: int) -> bool: return sum[a] > sum[b] if sum[a] != sum[b] else a < b)
+	var total := 0.0
+	for i in mini(keep, keys.size()):
+		total += sum[keys[i]]
+	var out := {}
+	for i in mini(keep, keys.size()):
+		out[keys[i]] = sum[keys[i]] / total if total > 0.0 else 0.0
+	return out
 
 
 ## Tangents (xyz, sign) from the UVs, per vertex (MikkTSpace-like accumulation); without UVs any
