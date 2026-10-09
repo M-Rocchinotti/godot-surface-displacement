@@ -5,7 +5,7 @@
 #include "res://addons/gads/render/shaders/gads_core.gdshaderinc"
 
 void vertex() {
-	bool baked = gads_baked > 0.5;
+	bool baked = gads_baked_amount() > 0.5;
 	gads_geom_normal = normalize(MODEL_NORMAL_MATRIX * NORMAL);
 	gads_world_pos = (MODEL_MATRIX * vec4(baked ? CUSTOM0.xyz : VERTEX, 1.0)).xyz;
 	gads_world_normal = baked ? normalize(MODEL_NORMAL_MATRIX * CUSTOM1.xyz) : gads_geom_normal;
@@ -119,7 +119,7 @@ void fragment() {
 	// A baked mesh's geometry already carries the relief; an animated one breathes (pulse).
 #ifdef GADS_LAYERED
 	float up = normalize(gads_world_normal).y;
-	GADS_RELIEF_ARG arg = vec3(gads_baked > 0.5 ? 0.0 : fade * gads_pulse_now() * gads_relief_scale * gads_relief_mask(COLOR), gads_layer_masks.x * gads_slope_band(layer1_slope, up),
+	GADS_RELIEF_ARG arg = vec3(gads_baked_amount() > 0.5 ? 0.0 : fade * gads_pulse_now() * gads_relief_scale * gads_relief_mask(COLOR), gads_layer_masks.x * gads_slope_band(layer1_slope, up),
 			gads_layer_masks.y * gads_slope_band(layer2_slope, up));
 #ifdef GADS_CUSTOM_LAYER_MASKS
 	arg.yz = clamp(gads_custom_layer_masks(arg.yz, gads_world_pos, normalize(gads_world_normal)), 0.0, 1.0);
@@ -132,7 +132,7 @@ void fragment() {
 	GADS_RELIEF_ARG sample_arg = vec3(1.0, arg.yz);
 #else
 	fade *= gads_screen_fade(height_m * gads_relief_scale, view_distance, PROJECTION_MATRIX, VIEWPORT_SIZE.y);
-	GADS_RELIEF_ARG arg = gads_baked > 0.5 ? 0.0 : height_m * fade * gads_pulse_now() * gads_relief_scale * gads_relief_mask(COLOR);
+	GADS_RELIEF_ARG arg = gads_baked_amount() > 0.5 ? 0.0 : height_m * fade * gads_pulse_now() * gads_relief_scale * gads_relief_mask(COLOR);
 	GADS_RELIEF_ARG sample_arg = arg;
 #endif
 	float amp = gads_relief_amp(arg);
@@ -190,7 +190,7 @@ void fragment() {
 	planes_marched = steps_used > 0.0 ? 1.0 : 0.0;
 	vec3 nm;
 	gads_sample_surface(uv_hit, p.ddx, p.ddy, lod, sample_arg, albedo_sum, orm_sum, nm);
-	if (gads_baked > 0.5) {
+	if (gads_baked_amount() > 0.5) {
 		nm = gads_detail_normal(nm, p, uv_hit, sample_arg);
 	}
 	nm = gads_add_detail_normal(nm, uv_hit, p.ddx, p.ddy);
@@ -224,7 +224,7 @@ void fragment() {
 	offset_view = world_to_view * offset_world;
 	vec3 nm;
 	gads_sample_surface(uv_hit, p.ddx, p.ddy, lod, sample_arg, albedo_sum, orm_sum, nm);
-	if (gads_baked > 0.5) {
+	if (gads_baked_amount() > 0.5) {
 		nm = gads_detail_normal(nm, p, uv_hit, sample_arg);
 	}
 	nm = gads_add_detail_normal(nm, uv_hit, p.ddx, p.ddy);
@@ -271,7 +271,7 @@ void fragment() {
 		gads_sample_surface(uv_hit, p.ddx, p.ddy, lod, sample_arg, albedo_p, orm_p, nm);
 		albedo_sum += wa * albedo_p;
 		orm_sum += wa * orm_p;
-		if (gads_baked > 0.5) {
+		if (gads_baked_amount() > 0.5) {
 			nm = gads_detail_normal(nm, p, uv_hit, sample_arg);
 		}
 		nm = gads_add_detail_normal(nm, uv_hit, p.ddx, p.ddy);

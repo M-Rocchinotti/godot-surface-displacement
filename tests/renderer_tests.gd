@@ -28,6 +28,7 @@ func _run() -> void:
 	_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
 	root.add_child(_viewport)
 	await _test_variants()
+	await _test_baked()
 	await _test_depth_write()
 	await _test_deformation()
 	await _test_scenes()
@@ -113,6 +114,51 @@ func _test_variants() -> void:
 		if c.r + c.g + c.b > 0.05:
 			lit += 1
 	check(count == 34 and lit > 20, "all %d surface variants draw (%d lit samples across the row)" % [count, lit])
+
+
+## A baked GADSMeshInstance3D shows its albedo, not the dark parallax path. On the Compatibility
+## renderer the baked flag cannot ride an instance uniform (ignored there), so GADSMeshInstance3D
+## carries it on a per-mesh material (gads_baked_u); this check would fail without that.
+func _test_baked() -> void:
+	print("\n== baked mesh shades on this renderer")
+	if not GADSMeshBaker.is_available():
+		print("  (native library not loaded; skipped)")
+		return
+	var scene := _scene()
+	var sun := DirectionalLight3D.new()
+	sun.rotation_degrees = Vector3(-50, 25, 0)
+	scene.add_child(sun)
+	var cam := Camera3D.new()
+	scene.add_child(cam)
+	cam.look_at_from_position(Vector3(0, 0, 3), Vector3.ZERO)
+	cam.current = true
+	var height := _height(64, func(x: int, y: int) -> float: return 0.5 + 0.5 * sin(x * 0.4) * sin(y * 0.4))
+	var albedo := Image.create(8, 8, false, Image.FORMAT_RGB8)
+	albedo.fill(Color(0.85, 0.85, 0.85)) # bright, so the dark broken path is unambiguous
+	var mat := GADSMaterials.create(GADSMaterials.Mapping.UV,
+		{"height": height, "albedo": ImageTexture.create_from_image(albedo)},
+		{"height_m": 0.05}, GADSMaterials.Quality.POM)
+	var node := GADSMeshInstance3D.new()
+	var plane := PlaneMesh.new()
+	plane.size = Vector2(2, 2)
+	plane.orientation = PlaneMesh.FACE_Z
+	node.source_mesh = plane
+	node.material_override = mat
+	node.quality = GADSMeshInstance3D.Quality.LOW
+	scene.add_child(node)
+	node.bake(true)
+	for i in 10:
+		await process_frame
+	var img := await _capture()
+	var sum := 0.0
+	var n := 0
+	for yy in range(SIZE.y / 2 - 40, SIZE.y / 2 + 40, 6):
+		for xx in range(SIZE.x / 2 - 60, SIZE.x / 2 + 60, 6):
+			sum += img.get_pixel(xx, yy).get_luminance()
+			n += 1
+	var mean := sum / maxf(n, 1)
+	print("  baked plane mean luminance %.3f" % mean)
+	check(node.baked and mean > 0.2, "a baked mesh shows its albedo (not the dark parallax path)")
 
 
 ## A depth-write wall without relief at 5 m and an unshaded red box 0.5 m in front of it: the box

@@ -16,6 +16,12 @@ All notable changes to this project are documented here. The format follows
   triangle budget) or a custom tolerance in metres; locked borders; displacement direction; hard
   edges kept; LODs; optional trimesh or convex collision from a coarser pass of its own, as an
   internal static body. Bakes run on a worker thread with progress and cancel.
+- **Baked and tessellated meshes render on the Compatibility (OpenGL/WebGL) renderer.** That
+  renderer ignores instance shader parameters, so the `gads_baked` flag never reached the shader
+  and baked `GADSMeshInstance3D` surfaces (including runtime view-dependent tessellation) drew
+  dark through the parallax path — visible as a dark cliff in the web export. The flag now also
+  rides a plain `gads_baked_u` uniform on a per-mesh material there (`renderer_tests.gd` checks a
+  baked mesh shows its albedo on every renderer). Forward+ and Mobile are unchanged.
 - **Native library for Android and Web.** The native tessellator (and procedural maps, erosion,
   terrain chunk builder) now ships for Android (arm64 and x86_64) and Web (wasm32, threaded)
   besides Linux x86_64/ARM64 and Windows x86_64, so phones and the browser get full-speed bakes

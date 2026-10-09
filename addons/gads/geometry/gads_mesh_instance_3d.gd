@@ -50,6 +50,9 @@ const QUALITY_PRESETS := {
 	Quality.ULTRA: [0.003, 1500000],
 }
 const BAKED_PARAMETER := &"gads_baked"
+## The plain shader uniform twin of [constant BAKED_PARAMETER], set on a per-node material for the
+## Compatibility (OpenGL/WebGL) renderer, which ignores instance shader parameters.
+const BAKED_U_PARAMETER := &"gads_baked_u"
 ## The instance shader parameter numbering the clusters (the Clusters debug view).
 const CLUSTER_PARAMETER := &"gads_cluster"
 ## Seconds between a streamed bake's distance checks.
@@ -207,6 +210,10 @@ var view_stats := {}
 var _view_baker: GADSMeshBaker
 var _view_mesh: ArrayMesh
 var _static_mesh: Mesh # what mesh was before the first runtime mesh replaced it
+# Compatibility renderer only (see _apply_compat_baked): the material the user set, and a duplicate
+# of it carrying gads_baked_u = 1 for the draws that show baked geometry.
+var _compat_user_material: Material
+var _compat_baked_material: ShaderMaterial
 var _view_eye := Vector3.INF
 var _view_focal := 0.0
 var _view_xform := Transform3D()
@@ -594,8 +601,43 @@ func _apply_state(state: Dictionary) -> void:
 	notify_property_list_changed()
 
 
+## The Compatibility (OpenGL/WebGL) renderer ignores instance shader parameters, so the baked flag
+## cannot ride [constant BAKED_PARAMETER] there. Detected once by the absence of a RenderingDevice.
+static func _instance_uniforms_unsupported() -> bool:
+	return RenderingServer.get_rendering_device() == null
+
+
 func _apply_parameter() -> void:
-	set_instance_shader_parameter(BAKED_PARAMETER, 1.0 if baked or _view_mesh != null else null)
+	var want_baked := baked or _view_mesh != null
+	set_instance_shader_parameter(BAKED_PARAMETER, 1.0 if want_baked else null)
+	# Not in the editor: a saved scene would then embed the duplicated material.
+	if _instance_uniforms_unsupported() and not Engine.is_editor_hint():
+		_apply_compat_baked(want_baked)
+
+
+## Compatibility fallback for [method _apply_parameter]: when this node draws baked geometry, give
+## it a duplicate of its material with the plain [constant BAKED_U_PARAMETER] uniform set, so the
+## shader takes the baked path (no parallax march, textures at the rest position). The parallax
+## fallback and the non-baked source keep the plain material. Clusters inherit material_override.
+func _apply_compat_baked(want_baked: bool) -> void:
+	if material_override != _compat_baked_material:
+		_compat_user_material = material_override
+	if want_baked and _compat_user_material is ShaderMaterial:
+		if _compat_baked_material == null or _compat_baked_material.get_meta(&"gads_src", null) != _compat_user_material:
+			_compat_baked_material = (_compat_user_material as ShaderMaterial).duplicate() as ShaderMaterial
+			_compat_baked_material.set_shader_parameter(BAKED_U_PARAMETER, 1.0)
+			_compat_baked_material.set_meta(&"gads_src", _compat_user_material)
+		if material_override != _compat_baked_material:
+			material_override = _compat_baked_material
+	elif material_override == _compat_baked_material:
+		material_override = _compat_user_material
+
+
+## The material without the baked flag (the parallax fallback and source draws must march).
+func _parallax_material() -> Material:
+	if _instance_uniforms_unsupported() and material_override == _compat_baked_material and _compat_user_material != null:
+		return _compat_user_material
+	return material_override
 
 
 ## A static body (internal child: not saved, not in the scene tree dock) with the baked shape.
@@ -665,7 +707,7 @@ func _update_fallback() -> void:
 		add_child(_fallback, false, Node.INTERNAL_MODE_BACK)
 	_fallback.mesh = source_mesh
 	_share_skin(_fallback)
-	_fallback.material_override = material_override
+	_fallback.material_override = _parallax_material()
 	_fallback.material_overlay = material_overlay
 	for s in get_surface_override_material_count():
 		if s < _fallback.get_surface_override_material_count():

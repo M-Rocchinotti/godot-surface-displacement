@@ -185,15 +185,23 @@ instance uniform float gads_relief_scale = 1.0;
 // Clusters debug view.
 instance uniform float gads_cluster = 0.0;
 instance uniform vec4 gads_tint : source_color = vec4(1.0);
+// A plain-uniform twin of gads_baked for the Compatibility (OpenGL/WebGL) renderer, which ignores
+// instance uniforms: GADSMeshInstance3D sets this (on a per-mesh material) there instead. Use
+// gads_baked_amount() rather than gads_baked so both renderers agree.
+uniform float gads_baked_u = 0.0;
+
+float gads_baked_amount() {
+	return max(gads_baked, gads_baked_u);
+}
 
 // How far the maps have moved (texture tiles) and the relief's depth factor now (see flow_speed,
 // pulse_amount); at rest on a baked mesh, whose geometry cannot follow.
 vec2 gads_flow() {
-	return gads_baked > 0.5 ? vec2(0.0) : flow_speed * TIME;
+	return gads_baked_amount() > 0.5 ? vec2(0.0) : flow_speed * TIME;
 }
 
 float gads_pulse_now() {
-	return gads_baked > 0.5 ? 1.0 : gads_pulse(pulse_amount, pulse_rate);
+	return gads_baked_amount() > 0.5 ? 1.0 : gads_pulse(pulse_amount, pulse_rate);
 }
 
 varying vec3 gads_world_pos;      // where textures are mapped (a baked mesh: the rest position)
