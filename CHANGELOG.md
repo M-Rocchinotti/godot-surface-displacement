@@ -183,6 +183,11 @@ All notable changes to this project are documented here. The format follows
   mappings, detail, layers, masks and sculpt maps; vector displacement, blend shapes, skinning,
   clusters and runtime tessellation still need the native library. Its bakes have their own
   cache key.
+- **Scripting API** (spec §88/§90): `GADS.set_quality(GADS.QUALITY_HIGH)` / `get_quality()` /
+  `QUALITY_NAMES` for a graphics settings menu (adds a GADSManager when there is none, changes
+  apply at runtime), and `GADS.surface(node)`, a `GADSSurface` with `displacement_strength` in
+  metres (this node only, through its relief scale), `relief_scale`, `tint`, `quality` and
+  `set_height_texture()`.
 - **Surface presets** (`GADSSurfacePresets`, spec §100): Brick, Concrete, Rock, Cliff, Asphalt,
   Mud, Snow, Sand, Wood / Bark, Metal Damage, Terrain and Organic, each configuring the
   displacement (depth per metre of texture, inward / outward / both-ways relief, steps and

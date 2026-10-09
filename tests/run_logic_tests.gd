@@ -34,6 +34,7 @@ func _run() -> void:
 	test_procedural()
 	test_height_import()
 	test_surface_presets()
+	await test_scripting_api()
 	await test_adaptive_quality()
 	await test_platform_caps()
 	test_sculpt_brush()
@@ -1018,6 +1019,50 @@ func test_surface_presets() -> void:
 	check(GADSSurfacePresets.profile_for("cliff").quality == GADSMeshInstance3D.Quality.HIGH and GADSSurfacePresets.profile_for("brick").lock_borders
 		and not GADSSurfacePresets.profile_for("organic").geometry and not GADSSurfacePresets.apply(own, "castle"),
 		"bake profiles: Cliff as rock, Brick as a wall kit, Organic parallax only")
+
+
+## GADS and GADSSurface: a node's displacement strength in metres (its relief scale; the shared
+## material keeps its depth), tint, quality and height map; the game's quality level, a
+## GADSManager added when there is none.
+func test_scripting_api() -> void:
+	print("\n== scripting API")
+	var mat := GADSMaterials.create(GADSMaterials.Mapping.UV, {}, {"height_m": 0.03}, GADSMaterials.Quality.POM)
+	var mi := MeshInstance3D.new()
+	mi.mesh = BoxMesh.new()
+	mi.material_override = mat
+	root.add_child(mi)
+	var s := GADS.surface(mi)
+	s.displacement_strength = 0.06
+	check(is_equal_approx(s.relief_scale, 2.0) and is_equal_approx(float(mat.get_shader_parameter("height_m")), 0.03)
+		and is_equal_approx(s.displacement_strength, 0.06) and s.get_material() == mat,
+		"displacement_strength 6 cm on a 3 cm material: this node's relief scale 2, the material unchanged")
+	s.tint = Color(1, 0.5, 0.5)
+	check(GADSMaterials.get_variation(mi)["tint"] == Color(1, 0.5, 0.5) and is_equal_approx(s.relief_scale, 2.0), "a tint keeps the relief scale")
+	s.quality = GADS.QUALITY_OFF
+	var off: bool = GADSMaterials.parse(mat.shader)["quality"] == GADSMaterials.Quality.FLAT and s.quality == GADS.QUALITY_OFF
+	s.quality = GADS.QUALITY_ULTRA
+	check(off and GADSMaterials.parse(mat.shader)["quality"] == GADSMaterials.Quality.POM_SELF_SHADOW and s.quality == GADS.QUALITY_HIGH,
+		"quality Off draws normal mapping, Ultra parallax with self-shadowing")
+	var tex := ImageTexture.create_from_image(Image.create(4, 4, false, Image.FORMAT_RF))
+	s.set_height_texture(tex, 0.05)
+	check(mat.get_shader_parameter("height_texture") == tex and is_equal_approx(float(mat.get_shader_parameter("height_m")), 0.05), "set_height_texture() with a depth")
+	mi.free()
+	check(GADS.QUALITY_NAMES.size() == 5 and GADS.QUALITY_NAMES[GADS.QUALITY_ULTRA] == "Ultra", "five quality names for a settings menu")
+	var existing := GADSManager.find_in(self)
+	GADS.set_quality(GADS.QUALITY_HIGH)
+	await process_frame
+	await process_frame
+	var m := GADSManager.find_in(self)
+	var high: bool = m != null and m.preset == GADSSettings.Preset.HIGH and GADS.get_quality() == GADS.QUALITY_HIGH
+	GADS.set_quality(GADS.QUALITY_LOW)
+	await process_frame
+	check(high and GADS.get_quality() == GADS.QUALITY_LOW and GADS.manager() == m,
+		"GADS.set_quality() adds a GADSManager when there is none and changes its preset at runtime")
+	if m != null:
+		m.preset = GADSSettings.Preset.MEDIUM
+		await process_frame
+		if existing == null:
+			m.free()
 
 
 func test_procedural() -> void:
