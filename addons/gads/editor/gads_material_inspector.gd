@@ -2,7 +2,9 @@
 extends EditorInspectorPlugin
 ## A row at the top of a GADS material's inspector: its mapping, and switches for the quality
 ## (flat, parallax, parallax with self-shadowing), the depth write and silhouette parallax. Each is
-## one undoable change of the variant (the shader) the material uses; its parameters stay.
+## one undoable change of the variant (the shader) the material uses; its parameters stay. The
+## Surface Preset menu sets the displacement of a kind of surface ([GADSSurfacePresets]),
+## undoably, keeping the textures and mapping.
 
 const QUALITY_LABELS := ["Flat (normal map)", "Parallax", "Parallax + self-shadow"]
 const MAPPING_LABELS := ["UV", "World", "Triplanar"]
@@ -52,6 +54,16 @@ class VariantPanel extends VBoxContainer:
 		_silhouette.toggled.connect(set_silhouette)
 		_silhouette.visible = info["mapping"] == GADSMaterials.Mapping.UV and not info["layered"]
 		row.add_child(_silhouette)
+		var preset := OptionButton.new()
+		preset.add_item("Surface Preset...")
+		for id in GADSSurfacePresets.ids():
+			preset.add_item(GADSSurfacePresets.label(id))
+		preset.tooltip_text = "Set how a kind of surface is displaced (depth per metre of texture, inward / outward / both, steps, self-shadow, cavity and edge shading, wetness, roughness), undoable; textures and mapping stay. UV-mapped materials take a 2 m repeat."
+		preset.item_selected.connect(func(i: int) -> void:
+			if i > 0:
+				apply_preset(GADSSurfacePresets.ids()[i - 1])
+			preset.select(0))
+		row.add_child(preset)
 		_refresh()
 
 	func _refresh() -> void:
@@ -73,6 +85,25 @@ class VariantPanel extends VBoxContainer:
 	## Turns silhouette parallax on or off (undoable).
 	func set_silhouette(on: bool) -> void:
 		_change("Set GADS Silhouette", func() -> void: GADSMaterials.set_silhouette(target, on))
+
+	## Sets the target's displacement to surface preset [param id] (undoable).
+	func apply_preset(id: String) -> void:
+		var keys := GADSSurfacePresets.params_for(id, GADSSurfacePresets.tile_of(target)).keys()
+		var before := {}
+		for key: String in keys:
+			before[key] = target.get_shader_parameter(key)
+		var shader_before := target.shader
+		if not GADSSurfacePresets.apply(target, id):
+			return
+		if undo_redo != null:
+			undo_redo.create_action("Apply GADS Surface Preset %s" % GADSSurfacePresets.label(id), UndoRedo.MERGE_DISABLE, target)
+			undo_redo.add_do_property(target, "shader", target.shader)
+			undo_redo.add_undo_property(target, "shader", shader_before)
+			for key: String in keys:
+				undo_redo.add_do_method(target, "set_shader_parameter", key, target.get_shader_parameter(key))
+				undo_redo.add_undo_method(target, "set_shader_parameter", key, before[key])
+			undo_redo.commit_action(false)
+		_refresh()
 
 	func _change(action: String, edit: Callable) -> void:
 		var before := _state()

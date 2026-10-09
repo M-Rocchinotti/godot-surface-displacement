@@ -551,6 +551,12 @@ func _run() -> void:
 	_check(inspector._can_handle(mat) and not inspector._can_handle(StandardMaterial3D.new()) and ss_path.ends_with("gads_uv_pom_ss.gdshader")
 		and sil_path.ends_with("gads_uv_pom_ss_sil.gdshader") and undone_path == ss_path and mat.shader == pom_shader,
 		"the material inspector switches quality and silhouette, undoable (%s, %s)" % [ss_path.get_file(), sil_path.get_file()])
+	panel.apply_preset("metal_damage")
+	var preset_ok := (is_equal_approx(float(mat.get_shader_parameter("metallic_scale")), 1.0) and is_equal_approx(float(mat.get_shader_parameter("height_m")), 0.008)
+		and mat.shader.resource_path.ends_with("gads_uv_pom_ss.gdshader"))
+	mat_history.undo()
+	_check(preset_ok and is_equal_approx(float(GADSMaterials.get_param(mat, "metallic_scale")), 0.0) and is_equal_approx(float(mat.get_shader_parameter("height_m")), 0.03)
+		and mat.shader == pom_shader, "Surface Preset > Metal Damage sets the displacement (8 mm for a 2 m repeat, metallic), undoable")
 	panel.queue_free()
 
 	# 18. Bake Selected VoxelGI (GADS Colours): the data saved next to the scene, undoable.

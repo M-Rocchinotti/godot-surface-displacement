@@ -183,6 +183,13 @@ All notable changes to this project are documented here. The format follows
   mappings, detail, layers, masks and sculpt maps; vector displacement, blend shapes, skinning,
   clusters and runtime tessellation still need the native library. Its bakes have their own
   cache key.
+- **Surface presets** (`GADSSurfacePresets`, spec §100): Brick, Concrete, Rock, Cliff, Asphalt,
+  Mud, Snow, Sand, Wood / Bark, Metal Damage, Terrain and Organic, each configuring the
+  displacement (depth per metre of texture, inward / outward / both-ways relief, steps and
+  variant, self-shadow, cavity and edge shading, wetness, roughness, metalness), the mapping and
+  the bake profile; `create()` makes the material from textures or the preset's procedural
+  pattern, `apply()` keeps a material's textures and mapping; a Surface Preset menu in the GADS
+  material inspector (undoable).
 - **Relief fade by size on screen** (spec §11): `GADSSettings.pom_fade_pixels` (start, end px;
   off by default) fades each material's relief where its depth spans fewer pixels than that, on
   top of the distance fade, so shallow relief stops costing its march near the camera while deep

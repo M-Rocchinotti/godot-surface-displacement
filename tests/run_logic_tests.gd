@@ -33,6 +33,7 @@ func _run() -> void:
 	test_mesh_diagnostics()
 	test_procedural()
 	test_height_import()
+	test_surface_presets()
 	await test_adaptive_quality()
 	await test_platform_caps()
 	test_sculpt_brush()
@@ -976,6 +977,47 @@ func test_height_import() -> void:
 		"Prepare Height Maps keeps a 16-bit PNG's precision (%d levels in the EXR)" % (GADSHeightTools.analyse(back)["levels"] if back != null else 0))
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(exr))
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(exr + ".import"))
+
+
+## GADSSurfacePresets: twelve kinds of surface, each a procedural pattern and a bake profile;
+## depth from the texture's physical size, the relief's direction, the variant and the effects;
+## create() with procedural maps or one's own textures, apply() keeping textures and mapping.
+func test_surface_presets() -> void:
+	print("\n== surface presets")
+	var ids := GADSSurfacePresets.ids()
+	var kinds := GADSProcedural.get_kinds()
+	var complete := ids.size() == 12
+	for id in ids:
+		var preset: Dictionary = GADSSurfacePresets.PRESETS[id]
+		complete = complete and not GADSSurfacePresets.label(id).is_empty() and preset["pattern"] in kinds and GADSSurfacePresets.profile_for(id) != null
+	check(complete, "12 presets, each with a procedural pattern and a bake profile: %s" % ", ".join(ids))
+	check(is_equal_approx(GADSSurfacePresets.params_for("brick", 2.0)["height_m"], 0.024) and is_equal_approx(GADSSurfacePresets.params_for("brick", 4.0)["height_m"], 0.048)
+		and GADSSurfacePresets.params_for("castle").is_empty(), "physical scale: Brick is 2.4 cm on a 2 m tile, 4.8 cm on 4 m")
+	check(GADSSurfacePresets.params_for("brick")["height_center"] == 1.0 and GADSSurfacePresets.params_for("snow")["height_center"] == 0.0
+		and GADSSurfacePresets.params_for("rock")["height_center"] == 0.5, "inward (Brick: mortar sinks), outward (Snow), both ways (Rock)")
+	var made := 0
+	for id in ids:
+		var m := GADSSurfacePresets.create(id, {}, {"size": 64})
+		if m != null and m.get_shader_parameter("height_texture") != null and is_equal_approx(float(m.get_shader_parameter("height_m")), GADSSurfacePresets.params_for(id)["height_m"]):
+			made += 1
+	check(made == ids.size(), "create() makes each from procedural maps (%d of %d)" % [made, ids.size()])
+	var rock := GADSSurfacePresets.create("rock", {}, {"size": 64, "tile_m": 3.0})
+	var info := GADSMaterials.parse(rock.shader)
+	check(info["mapping"] == GADSMaterials.Mapping.TRIPLANAR and info["quality"] == GADSMaterials.Quality.POM_SELF_SHADOW
+		and GADSMaterials.get_param(rock, "texture_size_m") == Vector2(3, 3) and is_equal_approx(float(rock.get_shader_parameter("height_m")), 0.09),
+		"Rock: triplanar with self-shadowing, 9 cm on its 3 m tile")
+	var asphalt := GADSMaterials.parse(GADSSurfacePresets.create("asphalt", {}, {"size": 64}).shader)
+	check(asphalt["mapping"] == GADSMaterials.Mapping.WORLD and asphalt["quality"] == GADSMaterials.Quality.POM, "Asphalt: world-planar, parallax without self-shadowing (cheap)")
+	var albedo := ImageTexture.create_from_image(Image.create(4, 4, false, Image.FORMAT_RGB8))
+	var own := GADSMaterials.create(GADSMaterials.Mapping.UV, {"albedo": albedo}, {"height_m": 0.03}, GADSMaterials.Quality.POM)
+	var applied := GADSSurfacePresets.apply(own, "metal_damage")
+	check(applied and own.get_shader_parameter("albedo_texture") == albedo and GADSMaterials.parse(own.shader)["mapping"] == GADSMaterials.Mapping.UV
+		and GADSMaterials.parse(own.shader)["quality"] == GADSMaterials.Quality.POM_SELF_SHADOW
+		and is_equal_approx(float(own.get_shader_parameter("metallic_scale")), 1.0) and is_equal_approx(float(own.get_shader_parameter("height_m")), 0.008),
+		"apply() keeps the textures and mapping and sets the rest (Metal Damage: metallic, 8 mm for a 2 m repeat)")
+	check(GADSSurfacePresets.profile_for("cliff").quality == GADSMeshInstance3D.Quality.HIGH and GADSSurfacePresets.profile_for("brick").lock_borders
+		and not GADSSurfacePresets.profile_for("organic").geometry and not GADSSurfacePresets.apply(own, "castle"),
+		"bake profiles: Cliff as rock, Brick as a wall kit, Organic parallax only")
 
 
 func test_procedural() -> void:
