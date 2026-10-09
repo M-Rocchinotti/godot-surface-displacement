@@ -4,15 +4,16 @@ importer="texture"
 type="CompressedTexture2D"
 uid="uid://katsy2fjw1qr"
 path.s3tc="res://.godot/imported/rocky_gravel_albedo.jpg-ce7d637a29e4215281f6c7d657857bfb.s3tc.ctex"
+path.etc2="res://.godot/imported/rocky_gravel_albedo.jpg-ce7d637a29e4215281f6c7d657857bfb.etc2.ctex"
 metadata={
-"imported_formats": ["s3tc_bptc"],
+"imported_formats": ["s3tc_bptc", "etc2_astc"],
 "vram_texture": true
 }
 
 [deps]
 
 source_file="res://demo/textures/rocky_gravel/rocky_gravel_albedo.jpg"
-dest_files=["res://.godot/imported/rocky_gravel_albedo.jpg-ce7d637a29e4215281f6c7d657857bfb.s3tc.ctex"]
+dest_files=["res://.godot/imported/rocky_gravel_albedo.jpg-ce7d637a29e4215281f6c7d657857bfb.s3tc.ctex", "res://.godot/imported/rocky_gravel_albedo.jpg-ce7d637a29e4215281f6c7d657857bfb.etc2.ctex"]
 
 [params]
 

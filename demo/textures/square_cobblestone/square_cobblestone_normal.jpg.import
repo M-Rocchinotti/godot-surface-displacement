@@ -4,15 +4,16 @@ importer="texture"
 type="CompressedTexture2D"
 uid="uid://bo63lab7mky7f"
 path.s3tc="res://.godot/imported/square_cobblestone_normal.jpg-417cb2fdbf734ab9b133e2664e553ca2.s3tc.ctex"
+path.etc2="res://.godot/imported/square_cobblestone_normal.jpg-417cb2fdbf734ab9b133e2664e553ca2.etc2.ctex"
 metadata={
-"imported_formats": ["s3tc_bptc"],
+"imported_formats": ["s3tc_bptc", "etc2_astc"],
 "vram_texture": true
 }
 
 [deps]
 
 source_file="res://demo/textures/square_cobblestone/square_cobblestone_normal.jpg"
-dest_files=["res://.godot/imported/square_cobblestone_normal.jpg-417cb2fdbf734ab9b133e2664e553ca2.s3tc.ctex"]
+dest_files=["res://.godot/imported/square_cobblestone_normal.jpg-417cb2fdbf734ab9b133e2664e553ca2.s3tc.ctex", "res://.godot/imported/square_cobblestone_normal.jpg-417cb2fdbf734ab9b133e2664e553ca2.etc2.ctex"]
 
 [params]
 

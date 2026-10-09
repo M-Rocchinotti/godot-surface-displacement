@@ -4,15 +4,16 @@ importer="texture"
 type="CompressedTexture2D"
 uid="uid://bvxcy2t4oalja"
 path.s3tc="res://.godot/imported/gravel_stones_arm.jpg-148612f849df6f737cf626beba7ba095.s3tc.ctex"
+path.etc2="res://.godot/imported/gravel_stones_arm.jpg-148612f849df6f737cf626beba7ba095.etc2.ctex"
 metadata={
-"imported_formats": ["s3tc_bptc"],
+"imported_formats": ["s3tc_bptc", "etc2_astc"],
 "vram_texture": true
 }
 
 [deps]
 
 source_file="res://demo/textures/gravel_stones/gravel_stones_arm.jpg"
-dest_files=["res://.godot/imported/gravel_stones_arm.jpg-148612f849df6f737cf626beba7ba095.s3tc.ctex"]
+dest_files=["res://.godot/imported/gravel_stones_arm.jpg-148612f849df6f737cf626beba7ba095.s3tc.ctex", "res://.godot/imported/gravel_stones_arm.jpg-148612f849df6f737cf626beba7ba095.etc2.ctex"]
 
 [params]
 

@@ -4,15 +4,16 @@ importer="texture"
 type="CompressedTexture2D"
 uid="uid://5reolrb78e0h"
 path.s3tc="res://.godot/imported/rubble_normal.jpg-df4ba073148e442cbec2931d2686b576.s3tc.ctex"
+path.etc2="res://.godot/imported/rubble_normal.jpg-df4ba073148e442cbec2931d2686b576.etc2.ctex"
 metadata={
-"imported_formats": ["s3tc_bptc"],
+"imported_formats": ["s3tc_bptc", "etc2_astc"],
 "vram_texture": true
 }
 
 [deps]
 
 source_file="res://demo/textures/rubble/rubble_normal.jpg"
-dest_files=["res://.godot/imported/rubble_normal.jpg-df4ba073148e442cbec2931d2686b576.s3tc.ctex"]
+dest_files=["res://.godot/imported/rubble_normal.jpg-df4ba073148e442cbec2931d2686b576.s3tc.ctex", "res://.godot/imported/rubble_normal.jpg-df4ba073148e442cbec2931d2686b576.etc2.ctex"]
 
 [params]
 

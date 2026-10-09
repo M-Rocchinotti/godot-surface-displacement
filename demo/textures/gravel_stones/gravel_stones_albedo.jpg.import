@@ -4,15 +4,16 @@ importer="texture"
 type="CompressedTexture2D"
 uid="uid://b4q5fqcq5gd2o"
 path.s3tc="res://.godot/imported/gravel_stones_albedo.jpg-9882ce30ca1ecb308830d6b3c72a3ffb.s3tc.ctex"
+path.etc2="res://.godot/imported/gravel_stones_albedo.jpg-9882ce30ca1ecb308830d6b3c72a3ffb.etc2.ctex"
 metadata={
-"imported_formats": ["s3tc_bptc"],
+"imported_formats": ["s3tc_bptc", "etc2_astc"],
 "vram_texture": true
 }
 
 [deps]
 
 source_file="res://demo/textures/gravel_stones/gravel_stones_albedo.jpg"
-dest_files=["res://.godot/imported/gravel_stones_albedo.jpg-9882ce30ca1ecb308830d6b3c72a3ffb.s3tc.ctex"]
+dest_files=["res://.godot/imported/gravel_stones_albedo.jpg-9882ce30ca1ecb308830d6b3c72a3ffb.s3tc.ctex", "res://.godot/imported/gravel_stones_albedo.jpg-9882ce30ca1ecb308830d6b3c72a3ffb.etc2.ctex"]
 
 [params]
 
