@@ -68,3 +68,7 @@ gads_pom_fade_px={
 "type": "vec4",
 "value": Vector4(0, 0, 0, 0)
 }
+
+[rendering]
+
+textures/vram_compression/import_etc2_astc=true
