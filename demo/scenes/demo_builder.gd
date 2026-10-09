@@ -76,6 +76,11 @@ static func make_root(scene_name: String, sun_elevation: float, sun_azimuth: flo
 	root.add_child(cam)
 	var gads := GADSManager.new()
 	gads.name = "GADSManager"
+	# The web export runs the Compatibility renderer, which can't build the near-camera field (its
+	# ground capture needs a RenderingDevice), so parallax has to carry the near ground on its own.
+	# Low's few steps swim at grazing angles there; High's keep it crisp. Phones get the field, so
+	# they stay on Low. (Desktop/Forward+ is uncapped and uses the demo's requested preset.)
+	gads.platform_caps = {"mobile": GADSSettings.Preset.LOW, "web": GADSSettings.Preset.HIGH}
 	root.add_child(gads)
 	return root
 

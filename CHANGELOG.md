@@ -16,6 +16,10 @@ All notable changes to this project are documented here. The format follows
   triangle budget) or a custom tolerance in metres; locked borders; displacement direction; hard
   edges kept; LODs; optional trimesh or convex collision from a coarser pass of its own, as an
   internal static body. Bakes run on a worker thread with progress and cancel.
+- **Demo: the web build uses the High preset.** The web export runs the Compatibility renderer,
+  which cannot build the near-camera field, so parallax carries the near ground alone; Low's few
+  steps swim at grazing angles there. The demo now caps web at High (phones keep Low, since they
+  get the field) so the near-camera ground stays crisp in the browser.
 - **Baked and tessellated meshes render on the Compatibility (OpenGL/WebGL) renderer.** That
   renderer ignores instance shader parameters, so the `gads_baked` flag never reached the shader
   and baked `GADSMeshInstance3D` surfaces (including runtime view-dependent tessellation) drew
