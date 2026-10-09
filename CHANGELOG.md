@@ -183,6 +183,10 @@ All notable changes to this project are documented here. The format follows
   mappings, detail, layers, masks and sculpt maps; vector displacement, blend shapes, skinning,
   clusters and runtime tessellation still need the native library. Its bakes have their own
   cache key.
+- **`GADSReliefCollider3D`**: collision on the relief around a character (spec §67, height-field
+  collision near the player): a small HeightMapShape3D following a target, sampled from the
+  terrain's or field's `get_surface_height()`, only the new rows and columns as it moves; feet
+  stand on the stones instead of sinking to the smooth ground collision.
 - **Scripting API** (spec §88/§90): `GADS.set_quality(GADS.QUALITY_HIGH)` / `get_quality()` /
   `QUALITY_NAMES` for a graphics settings menu (adds a GADSManager when there is none, changes
   apply at runtime), and `GADS.surface(node)`, a `GADSSurface` with `displacement_strength` in

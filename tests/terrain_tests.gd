@@ -38,6 +38,7 @@ func _run() -> void:
 	await _test("erodes_and_generates", test_erosion)
 	await _test("roads_along_paths", test_roads)
 	await _test("impacts_dent_the_ground", test_impact)
+	await _test("relief_collider_follows_the_feet", test_relief_collider)
 	await _test("native_chunks", test_native_chunks)
 	await _test("native_grid", test_native_grid)
 	if DisplayServer.get_name() != "headless":
@@ -121,6 +122,88 @@ func make_terrain(params := {}) -> GADSTerrain3D:
 
 
 # --- Tests --------------------------------------------------------------------------------------
+
+## GADSReliefCollider3D: a height-field patch around a target on the relief the terrain's detail
+## field draws (rays hit get_surface_height() within millimetres, above the terrain's own
+## collision on the stones); it follows the target sampling only the new strip, and a teleport
+## samples all of it.
+func test_relief_collider() -> void:
+	var grass := layer_material(2.0, Color(0.2, 0.6, 0.2))
+	var t := make_terrain({"layers": [grass] as Array[ShaderMaterial], "detail_field": true, "height_scale": 6.0})
+	root.add_child(t)
+	var marker := Node3D.new()
+	marker.position = Vector3(0, 0, 0)
+	root.add_child(marker)
+	var feet := GADSReliefCollider3D.new()
+	feet.target = marker.get_path()
+	feet.source = t.get_path()
+	feet.spacing = 0.05
+	feet.resolution = 33
+	feet.collision_layer = 1 << 10
+	root.add_child(feet)
+	for i in 3:
+		await physics_frame
+	var first := feet.last_sampled
+	var space := marker.get_world_3d().direct_space_state
+	var measure := func(centre: Vector3) -> Array:
+		var worst := 0.0
+		var above := 0
+		var hits := 0
+		var rng := RandomNumberGenerator.new()
+		rng.seed = 5
+		for i in 40:
+			var p := centre + Vector3(rng.randf_range(-0.7, 0.7), 0, rng.randf_range(-0.7, 0.7))
+			var q := PhysicsRayQueryParameters3D.create(p + Vector3(0, 20, 0), p - Vector3(0, 20, 0), 1 << 10)
+			var hit := space.intersect_ray(q)
+			if hit.is_empty():
+				continue
+			hits += 1
+			worst = maxf(worst, absf(hit["position"].y - t.get_surface_height(p)))
+			if hit["position"].y > t.get_height(p) + 0.01:
+				above += 1
+		return [hits, worst, above]
+	var at := measure.call(marker.position) as Array
+	print("  %d of 40 rays hit, largest difference to get_surface_height() %.2f mm, %d above the terrain's triangles; %d samples" % [at[0], at[1] * 1000.0, at[2], first])
+	check(at[0] == 40 and at[1] < 0.004 and at[2] > 5 and first == 33 * 33, "rays land on the relief (within 4 mm), above the smooth ground on the stones")
+	# A character's foot (a 5 cm sphere) falling onto it comes to rest on the relief.
+	var body := CharacterBody3D.new()
+	var foot := CollisionShape3D.new()
+	var ball := SphereShape3D.new()
+	ball.radius = 0.05
+	foot.shape = ball
+	body.add_child(foot)
+	body.collision_mask = 1 | (1 << 10)
+	root.add_child(body)
+	body.global_position = Vector3(0.2, t.get_height(Vector3(0.2, 0, 0.1)) + 0.5, 0.1)
+	for i in 90:
+		body.velocity.y -= 9.8 / 60.0
+		body.velocity.x = 0.0
+		body.velocity.z = 0.0
+		body.move_and_slide()
+		await physics_frame
+	var rest := body.global_position
+	var bottom := rest.y - ball.radius
+	var relief_here := t.get_surface_height(rest) - t.get_height(rest)
+	print("  a foot rests %.1f mm above the smooth ground (the relief there: %.1f mm)" % [(bottom - t.get_height(rest)) * 1000.0, relief_here * 1000.0])
+	check(body.is_on_floor() and bottom > t.get_height(rest) + 0.5 * relief_here - 0.002 and bottom < t.get_surface_height(rest) + 0.02,
+		"a character's foot stands on the relief, not on the smooth ground")
+	body.queue_free()
+	marker.position += Vector3(0.6, 0, 0.3)
+	for i in 2:
+		await physics_frame
+	var moved := feet.last_sampled
+	var after := measure.call(marker.position) as Array
+	check(after[0] == 40 and after[1] < 0.004 and moved > 0 and moved < 33 * 33 / 2, "it follows the target, sampling only the new strip (%d samples)" % moved)
+	marker.position = Vector3(-10, 0, -12)
+	for i in 2:
+		await physics_frame
+	var far := measure.call(marker.position) as Array
+	check(far[0] == 40 and far[1] < 0.004 and feet.last_sampled == 33 * 33, "a teleport samples the whole patch again")
+	feet.queue_free()
+	marker.queue_free()
+	t.queue_free()
+	await process_frame
+
 
 ## GADSImpact on a terrain: a permanent dent lowers the heights by its depth at the hit; where a
 ## deformation field covers the hit, a dent is a deformation mark instead and the heights stay.
