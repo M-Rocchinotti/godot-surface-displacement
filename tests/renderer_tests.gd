@@ -258,7 +258,14 @@ func _test_scenes() -> void:
 		var gads := scene.get_node("GADSManager") as GADSManager
 		if index == 0:
 			var field := scene.find_children("*", "GADSDisplacementField3D", true, false)[0] as GADSDisplacementField3D
-			if field.is_baking():
+			# The ground bake starts deferred in _ready, so is_baking() can still be false here;
+			# wait for the bake to land (on Compatibility it never does and the field stays off).
+			if not compatibility:
+				for _i in 240:
+					if field.ground_bake != null:
+						break
+					await process_frame
+			elif field.is_baking():
 				await field.baked
 			gads.preset = GADSSettings.Preset.ULTRA
 			await process_frame
