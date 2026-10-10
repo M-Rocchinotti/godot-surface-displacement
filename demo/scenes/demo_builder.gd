@@ -460,7 +460,8 @@ static func build_hills() -> Node3D:
 	# WebGL (the Compatibility renderer) caps a fragment shader at 16 texture units; a three-layer
 	# terrain chunk and its detail field each need more, so there the terrain shows one material and
 	# no detail field. Desktop (Forward+) and phones (Mobile) use all three layers and the field.
-	if RenderingServer.get_rendering_device() == null:
+	# (Test by the renderer, not get_rendering_device(), which is also null in a --headless run.)
+	if RenderingServer.get_current_rendering_method() == "gl_compatibility":
 		terrain.material = ground
 		terrain.detail_field = false
 	terrain.slope_range = Vector2(22.0, 32.0)
