@@ -457,6 +457,12 @@ static func build_hills() -> Node3D:
 	terrain.vertex_spacing = 0.5
 	terrain.chunk_quads = 64
 	terrain.layers = [ground, rock, gravel] as Array[ShaderMaterial]
+	# WebGL (the Compatibility renderer) caps a fragment shader at 16 texture units; a three-layer
+	# terrain chunk and its detail field each need more, so there the terrain shows one material and
+	# no detail field. Desktop (Forward+) and phones (Mobile) use all three layers and the field.
+	if RenderingServer.get_rendering_device() == null:
+		terrain.material = ground
+		terrain.detail_field = false
 	terrain.slope_range = Vector2(22.0, 32.0)
 	terrain.height_band = Vector2(5.0, 6.5)
 	# A shaft into the hillside: a hole in the terrain (its hole map) over a rock-lined pit.

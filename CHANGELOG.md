@@ -16,6 +16,11 @@ All notable changes to this project are documented here. The format follows
   triangle budget) or a custom tolerance in metres; locked borders; displacement direction; hard
   edges kept; LODs; optional trimesh or convex collision from a coarser pass of its own, as an
   internal static body. Bakes run on a worker thread with progress and cancel.
+- **Demo: the Hills terrain falls back to one material on the web.** WebGL2 allows only 16
+  fragment texture units, which a three-layer terrain chunk and its detail field exceed, so on the
+  Compatibility renderer the demo's terrain shows a single material and no detail field instead of
+  failing to draw. Desktop (Forward+) and phones (Mobile) keep all three layers and the field.
+  Multi-layer terrain on the web needs Forward+ or Mobile (documented under Requirements).
 - **Demo: the web build uses the High preset.** The web export runs the Compatibility renderer,
   which cannot build the near-camera field, so parallax carries the near ground alone; Low's few
   steps swim at grazing angles there. The demo now caps web at High (phones keep Low, since they

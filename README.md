@@ -135,6 +135,12 @@ what the engine allows:
   capture the ground at runtime: it
   needs a ground bake saved from the editor (Bake Ground with Forward+ or Mobile) and stays off
   without one; a GADSTerrain3D makes its own ground data and works there.
+- **Web / Compatibility texture-unit limit.** WebGL2 guarantees only 16 fragment texture units,
+  and a three-layer `GADSTerrain3D` chunk (or any three-material layered material) plus its detail
+  field need more, so they do not render on the web export. Single- and dual-material surfaces,
+  parallax, baked and runtime-tessellated meshes all stay within the limit and work on the web
+  (the demo's terrain falls back to one material there). For multi-layer terrain on the web, use
+  the Forward+ or Mobile renderer (desktop and phones are unaffected).
 - Height maps with more than 8 bits (EXR, or a 16-bit PNG imported as **GADS Height Map**:
   Godot's own importer reads 16-bit PNGs as 8 bits). 8-bit height maps work but terrace visibly
   once displaced by more than a few centimetres.
