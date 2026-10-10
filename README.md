@@ -1360,4 +1360,4 @@ textures are CC0 (Poly Haven); each set keeps its license record.
 
 ## Version
 
-0.2.0 (unreleased). See [CHANGELOG.md](CHANGELOG.md).
+1.0.0. See [CHANGELOG.md](CHANGELOG.md).
