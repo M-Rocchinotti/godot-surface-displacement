@@ -243,7 +243,10 @@ func test_animated_field() -> void:
 	await h.frames(2)
 	var img_a := await h.capture()
 	var t_a := clock.seconds
-	await h.frames(6)
+	# Wait for real elapsed time, not a fixed frame count: a fast host renders the frames in a
+	# fraction of a second, too little flow to measure (the check wants more than 5 px).
+	while clock.seconds - t_a < 0.5:
+		await h.frames(1)
 	var img_b := await h.capture()
 	var t_b := clock.seconds
 	var moved: int = shift_of.call(rows.call(img_a), rows.call(img_b))

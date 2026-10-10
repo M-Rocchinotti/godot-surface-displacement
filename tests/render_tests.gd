@@ -1447,7 +1447,10 @@ func test_animated_relief() -> void:
 	await h.frames(2)
 	var img_a := await h.capture()
 	var t_a := clock.seconds
-	await h.frames(5)
+	# Wait for enough of the renderer's clock that the flow moves a clear distance (the check wants
+	# more than 8 px), not a fixed frame count that a fast host runs through in too little time.
+	while (clock.seconds - t_a) * 0.5 * px_per_m < 12.0:
+		await h.frames(1)
 	var img_b := await h.capture()
 	var t_b := clock.seconds
 	var moved: int = shift_of.call(rows.call(img_a), rows.call(img_b))
