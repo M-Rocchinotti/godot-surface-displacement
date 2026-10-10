@@ -358,15 +358,18 @@ parallax. Each picks the matching variant, keeps the parameters and is undoable.
 #### Layered materials
 
 `gads_layered_<mapping>_<quality>[_depth].gdshader` (or `GADSMaterials.create_layered()`) puts up
-to two more layers on top of the main one, each with its own albedo, normal, ORM and height
-maps, depth (`layerN_height_m`) and tiling (`layerN_scale`, repeats per main repeat). A layer
-lies where its mask is: a vertex colour channel or everywhere (`layerN_mask_channel`), times
-`layerN_amount`, times a band of the surface's up-facing when `layerN_slope.y > layerN_slope.x`
-(`(0.6, 0.85)`: tops only, for moss or snow). Within the mask the higher relief wins
-(height-aware blending: sand fills the gaps between stones before it covers them), with a
-transition `layerN_blend_width` high. The march, the self-shadow and the bake all follow the
-blended relief; GADSManager presets switch layered materials like any other. **Paint Layers**
-(below) paints the vertex colour masks in the viewport.
+to three more layers on top of the main one (four in all), each with its own albedo, normal, ORM
+and height maps, depth (`layer_height_m[]`) and tiling (`layer_scale[]`, repeats per main repeat).
+A layer lies where its mask is: a vertex colour channel or everywhere (`layer_mask_channel[]`),
+times `layer_amount[]`, times a band of the surface's up-facing when `layer_slope[].y >
+layer_slope[].x` (`(0.6, 0.85)`: tops only, for moss or snow). Within the mask the higher relief
+wins (height-aware blending: sand fills the gaps between stones before it covers them), with a
+transition `layer_blend_width[]` high. The layers share one texture array per channel
+(`layer_albedo`, `layer_normal`, `layer_orm`, `layer_height` as `sampler2DArray`), so a four-layer
+material samples through four units and stays within WebGL's 16-unit limit. The march, the
+self-shadow and the shading follow the blended relief; GADSManager presets switch layered materials
+like any other. A baked mesh (`GADSMeshInstance3D`) bakes the blended relief of the first two extra
+layers into its geometry. **Paint Layers** (below) paints the vertex colour masks in the viewport.
 
 ```gdscript
 var ground := GADSMaterials.create_layered(GADSMaterials.Mapping.WORLD,
@@ -891,7 +894,7 @@ plugin adds them to an export, as a scene does not list them among its dependenc
 **Painting layers.** **Paint** in the GADSMeshInstance3D inspector (or **Paint Layers** in the
 inspector of any MeshInstance3D drawing a GADS material) paints vertex colours in the 3D viewport
 with left-drag: the layered materials take layer 1 from red and layer 2 from green by default
-(`layerN_mask_channel`; surface effects can use a channel too, `effects_vertex_mask`, and so can
+(`layer_mask_channel[]`; surface effects can use a channel too, `effects_vertex_mask`, and so can
 the relief's depth, `relief_vertex_mask`), so painting a channel places that layer, its relief
 included. Modes Paint (towards 1), Erase (towards 0) and
 Smooth, a channel, a radius in metres and a strength; **Fill Channel** and **Clear Channel** set

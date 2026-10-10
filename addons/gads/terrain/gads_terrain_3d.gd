@@ -8,10 +8,12 @@ extends Node3D
 ##   tree), each with index LODs at every power of two of its quads, keyed by their largest height
 ##   error so the engine's mesh LOD picks the coarsest one that stays under a pixel. Skirts as deep
 ##   as that error hide the seams between chunks at different LODs.
-## - Layers: up to three GADS materials (world-planar mapping, [code]height_center = 0[/code]),
+## - Layers: up to four GADS materials (world-planar mapping, [code]height_center = 0[/code]),
 ##   combined into one layered material ([method GADSMaterials.combine_layers]): the first covers
-##   everything, the second and third lie on top where [member splatmap] (R, G) puts them, or by
-##   the slope and height rules below. The layers blend by height (the higher relief wins).
+##   everything, the rest lie on top where their mask channel (R, G, B by order) puts them, or by
+##   the slope and height rules below. The built-in sculpt/splat tools paint the second and third
+##   layers ([member splatmap] R, G); a fourth is combined but only drives from hand-painted vertex
+##   colour until the control-map stage. The layers blend by height (the higher relief wins).
 ## - Collision: a HeightMapShape3D of the same grid.
 ## - Detail: a [GADSDisplacementField3D] (real displaced geometry from the layers' height maps
 ##   around the camera) on the terrain's own ground data, and the layers take the marks of a
@@ -37,7 +39,7 @@ signal chunk_loaded(chunk: Vector2i)
 ## back by undo); [param rect] in grid vertices.
 signal edited(rect: Rect2i)
 
-const MAX_LAYERS := 3
+const MAX_LAYERS := 4
 ## The native chunk builder (when the GADS library is loaded; else the GDScript one).
 const MESHER := &"GADSTerrainMesher"
 ## Streamed chunks built on worker threads at once.

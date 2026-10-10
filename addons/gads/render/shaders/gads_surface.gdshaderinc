@@ -10,10 +10,8 @@ void vertex() {
 	gads_world_pos = (MODEL_MATRIX * vec4(baked ? CUSTOM0.xyz : VERTEX, 1.0)).xyz;
 	gads_world_normal = baked ? normalize(MODEL_NORMAL_MATRIX * CUSTOM1.xyz) : gads_geom_normal;
 	gads_tess = baked ? vec2(CUSTOM1.w * 32.0, CUSTOM0.w) : vec2(0.0);
-#ifdef GADS_LAYERED
-	gads_layer_masks = vec2(gads_mask_channel(COLOR, layer1_mask_channel) * layer1_amount,
-			gads_mask_channel(COLOR, layer2_mask_channel) * layer2_amount);
-#endif
+	// The extra-layer masks are computed per fragment now (from COLOR, a fragment built-in), so
+	// vertex() no longer fills a gads_layer_masks varying.
 #ifdef GADS_DEPTH_WRITE
 	// Writing VERTEX (even unchanged) stops the engine from drawing this material's depth
 	// pre-pass with its shared flat-depth material. The pre-pass must run this fragment() so it
@@ -119,17 +117,19 @@ void fragment() {
 	// A baked mesh's geometry already carries the relief; an animated one breathes (pulse).
 #ifdef GADS_LAYERED
 	float up = normalize(gads_world_normal).y;
-	GADS_RELIEF_ARG arg = vec3(gads_baked_amount() > 0.5 ? 0.0 : fade * gads_pulse_now() * gads_relief_scale * gads_relief_mask(COLOR), gads_layer_masks.x * gads_slope_band(layer1_slope, up),
-			gads_layer_masks.y * gads_slope_band(layer2_slope, up));
+	// Each extra layer's mask is computed here from the interpolated COLOR and the slope band
+	// (gads_layer_mask); the scale (arg.x) is the baked/fade factor as before.
+	GADS_RELIEF_ARG arg = vec4(gads_baked_amount() > 0.5 ? 0.0 : fade * gads_pulse_now() * gads_relief_scale * gads_relief_mask(COLOR),
+			gads_layer_mask(0, COLOR, up), gads_layer_mask(1, COLOR, up), gads_layer_mask(2, COLOR, up));
 #ifdef GADS_CUSTOM_LAYER_MASKS
-	arg.yz = clamp(gads_custom_layer_masks(arg.yz, gads_world_pos, normalize(gads_world_normal)), 0.0, 1.0);
+	arg.yzw = clamp(gads_custom_layer_masks(arg.yzw, gads_world_pos, normalize(gads_world_normal)), 0.0, 1.0);
 #endif
 	// Fade by size on screen: by the deepest layer present here.
 	float screen_fade = gads_screen_fade(gads_layered_depth(arg) * gads_relief_scale, view_distance, PROJECTION_MATRIX, VIEWPORT_SIZE.y);
 	fade *= screen_fade;
 	arg.x *= screen_fade;
 	// Masks for the texture blend, also on a baked mesh (whose relief scale is 0).
-	GADS_RELIEF_ARG sample_arg = vec3(1.0, arg.yz);
+	GADS_RELIEF_ARG sample_arg = vec4(1.0, arg.yzw);
 #else
 	fade *= gads_screen_fade(height_m * gads_relief_scale, view_distance, PROJECTION_MATRIX, VIEWPORT_SIZE.y);
 	GADS_RELIEF_ARG arg = gads_baked_amount() > 0.5 ? 0.0 : height_m * fade * gads_pulse_now() * gads_relief_scale * gads_relief_mask(COLOR);

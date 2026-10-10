@@ -53,3 +53,24 @@ Not code: **maturity** — shipped projects, community, longevity.
     built `Texture2DArray` is a new object every time, so the editor's 30-frame `sync_layers`
     rebuilt (decompress + mipmaps) and re-uploaded all four arrays each time. `_apply_layers` now
     caches the arrays per channel keyed by the source textures (`_layer_array`).
+- **Stage 1b: done.** The per-material layered surface material (`gads_core.gdshaderinc`'s
+  `GADS_LAYERED` path) is converted from the fixed `layer1_`/`layer2_` `sampler2D` uniforms to a
+  `sampler2DArray` N-layer system (`layer_albedo`/`layer_normal`/`layer_orm`/`layer_height` plus
+  `layer_*[]` scalar arrays sized by `#define GADS_LAYERED_LAYERS 3`), lifting the cap from base + 2
+  to **base + 3 = 4** (matching the field's `GADS_FIELD_LAYERS`) and dropping the layered fragment's
+  sampler count so a four-layer material fits WebGL's 16-unit limit. `GADSMaterials.combine_layers`
+  and `create_layered` build the arrays with `build_layer_array` and linearise each layer's tint as
+  the field does (an array uniform cannot carry `source_color`); the source height textures are kept
+  as the `gads_layer_heights` metadata for the CPU bake.
+  - **Masks moved off varyings.** The two-layer cap was a varying-budget limit: the per-layer masks
+    rode a `vec2 gads_layer_masks` vertex→fragment varying. They are now computed per fragment from
+    `COLOR` (a fragment built-in) and the slope band (`gads_layer_mask`), so that varying is gone;
+    the relief argument grows from `vec3` to `vec4` (scale + three masks) and the self-shadow still
+    carries it in `gads_ss_arg` (one varying) because `light()` cannot read `COLOR`. Net: one fewer
+    varying component than before, so every variant stays within the Compatibility/Mobile budget.
+  - **Bake cap unchanged.** The native tessellator keeps its two-extra-layer limit (`Layer
+    layers[2]`), so a baked mesh bakes the first two extra layers; the render path draws all three.
+    The terrain's `MAX_LAYERS` is lifted to 4, but its splat/weights still drive two extra layers
+    (R, G) — a third needs the control map (Stage 2) or hand-painted vertex colour.
+  - The full suite (`tests/run_all.py`) stays green on all renderers; the layered demo shot (Hills)
+    moved only 0.0001 mean (limit 0.003) from the array repacking, so the baseline is unchanged.

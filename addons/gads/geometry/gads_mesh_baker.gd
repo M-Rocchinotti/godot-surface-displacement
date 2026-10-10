@@ -131,19 +131,21 @@ static func _layers_of(sm: ShaderMaterial) -> Array:
 	var out := []
 	if not GADSMaterials.parse(sm.shader).get("layered", false):
 		return out
-	for k in [1, 2]:
-		var prefix := "layer%d_" % k
-		var tex := sm.get_shader_parameter(prefix + "height_texture") as Texture2D
-		var amount: float = GADSMaterials.get_param(sm, prefix + "amount")
-		# The tessellator takes the layers in order: an unused layer 1 still holds layer 2's place.
+	# The height maps are packed into the layer_height array for rendering; the CPU bake needs the
+	# source textures, which GADSMaterials keeps as metadata (see _apply_layer_arrays).
+	var height_textures: Array = sm.get_meta(&"gads_layer_heights", [])
+	for i in GADSMaterials.LAYERED_LAYERS:
+		var tex := (height_textures[i] if i < height_textures.size() else null) as Texture2D
+		var amount: float = GADSMaterials.get_layer_param(sm, "amount", i)
+		# The tessellator takes the layers in order: an unused earlier layer still holds its place.
 		out.append({
 			"texture": tex if amount > 0.0 else null,
-			"height_m": GADSMaterials.get_param(sm, prefix + "height_m"),
-			"scale": GADSMaterials.get_param(sm, prefix + "scale"),
-			"mask_channel": GADSMaterials.get_param(sm, prefix + "mask_channel"),
+			"height_m": GADSMaterials.get_layer_param(sm, "height_m", i),
+			"scale": GADSMaterials.get_layer_param(sm, "scale", i),
+			"mask_channel": GADSMaterials.get_layer_param(sm, "mask_channel", i),
 			"amount": amount if tex != null else 0.0,
-			"slope": GADSMaterials.get_param(sm, prefix + "slope"),
-			"blend_width": GADSMaterials.get_param(sm, prefix + "blend_width"),
+			"slope": GADSMaterials.get_layer_param(sm, "slope", i),
+			"blend_width": GADSMaterials.get_layer_param(sm, "blend_width", i),
 		})
 	return out
 

@@ -6,7 +6,7 @@ extends RefCounted
 ## Every GADS material is a [ShaderMaterial] whose shader is one of the generated variants in
 ## [code]render/shaders/variants/[/code]: [code]gads_[layered_]<mapping>_<quality>[_sil][_depth].gdshader[/code]
 ## ([code]_sil[/code]: silhouette POM, UV mapping).
-## The mapping (UV, world-planar, triplanar), the layering (one relief, or up to three blended by
+## The mapping (UV, world-planar, triplanar), the layering (one relief, or up to four blended by
 ## vertex colour, slope and height) and the depth write are per-material choices; the quality
 ## (flat, POM, POM with self-shadowing) is what [GADSManager] switches at runtime. Switching
 ## keeps every parameter, because the variants share one set of uniforms.
@@ -66,9 +66,15 @@ const PARAMETER_DEFAULTS := {
 	"vector_displacement_space": 0,
 	"vector_displacement_signed": false,
 }
-## The defaults of the layered variants' layer parameters (layerN_<name>, N = 1, 2).
+## Extra layers a layered material can hold on top of the main one (base + 3 = 4 total). Mirrors
+## the shader's GADS_LAYERED_LAYERS define and the field's GADS_FIELD_LAYERS.
+const LAYERED_LAYERS := 3
+## The default of each per-layer array parameter (layer_<name>, one element per extra layer), for
+## an element a material never set -- the array uniforms carry no shader default. layer_tint is a
+## linear vec4 (Godot cannot give an array uniform the source_color hint); mask_channel defaults to
+## the layer's own channel (layer 0 -> R, 1 -> G, 2 -> B), see [method get_layer_param].
 const LAYER_PARAMETER_DEFAULTS := {
-	"tint": Color(1, 1, 1, 1),
+	"tint": Vector4(1, 1, 1, 1),
 	"normal_strength": 1.0,
 	"height_m": 0.03,
 	"scale": 1.0,
@@ -79,16 +85,27 @@ const LAYER_PARAMETER_DEFAULTS := {
 
 
 ## A shader parameter of an GADS material: its value, or the shader's default when it was never set
-## (null for an unset texture).
+## (null for an unset texture). For the per-layer array parameters (layer_<name>) use
+## [method get_layer_param].
 static func get_param(material: ShaderMaterial, name: String) -> Variant:
 	var value: Variant = material.get_shader_parameter(name)
 	if value != null:
 		return value
-	if name.begins_with("layer") and name.length() > 7 and name[6] == "_":
-		if name.ends_with("_mask_channel"):
-			return LayerMask.VERTEX_R if name[5] == "1" else LayerMask.VERTEX_G
-		return LAYER_PARAMETER_DEFAULTS.get(name.substr(7))
 	return PARAMETER_DEFAULTS.get(name)
+
+
+## Element [param index] of a layered material's layer_[param name] array (e.g. "scale",
+## "mask_channel", "amount", "height_m", "slope", "blend_width", "normal_strength", "tint"), or the
+## default when the array is unset or shorter than that (array uniforms carry no shader default).
+## mask_channel defaults to the layer's own channel (0 -> R, 1 -> G, 2 -> B), matching
+## [method combine_layers] and the single-layer uniforms the arrays replaced.
+static func get_layer_param(material: ShaderMaterial, name: String, index: int) -> Variant:
+	var arr: Variant = material.get_shader_parameter("layer_" + name)
+	if arr != null and index >= 0 and index < int(arr.size()):
+		return arr[index]
+	if name == "mask_channel":
+		return index
+	return LAYER_PARAMETER_DEFAULTS.get(name)
 
 static func variant_path(mapping: Mapping, quality: Quality, depth_write := false, layered := false, silhouette := false) -> String:
 	var depth := depth_write and quality != Quality.FLAT
@@ -279,35 +296,25 @@ static func create(mapping: Mapping, textures: Dictionary, params := {}, quality
 
 
 ## A layered GADS material: the main layer from [param textures] and [param params] as in
-## [method create], plus up to two layers on top. Each layer is a Dictionary: textures under
-## "albedo", "normal", "orm", "height"; settings "height_m", "scale" (repeats per main repeat),
-## "mask" ([enum LayerMask], where it lies; default R for layer 1, G for layer 2), "amount"
-## (default 1), "slope" (Vector2 band of the surface's up-facing, e.g. (0.6, 0.85) for tops
-## only), "blend_width", "tint", "normal_strength".
+## [method create], plus up to [constant LAYERED_LAYERS] layers on top (base + 3 = 4 total). Each
+## layer is a Dictionary: textures under "albedo", "normal", "orm", "height"; settings "height_m",
+## "scale" (repeats per main repeat), "mask" ([enum LayerMask], where it lies; default its own
+## channel R, G, B by order), "amount" (default 1), "slope" (Vector2 band of the surface's
+## up-facing, e.g. (0.6, 0.85) for tops only), "blend_width", "tint", "normal_strength". The layers
+## share one [Texture2DArray] per channel, so a four-layer material still fits WebGL's 16-unit limit.
 static func create_layered(mapping: Mapping, textures: Dictionary, params: Dictionary, layers: Array,
 		quality := Quality.POM_SELF_SHADOW, depth_write := false) -> ShaderMaterial:
 	var material := create(mapping, textures, params, quality, depth_write)
 	material.shader = get_shader(mapping, quality, depth_write, true)
-	for i in mini(layers.size(), 2):
-		var layer: Dictionary = layers[i]
-		var prefix := "layer%d_" % (i + 1)
-		for key: String in ["albedo", "normal", "orm", "height"]:
-			if layer.has(key):
-				material.set_shader_parameter(prefix + key + "_texture", layer[key])
-		material.set_shader_parameter(prefix + "amount", float(layer.get("amount", 1.0)))
-		if layer.has("mask"):
-			material.set_shader_parameter(prefix + "mask_channel", int(layer["mask"]))
-		for key: String in ["height_m", "scale", "slope", "blend_width", "tint", "normal_strength"]:
-			if layer.has(key):
-				material.set_shader_parameter(prefix + key, layer[key])
+	_apply_layer_arrays(material, layers.slice(0, LAYERED_LAYERS))
 	return material
 
 
-## One layered GADS material from up to three plain ones (e.g. a terrain's ground, rock and snow):
-## the first is the main layer (a copy of it on the layered variant of its mapping and quality),
-## the second and third become layers 1 and 2 under [param masks] (default vertex colour R and G),
-## each with its own textures, depth, tint and normal strength, and a scale that keeps its own
-## texture size. Returns null when the first is not a GADS material.
+## One layered GADS material from up to [constant LAYERED_LAYERS] + 1 plain ones (e.g. a terrain's
+## ground, rock, gravel and snow): the first is the main layer (a copy of it on the layered variant
+## of its mapping and quality), the rest become the extra layers under [param masks] (default vertex
+## colour R, G, B by order), each with its own textures, depth, tint and normal strength, and a
+## scale that keeps its own texture size. Returns null when the first is not a GADS material.
 static func combine_layers(materials: Array, masks: Array = [LayerMask.VERTEX_R, LayerMask.VERTEX_G]) -> ShaderMaterial:
 	if materials.is_empty() or not is_gads_material(materials[0]):
 		return null
@@ -315,25 +322,94 @@ static func combine_layers(materials: Array, masks: Array = [LayerMask.VERTEX_R,
 	var info := parse(main.shader)
 	var out := main.duplicate() as ShaderMaterial
 	out.shader = get_shader(info["mapping"], info["quality"], info["depth_write"], true)
-	for i in range(1, mini(materials.size(), 3)):
+	var layer_defs := []
+	for i in range(1, mini(materials.size(), LAYERED_LAYERS + 1)):
 		var layer := materials[i] as ShaderMaterial
 		if not is_gads_material(layer):
 			continue
-		var prefix := "layer%d_" % i
-		for key: String in ["albedo", "normal", "orm", "height"]:
-			out.set_shader_parameter(prefix + key + "_texture", layer.get_shader_parameter(key + "_texture"))
-		out.set_shader_parameter(prefix + "height_m", get_param(layer, "height_m"))
-		out.set_shader_parameter(prefix + "tint", get_param(layer, "albedo_tint"))
-		out.set_shader_parameter(prefix + "normal_strength", get_param(layer, "normal_strength"))
 		var scale := 1.0
 		if info["mapping"] == Mapping.UV:
 			scale = (get_param(layer, "uv_scale") as Vector2).x / maxf((get_param(main, "uv_scale") as Vector2).x, 1e-6)
 		else:
 			scale = (get_param(main, "texture_size_m") as Vector2).x / maxf((get_param(layer, "texture_size_m") as Vector2).x, 1e-6)
-		out.set_shader_parameter(prefix + "scale", scale)
-		out.set_shader_parameter(prefix + "amount", 1.0)
-		out.set_shader_parameter(prefix + "mask_channel", masks[i - 1] if i - 1 < masks.size() else i - 1)
+		layer_defs.append({
+			"albedo": layer.get_shader_parameter("albedo_texture"),
+			"normal": layer.get_shader_parameter("normal_texture"),
+			"orm": layer.get_shader_parameter("orm_texture"),
+			"height": layer.get_shader_parameter("height_texture"),
+			"height_m": get_param(layer, "height_m"),
+			"scale": scale,
+			"amount": 1.0,
+			"mask": masks[i - 1] if i - 1 < masks.size() else (i - 1),
+			"tint": get_param(layer, "albedo_tint"),
+			"normal_strength": get_param(layer, "normal_strength"),
+		})
+	_apply_layer_arrays(out, layer_defs)
 	return out
+
+
+## Packs the textures and settings of [param layers] (each a Dictionary as [method create_layered]
+## documents; at most [constant LAYERED_LAYERS] used, the rest of the slots left inactive) into
+## [param material]'s layer_* array uniforms: one [Texture2DArray] per channel (via
+## [method build_layer_array], so every layer samples through a single texture unit) and one array
+## per per-layer scalar. Unused slots get amount 0, so the shader skips them. The per-layer height
+## textures are also kept as the "gads_layer_heights" metadata: the bake ([GADSMeshBaker]) reads
+## each height map on the CPU and so needs the source textures, which the packed array does not
+## expose at their own resolution.
+static func _apply_layer_arrays(material: ShaderMaterial, layers: Array) -> void:
+	var albedos: Array[Texture2D] = []
+	var normals: Array[Texture2D] = []
+	var orms: Array[Texture2D] = []
+	var heights: Array[Texture2D] = []
+	var height_m := PackedFloat32Array()
+	var scale := PackedFloat32Array()
+	var mask_channel := PackedInt32Array()
+	var amount := PackedFloat32Array()
+	var slope: Array[Vector2] = []
+	var blend_width := PackedFloat32Array()
+	var normal_strength := PackedFloat32Array()
+	var tint: Array[Vector4] = []
+	for i in LAYERED_LAYERS:
+		var used := i < layers.size()
+		var layer: Dictionary = layers[i] if used else {}
+		albedos.append(layer.get("albedo"))
+		normals.append(layer.get("normal"))
+		orms.append(layer.get("orm"))
+		heights.append(layer.get("height"))
+		height_m.append(float(layer.get("height_m", LAYER_PARAMETER_DEFAULTS["height_m"])))
+		scale.append(float(layer.get("scale", LAYER_PARAMETER_DEFAULTS["scale"])))
+		mask_channel.append(int(layer.get("mask", i)))
+		amount.append(float(layer.get("amount", 1.0)) if used else 0.0)
+		slope.append(layer.get("slope", LAYER_PARAMETER_DEFAULTS["slope"]))
+		blend_width.append(float(layer.get("blend_width", LAYER_PARAMETER_DEFAULTS["blend_width"])))
+		normal_strength.append(float(layer.get("normal_strength", LAYER_PARAMETER_DEFAULTS["normal_strength"])))
+		tint.append(_layer_tint_vec4(layer.get("tint", Color.WHITE)))
+	# Fill colours match the main maps' old hint defaults: white albedo/ORM/height, a flat normal.
+	material.set_shader_parameter("layer_albedo", build_layer_array(albedos, Image.FORMAT_RGBA8, Color(1, 1, 1, 1)))
+	material.set_shader_parameter("layer_normal", build_layer_array(normals, Image.FORMAT_RGBA8, Color(0.5, 0.5, 1, 1)))
+	material.set_shader_parameter("layer_orm", build_layer_array(orms, Image.FORMAT_RGBA8, Color(1, 1, 1, 1)))
+	material.set_shader_parameter("layer_height", build_layer_array(heights, Image.FORMAT_RF, Color(1, 1, 1, 1)))
+	material.set_shader_parameter("layer_height_m", height_m)
+	material.set_shader_parameter("layer_scale", scale)
+	material.set_shader_parameter("layer_mask_channel", mask_channel)
+	material.set_shader_parameter("layer_amount", amount)
+	material.set_shader_parameter("layer_slope", slope)
+	material.set_shader_parameter("layer_blend_width", blend_width)
+	material.set_shader_parameter("layer_normal_strength", normal_strength)
+	material.set_shader_parameter("layer_tint", tint)
+	material.set_meta(&"gads_layer_heights", heights.duplicate())
+
+
+## A layer tint as a linear vec4 for the layer_tint array, which -- unlike the single-layer
+## source_color uniform it replaced -- gets no automatic sRGB -> linear: a [Color] is linearised as
+## the field does, a [Vector4] is taken as already linear.
+static func _layer_tint_vec4(value: Variant) -> Vector4:
+	if value is Color:
+		var c := (value as Color).srgb_to_linear()
+		return Vector4(c.r, c.g, c.b, c.a)
+	if value is Vector4:
+		return value
+	return Vector4(1, 1, 1, 1)
 
 
 ## Packs per-layer textures into one [Texture2DArray] so a shader samples every layer through a

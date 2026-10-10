@@ -30,8 +30,8 @@
 //                                float height, inout vec3 albedo, inout float roughness,
 //                                inout float metallic, inout float ao): after the textures and
 //                                effects. Define it after this file, before gads_surface.
-//       GADS_CUSTOM_LAYER_MASKS  vec2 gads_custom_layer_masks(vec2 masks, vec3 world_pos,
-//                                vec3 world_normal): the layered variants' layer 1 / 2 masks.
+//       GADS_CUSTOM_LAYER_MASKS  vec3 gads_custom_layer_masks(vec3 masks, vec3 world_pos,
+//                                vec3 world_normal): the layered variants' extra-layer masks.
 //   - A view ray that leaves the camera and hits the flat surface at P passes relief height z at
 //     uv(z) = uv(P) + duv_dz * z, duv_dz = (gu.V, gv.V) * (N.A) / (N.V), where gu/gv are the
 //     gradients of u/v along the surface, N the surface normal, A the relief axis and V the unit
@@ -123,37 +123,35 @@ uniform float cavity_radius : hint_range(1.0, 6.0) = 3.0;
 uniform int effects_vertex_mask : hint_enum("None", "Vertex R", "Vertex G", "Vertex B", "Vertex A") = 0;
 uniform float weather_response : hint_range(0.0, 1.0) = 1.0;
 #ifdef GADS_LAYERED
-// Layers 1 and 2 cover the layer below where their mask is: a vertex colour channel (or
-// everywhere) times layerN_amount, times a band of the surface's up-facing when layerN_slope.y >
-// layerN_slope.x (smoothstep of the world normal's y: (0.6, 0.85) = tops only). Within the mask
-// the higher relief wins (height-aware blending); layerN_blend_width is the height range of the
-// transition. Each layer has its own textures and depth, tiled layerN_scale times per main repeat.
-group_uniforms layer1;
-uniform sampler2D layer1_albedo_texture : source_color, hint_default_white, filter_linear_mipmap_anisotropic, repeat_enable;
-uniform vec4 layer1_tint : source_color = vec4(1.0);
-uniform sampler2D layer1_normal_texture : hint_normal, filter_linear_mipmap_anisotropic, repeat_enable;
-uniform float layer1_normal_strength : hint_range(0.0, 4.0) = 1.0;
-uniform sampler2D layer1_orm_texture : hint_default_white, filter_linear_mipmap_anisotropic, repeat_enable;
-uniform sampler2D layer1_height_texture : hint_default_white, filter_linear_mipmap, repeat_enable;
-uniform float layer1_height_m : hint_range(0.0, 0.5, 0.0005) = 0.03;
-uniform float layer1_scale : hint_range(0.05, 64.0) = 1.0;
-uniform int layer1_mask_channel : hint_enum("Vertex R", "Vertex G", "Vertex B", "Vertex A", "Everywhere") = 0;
-uniform float layer1_amount : hint_range(0.0, 1.0) = 0.0;
-uniform vec2 layer1_slope = vec2(0.0);
-uniform float layer1_blend_width : hint_range(0.001, 1.0) = 0.1;
-group_uniforms layer2;
-uniform sampler2D layer2_albedo_texture : source_color, hint_default_white, filter_linear_mipmap_anisotropic, repeat_enable;
-uniform vec4 layer2_tint : source_color = vec4(1.0);
-uniform sampler2D layer2_normal_texture : hint_normal, filter_linear_mipmap_anisotropic, repeat_enable;
-uniform float layer2_normal_strength : hint_range(0.0, 4.0) = 1.0;
-uniform sampler2D layer2_orm_texture : hint_default_white, filter_linear_mipmap_anisotropic, repeat_enable;
-uniform sampler2D layer2_height_texture : hint_default_white, filter_linear_mipmap, repeat_enable;
-uniform float layer2_height_m : hint_range(0.0, 0.5, 0.0005) = 0.03;
-uniform float layer2_scale : hint_range(0.05, 64.0) = 1.0;
-uniform int layer2_mask_channel : hint_enum("Vertex R", "Vertex G", "Vertex B", "Vertex A", "Everywhere") = 1;
-uniform float layer2_amount : hint_range(0.0, 1.0) = 0.0;
-uniform vec2 layer2_slope = vec2(0.0);
-uniform float layer2_blend_width : hint_range(0.001, 1.0) = 0.1;
+// Up to GADS_LAYERED_LAYERS extra layers on top of the main one (base + 3 = 4 total, matching the
+// field's GADS_FIELD_LAYERS). Each covers the layer below where its mask is: a vertex colour channel
+// (or everywhere, layer_mask_channel[i]) times layer_amount[i], times a band of the surface's
+// up-facing when layer_slope[i].y > layer_slope[i].x (smoothstep of the world normal's y:
+// (0.6, 0.85) = tops only). Within the mask the higher relief wins (height-aware blending);
+// layer_blend_width[i] is the height range of the transition. Each layer has its own slice of the
+// texture arrays and its own depth, tiled layer_scale[i] times per main repeat.
+#define GADS_LAYERED_LAYERS 3
+group_uniforms layers;
+// One array texture per channel (all layers share a resolution; built by GADSMaterials from the
+// per-material textures): one texture unit each instead of one per layer, so the fragment shader
+// stays within the Compatibility renderer's 16-unit limit and the layer count is no longer capped
+// by it. The hints match the main maps and the field (gads_field.gdshaderinc).
+uniform sampler2DArray layer_albedo : source_color, filter_linear_mipmap_anisotropic, repeat_enable;
+uniform sampler2DArray layer_normal : filter_linear_mipmap_anisotropic, repeat_enable;
+uniform sampler2DArray layer_orm : filter_linear_mipmap_anisotropic, repeat_enable;
+uniform sampler2DArray layer_height : filter_linear_mipmap, repeat_enable;
+// Per-layer scalars (one element each; set by GADSMaterials). Array uniforms carry no shader
+// default, so GADSMaterials.get_layer_param supplies the default a material never set. layer_tint
+// is linearised in the GDScript, as the field does, because an array uniform cannot carry the
+// source_color hint the single-layer tint had.
+uniform float layer_height_m[GADS_LAYERED_LAYERS];
+uniform float layer_scale[GADS_LAYERED_LAYERS];
+uniform int layer_mask_channel[GADS_LAYERED_LAYERS];
+uniform float layer_amount[GADS_LAYERED_LAYERS];
+uniform vec2 layer_slope[GADS_LAYERED_LAYERS];
+uniform float layer_blend_width[GADS_LAYERED_LAYERS];
+uniform float layer_normal_strength[GADS_LAYERED_LAYERS];
+uniform vec4 layer_tint[GADS_LAYERED_LAYERS];
 #endif
 group_uniforms mapping;
 uniform vec2 uv_scale = vec2(1.0);
@@ -219,14 +217,17 @@ varying vec3 gads_ss_n;
 varying vec3 gads_ss_axis;
 varying vec4 gads_ss_params; // lod, amplitude, height_center, strength (0 = off)
 #ifdef GADS_LAYERED
-varying vec3 gads_ss_arg;    // the relief argument (fade, layer masks) of the hit
+varying vec4 gads_ss_arg;    // the relief argument (fade, extra-layer masks) of the hit, for light()
 #endif
 #endif
 
 #ifdef GADS_LAYERED
-// Relief argument: x = scale (the distance fade, 0 on a baked mesh), y / z = masks of layers 1, 2.
-#define GADS_RELIEF_ARG vec3
-varying vec2 gads_layer_masks; // vertex colour channel x amount of layers 1 and 2
+// Relief argument: x = scale (the distance fade, 0 on a baked mesh), y / z / w = masks of the up to
+// GADS_LAYERED_LAYERS extra layers. The masks are computed per fragment from COLOR (a fragment
+// built-in) and the slope band, so no vertex->fragment varying carries them: the old gads_layer_masks
+// vec2 is gone, and with it the two-layer cap its width imposed. light() cannot read COLOR, so the
+// self-shadow still carries the whole argument in gads_ss_arg (one varying, as before).
+#define GADS_RELIEF_ARG vec4
 #else
 // Relief argument: the main amplitude (height_m x distance fade, 0 on a baked mesh).
 #define GADS_RELIEF_ARG float
@@ -328,43 +329,56 @@ float gads_height_blend(float below, float above, float m, float width) {
 	return smoothstep(-width, width, above - below + (2.0 * m - 1.0) * (1.0 + width));
 }
 
-// Blend weights (t1, t2) of layers 1 and 2 at uv, and the blended relief (m, scale 1).
-float gads_layered_relief(vec2 uv, float lod, vec3 arg, out vec2 t) {
+float gads_slope_band(vec2 band, float up) {
+	return band.y > band.x ? smoothstep(band.x, band.y, up) : 1.0;
+}
+
+// The mask of extra layer i at vertex colour `color` on a surface whose world normal has y = up:
+// its vertex-colour channel (gads_mask_channel) times layer_amount[i], times the slope band. It is
+// constant over the pixel, so it is recomputed wherever needed (fragment() and the self-shadow)
+// rather than carried in a varying.
+float gads_layer_mask(int i, vec4 color, float up) {
+	return gads_mask_channel(color, layer_mask_channel[i]) * layer_amount[i] * gads_slope_band(layer_slope[i], up);
+}
+
+// Blend weights t[i] of the extra layers at uv, and the blended relief (m, scale 1): each active
+// layer (mask arg[i + 1] > 0) lies over the result so far by its height-aware weight, the higher
+// relief winning in between (gads_height_blend) -- the same sequential blend layers 1 and 2 did
+// unrolled, now over GADS_LAYERED_LAYERS layers.
+float gads_layered_relief(vec2 uv, float lod, vec4 arg, out vec3 t) {
 	float h;
 	float relief = gads_main_relief(uv, lod, h);
-	t = vec2(0.0);
-	if (arg.y > 0.0) {
-		float h1 = textureLod(layer1_height_texture, uv * layer1_scale,
-				gads_layer_lod(lod, vec2(textureSize(layer1_height_texture, 0)), layer1_scale)).r;
-		t.x = gads_height_blend(h, h1, arg.y, layer1_blend_width);
-		relief = mix(relief, layer1_height_m * (h1 - height_center), t.x);
-		h = mix(h, h1, t.x);
-	}
-	if (arg.z > 0.0) {
-		float h2 = textureLod(layer2_height_texture, uv * layer2_scale,
-				gads_layer_lod(lod, vec2(textureSize(layer2_height_texture, 0)), layer2_scale)).r;
-		t.y = gads_height_blend(h, h2, arg.z, layer2_blend_width);
-		relief = mix(relief, layer2_height_m * (h2 - height_center), t.y);
+	t = vec3(0.0);
+	for (int i = 0; i < GADS_LAYERED_LAYERS; i++) {
+		float m = arg[i + 1];
+		if (m <= 0.0) {
+			continue;
+		}
+		float hi = textureLod(layer_height, vec3(uv * layer_scale[i], float(i)),
+				gads_layer_lod(lod, vec2(textureSize(layer_height, 0).xy), layer_scale[i])).r;
+		t[i] = gads_height_blend(h, hi, m, layer_blend_width[i]);
+		relief = mix(relief, layer_height_m[i] * (hi - height_center), t[i]);
+		h = mix(h, hi, t[i]);
 	}
 	return relief;
 }
 
-// The deepest relief the active layers have (m).
-float gads_layered_depth(vec3 arg) {
+// The deepest relief the active extra layers -- or the main one -- can show (m).
+float gads_layered_depth(vec4 arg) {
 	float depth = height_m;
-	depth = arg.y > 0.0 ? max(depth, layer1_height_m) : depth;
-	return arg.z > 0.0 ? max(depth, layer2_height_m) : depth;
-}
-
-float gads_slope_band(vec2 band, float up) {
-	return band.y > band.x ? smoothstep(band.x, band.y, up) : 1.0;
+	for (int i = 0; i < GADS_LAYERED_LAYERS; i++) {
+		if (arg[i + 1] > 0.0) {
+			depth = max(depth, layer_height_m[i]);
+		}
+	}
+	return depth;
 }
 #endif
 
 // Relief height (m) at uv on mip level lod of the main map, for relief argument arg.
 float gads_relief(vec2 uv, float lod, GADS_RELIEF_ARG arg) {
 #ifdef GADS_LAYERED
-	vec2 t;
+	vec3 t;
 	return arg.x * gads_layered_relief(uv, lod, arg, t);
 #else
 	// Kept as it was before the layers so the single-layer variants draw bit for bit the same.
@@ -413,21 +427,19 @@ void gads_sample_surface(vec2 uv, vec2 ddx, vec2 ddy, float lod, GADS_RELIEF_ARG
 	nm = GADS_SAMPLE(normal_texture, uv, ddx, ddy).rgb;
 #ifdef GADS_LAYERED
 	albedo *= albedo_tint.rgb;
-	vec2 t;
+	vec3 t;
 	gads_layered_relief(uv, lod, arg, t);
 	vec3 n = vec3(nm.xy * 2.0 - 1.0, 0.0);
 	n.xy *= normal_strength;
-	if (t.x > 0.0) {
-		vec2 s = layer1_scale * vec2(1.0);
-		albedo = mix(albedo, textureGrad(layer1_albedo_texture, uv * s, ddx * s, ddy * s).rgb * layer1_tint.rgb, t.x);
-		orm = mix(orm, textureGrad(layer1_orm_texture, uv * s, ddx * s, ddy * s).rgb, t.x);
-		n.xy = mix(n.xy, (textureGrad(layer1_normal_texture, uv * s, ddx * s, ddy * s).rg * 2.0 - 1.0) * layer1_normal_strength, t.x);
-	}
-	if (t.y > 0.0) {
-		vec2 s = layer2_scale * vec2(1.0);
-		albedo = mix(albedo, textureGrad(layer2_albedo_texture, uv * s, ddx * s, ddy * s).rgb * layer2_tint.rgb, t.y);
-		orm = mix(orm, textureGrad(layer2_orm_texture, uv * s, ddx * s, ddy * s).rgb, t.y);
-		n.xy = mix(n.xy, (textureGrad(layer2_normal_texture, uv * s, ddx * s, ddy * s).rg * 2.0 - 1.0) * layer2_normal_strength, t.y);
+	for (int i = 0; i < GADS_LAYERED_LAYERS; i++) {
+		if (t[i] <= 0.0) {
+			continue;
+		}
+		vec2 s = layer_scale[i] * vec2(1.0);
+		vec3 coord = vec3(uv * s, float(i));
+		albedo = mix(albedo, textureGrad(layer_albedo, coord, ddx * s, ddy * s).rgb * layer_tint[i].rgb, t[i]);
+		orm = mix(orm, textureGrad(layer_orm, coord, ddx * s, ddy * s).rgb, t[i]);
+		n.xy = mix(n.xy, (textureGrad(layer_normal, coord, ddx * s, ddy * s).rg * 2.0 - 1.0) * layer_normal_strength[i], t[i]);
 	}
 	// Strengths are applied here, so the caller uses strength 1.
 	n.xy = n.xy / max(1.0, length(n.xy));
@@ -441,16 +453,15 @@ vec3 gads_normal_at_lod(vec2 uv, float lod, GADS_RELIEF_ARG arg) {
 	float main_lod = max(lod + log2(float(textureSize(normal_texture, 0).x) / float(textureSize(height_texture, 0).x)), 0.0);
 	vec3 nm = textureLod(normal_texture, uv, main_lod).rgb;
 #ifdef GADS_LAYERED
-	vec2 t;
+	vec3 t;
 	gads_layered_relief(uv, lod, arg, t);
 	vec2 n = (nm.xy * 2.0 - 1.0) * normal_strength;
-	if (t.x > 0.0) {
-		float l1 = gads_layer_lod(lod, vec2(textureSize(layer1_normal_texture, 0)), layer1_scale);
-		n = mix(n, (textureLod(layer1_normal_texture, uv * layer1_scale, l1).rg * 2.0 - 1.0) * layer1_normal_strength, t.x);
-	}
-	if (t.y > 0.0) {
-		float l2 = gads_layer_lod(lod, vec2(textureSize(layer2_normal_texture, 0)), layer2_scale);
-		n = mix(n, (textureLod(layer2_normal_texture, uv * layer2_scale, l2).rg * 2.0 - 1.0) * layer2_normal_strength, t.y);
+	for (int i = 0; i < GADS_LAYERED_LAYERS; i++) {
+		if (t[i] <= 0.0) {
+			continue;
+		}
+		float li = gads_layer_lod(lod, vec2(textureSize(layer_normal, 0).xy), layer_scale[i]);
+		n = mix(n, (textureLod(layer_normal, vec3(uv * layer_scale[i], float(i)), li).rg * 2.0 - 1.0) * layer_normal_strength[i], t[i]);
 	}
 	n = n / max(1.0, length(n));
 	nm = vec3(n * 0.5 + 0.5, 1.0);

@@ -368,13 +368,17 @@ func test_layers() -> void:
 	var mat := t.get_material() as ShaderMaterial
 	var info := GADSMaterials.parse(mat.shader)
 	check(info.get("layered", false) and info["mapping"] == GADSMaterials.Mapping.WORLD, "the layers combine into a layered world material")
-	check(mat.get_shader_parameter("layer1_height_texture") == rock.get_shader_parameter("height_texture")
-		and mat.get_shader_parameter("layer2_albedo_texture") == snow.get_shader_parameter("albedo_texture"), "each layer keeps its textures")
-	check(is_equal_approx(mat.get_shader_parameter("layer1_scale"), 0.5) and is_equal_approx(mat.get_shader_parameter("layer2_scale"), 2.0),
+	check(mat.get_shader_parameter("layer_albedo") is Texture2DArray and mat.get_shader_parameter("layer_height") is Texture2DArray,
+		"the layers are packed into one texture array per channel")
+	# The source height textures are kept as metadata for the CPU bake (the array resizes them).
+	var heights: Array = mat.get_meta(&"gads_layer_heights", [])
+	check(heights.size() >= 2 and heights[0] == rock.get_shader_parameter("height_texture")
+		and heights[1] == snow.get_shader_parameter("height_texture"), "each layer keeps its source height texture")
+	check(is_equal_approx(GADSMaterials.get_layer_param(mat, "scale", 0), 0.5) and is_equal_approx(GADSMaterials.get_layer_param(mat, "scale", 1), 2.0),
 		"each layer keeps its texture size (scale relative to the first)")
-	check(mat.get_shader_parameter("layer1_mask_channel") == GADSMaterials.LayerMask.VERTEX_R
-		and mat.get_shader_parameter("layer2_mask_channel") == GADSMaterials.LayerMask.VERTEX_G
-		and is_equal_approx(mat.get_shader_parameter("layer1_amount"), 1.0), "layers 2 and 3 lie where vertex colour R and G say")
+	check(GADSMaterials.get_layer_param(mat, "mask_channel", 0) == GADSMaterials.LayerMask.VERTEX_R
+		and GADSMaterials.get_layer_param(mat, "mask_channel", 1) == GADSMaterials.LayerMask.VERTEX_G
+		and is_equal_approx(GADSMaterials.get_layer_param(mat, "amount", 0), 1.0), "layers 2 and 3 lie where vertex colour R and G say")
 	var colors: PackedColorArray = t.get_chunks()[0].mesh.surface_get_arrays(0)[Mesh.ARRAY_COLOR]
 	check(colors.size() > 0, "the chunks carry the weights as vertex colours")
 	# A splat map replaces the rules.

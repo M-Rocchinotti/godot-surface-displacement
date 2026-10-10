@@ -165,10 +165,10 @@ static func _vertex_colour_reads(m: ShaderMaterial, layered: bool) -> Array:
 		if ch > 0 and ch <= 4:
 			reads.append("%s (%s)" % [CHANNELS[ch - 1], key])
 	if layered:
-		for k in [1, 2]:
-			var ch := int(GADSMaterials.get_param(m, "layer%d_mask_channel" % k))
-			if ch >= 0 and ch < 4 and float(GADSMaterials.get_param(m, "layer%d_amount" % k)) > 0.0:
-				reads.append("%s (layer %d)" % [CHANNELS[ch], k])
+		for i in GADSMaterials.LAYERED_LAYERS:
+			var ch := int(GADSMaterials.get_layer_param(m, "mask_channel", i))
+			if ch >= 0 and ch < 4 and float(GADSMaterials.get_layer_param(m, "amount", i)) > 0.0:
+				reads.append("%s (layer %d)" % [CHANNELS[ch], i + 1])
 	return reads
 
 
