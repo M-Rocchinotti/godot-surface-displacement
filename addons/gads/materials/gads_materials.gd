@@ -336,6 +336,38 @@ static func combine_layers(materials: Array, masks: Array = [LayerMask.VERTEX_R,
 	return out
 
 
+## Packs per-layer textures into one [Texture2DArray] so a shader samples every layer through a
+## single texture unit (one unit instead of one per layer, which keeps the fragment shader within
+## the Compatibility renderer's 16-unit limit). All slices share a resolution -- the largest layer's,
+## capped at [param max_size] -- so smaller layers are resized up. [param textures] may hold nulls
+## and textures without a readable image; those become a [param fill] slice. [param format] is the
+## slice format ([constant Image.FORMAT_RGBA8] for colour, [constant Image.FORMAT_RF] for height).
+static func build_layer_array(textures: Array, format: Image.Format, fill: Color, max_size := 2048) -> Texture2DArray:
+	var size := 4
+	for tex in textures:
+		if tex is Texture2D:
+			size = maxi(size, maxi((tex as Texture2D).get_width(), (tex as Texture2D).get_height()))
+	size = mini(size, max_size)
+	var images: Array[Image] = []
+	for tex in textures:
+		var img: Image = (tex as Texture2D).get_image() if tex is Texture2D else null
+		if img == null:
+			img = Image.create(size, size, false, format)
+			img.fill(fill)
+		else:
+			img = img.duplicate()
+			if img.is_compressed():
+				img.decompress()
+			img.convert(format)
+			if img.get_width() != size or img.get_height() != size:
+				img.resize(size, size, Image.INTERPOLATE_LANCZOS)
+		img.generate_mipmaps()
+		images.append(img)
+	var array := Texture2DArray.new()
+	array.create_from_images(images)
+	return array
+
+
 ## A material from a texture folder written by tools/prepare_textures.py: <dir>/<id>_albedo.jpg,
 ## _normal.jpg, _arm.jpg, _height.exr and <id>.gads.json (real size and suggested relief depth).
 ## [param params] override the defaults derived from the metadata.

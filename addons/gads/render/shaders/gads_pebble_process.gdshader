@@ -27,7 +27,7 @@ uniform float lift = 0.002;
 uniform float base_spacing = 0.02;
 // Layers, copied from the parent GADSDisplacementField3D.
 uniform int layer_count = 1;
-uniform sampler2D layer_height[GADS_FIELD_LAYERS] : filter_linear_mipmap, repeat_enable;
+uniform sampler2DArray layer_height : filter_linear_mipmap, repeat_enable;
 uniform vec4 layer_a[GADS_FIELD_LAYERS];
 uniform vec4 layer_b[GADS_FIELD_LAYERS];
 uniform vec4 layer_c[GADS_FIELD_LAYERS];

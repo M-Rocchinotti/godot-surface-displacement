@@ -33,4 +33,15 @@ Not code: **maturity** — shipped projects, community, longevity.
 
 ## Status
 
-- Stage 1a: in progress.
+- **Stage 1a: WIP, one open issue.** Layer samplers (field + pebble shaders) and the
+  `GADS_LAYER_LOD/GRAD` macros are converted to `sampler2DArray`; the GDScript builds the arrays via
+  `GADSMaterials.build_layer_array` (height `FORMAT_RF`, colour `FORMAT_RGBA8`, resized to the
+  largest layer). Shaders compile on all renderers, the sampler count now fits WebGL, and the
+  field's vertex heights, hit positions and self-shadow all still pass.
+  - **Open:** the field's *shading* differs from the per-material parallax ground by up to ~10 %
+    mean luminance (worst in the distance, small near the camera). Cause: runtime `generate_mipmaps()`
+    averages sRGB albedo in gamma space (Godot's importer does it in linear) and normal maps need
+    renormalized mips / correct encoding, so the arrays don't match the originals' mips.
+  - **Next:** build the colour arrays with linear-space mipmaps (convert to linear, mip, store), use
+    `renormalize` for the normal array, and keep height as is; then re-run `field_tests.gd`
+    (the "field shades like the parallax ground" checks) until within tolerance.

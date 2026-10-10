@@ -599,10 +599,13 @@ func _apply_layers() -> void:
 		effects[4].append(Vector4(edge_color.r, edge_color.g, edge_color.b, _param(m, "edge_amount")))
 		effects[5].append(Vector4(_param(m, "cavity_radius"), 0, 0, 0))
 	_set_param("layer_count", count)
-	_set_param("layer_height", heights)
-	_set_param("layer_albedo", albedos)
-	_set_param("layer_normal", normals)
-	_set_param("layer_orm", orms)
+	# One array texture per channel (see GADSMaterials.build_layer_array): the shader samples all
+	# layers through a single texture unit, staying within the Compatibility 16-unit limit. Height
+	# keeps float precision (FORMAT_RF); the others are colour (FORMAT_RGBA8).
+	_set_param("layer_height", GADSMaterials.build_layer_array(heights, Image.FORMAT_RF, Color(0, 0, 0, 0)))
+	_set_param("layer_albedo", GADSMaterials.build_layer_array(albedos, Image.FORMAT_RGBA8, Color(1, 1, 1, 1)))
+	_set_param("layer_normal", GADSMaterials.build_layer_array(normals, Image.FORMAT_RGBA8, Color(0.5, 0.5, 1, 1)))
+	_set_param("layer_orm", GADSMaterials.build_layer_array(orms, Image.FORMAT_RGBA8, Color(1, 1, 1, 1)))
 	_set_param("layer_a", a)
 	_set_param("layer_b", b)
 	_set_param("layer_c", c)

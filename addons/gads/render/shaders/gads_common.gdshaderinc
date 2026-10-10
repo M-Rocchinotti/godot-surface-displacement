@@ -24,16 +24,11 @@ global uniform vec4 gads_deform_params;      // window origin x, z (m), window s
 global uniform vec4 gads_deform_time;        // now (s), recovery (m/s), unused, unused
 global uniform vec4 gads_weather;            // surface effects everywhere: rain wetness, snow cover, puddle level, unused
 
-// Lookups into the 4-element layer sampler arrays by a loop index. GLSL 1.30+ (the Compatibility
-// renderer) indexes sampler arrays only with constant expressions, so there a lookup picks the
-// element by branching; Vulkan indexes directly.
-#if CURRENT_RENDERER == RENDERER_COMPATIBILITY
-#define GADS_LAYER_LOD(arr, i, uv, lod) ((i) == 0 ? textureLod(arr[0], uv, lod) : (i) == 1 ? textureLod(arr[1], uv, lod) : (i) == 2 ? textureLod(arr[2], uv, lod) : textureLod(arr[3], uv, lod))
-#define GADS_LAYER_GRAD(arr, i, uv, dx, dy) ((i) == 0 ? textureGrad(arr[0], uv, dx, dy) : (i) == 1 ? textureGrad(arr[1], uv, dx, dy) : (i) == 2 ? textureGrad(arr[2], uv, dx, dy) : textureGrad(arr[3], uv, dx, dy))
-#else
-#define GADS_LAYER_LOD(arr, i, uv, lod) textureLod(arr[i], uv, lod)
-#define GADS_LAYER_GRAD(arr, i, uv, dx, dy) textureGrad(arr[i], uv, dx, dy)
-#endif
+// Lookups into the layer sampler2DArrays by a loop index. A sampler2DArray is one texture unit of
+// any depth (unlike an array of samplers, which is one unit per element and overflows the
+// Compatibility renderer's 16-unit limit), and it can be indexed dynamically on every renderer.
+#define GADS_LAYER_LOD(arr, i, uv, lod) textureLod(arr, vec3((uv), float(i)), lod)
+#define GADS_LAYER_GRAD(arr, i, uv, dx, dy) textureGrad(arr, vec3((uv), float(i)), dx, dy)
 
 // Distance fade of the relief (1 near, 0 beyond the fade end).
 // Debug view 10 (before / after): 0 where the screen shows surfaces without their relief (left

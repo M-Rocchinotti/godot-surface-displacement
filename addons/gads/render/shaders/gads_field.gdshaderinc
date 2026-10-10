@@ -44,10 +44,12 @@ uniform float lift = 0.002;
 uniform float push_down = 0.1;
 // Layers (copied from the ground materials).
 uniform int layer_count = 1;
-uniform sampler2D layer_height[GADS_FIELD_LAYERS] : filter_linear_mipmap, repeat_enable;
-uniform sampler2D layer_albedo[GADS_FIELD_LAYERS] : source_color, filter_linear_mipmap_anisotropic, repeat_enable;
-uniform sampler2D layer_normal[GADS_FIELD_LAYERS] : filter_linear_mipmap_anisotropic, repeat_enable;
-uniform sampler2D layer_orm[GADS_FIELD_LAYERS] : filter_linear_mipmap_anisotropic, repeat_enable;
+// One array texture per channel (all layers share a resolution; built by the GDScript): one texture
+// unit each instead of one per layer, so the fragment shader fits the Compatibility 16-unit limit.
+uniform sampler2DArray layer_height : filter_linear_mipmap, repeat_enable;
+uniform sampler2DArray layer_albedo : source_color, filter_linear_mipmap_anisotropic, repeat_enable;
+uniform sampler2DArray layer_normal : filter_linear_mipmap_anisotropic, repeat_enable;
+uniform sampler2DArray layer_orm : filter_linear_mipmap_anisotropic, repeat_enable;
 uniform vec4 layer_a[GADS_FIELD_LAYERS]; // height_m, remap low, remap high, normal strength
 uniform vec4 layer_b[GADS_FIELD_LAYERS]; // 1 / size x, 1 / size z, offset x, offset z
 uniform vec4 layer_c[GADS_FIELD_LAYERS]; // cos(rotation), sin(rotation), ao strength, roughness scale

@@ -6,8 +6,8 @@ render_mode cull_back, diffuse_burley, specular_schlick_ggx;
 
 #define GADS_FIELD_LAYERS 4
 
-uniform sampler2D layer_albedo[GADS_FIELD_LAYERS] : source_color, filter_linear_mipmap, repeat_enable;
-uniform sampler2D layer_orm[GADS_FIELD_LAYERS] : filter_linear_mipmap, repeat_enable;
+uniform sampler2DArray layer_albedo : source_color, filter_linear_mipmap, repeat_enable;
+uniform sampler2DArray layer_orm : filter_linear_mipmap, repeat_enable;
 uniform vec4 layer_b[GADS_FIELD_LAYERS];
 uniform vec4 layer_c[GADS_FIELD_LAYERS];
 uniform vec4 layer_d[GADS_FIELD_LAYERS];
@@ -37,23 +37,9 @@ void vertex() {
 
 void fragment() {
 	vec2 uv = gads_layer_uv(pebble_layer, pebble_centre.xz);
-	vec3 albedo = vec3(0.5);
-	vec3 orm = vec3(1.0);
-	// Constant index per draw is not guaranteed, so branch explicitly (with constant indices: the
-	// Compatibility renderer indexes sampler arrays with nothing else).
-	if (pebble_layer == 0) {
-		albedo = textureLod(layer_albedo[0], uv, albedo_lod).rgb * layer_d[0].rgb;
-		orm = textureLod(layer_orm[0], uv, albedo_lod).rgb;
-	} else if (pebble_layer == 1) {
-		albedo = textureLod(layer_albedo[1], uv, albedo_lod).rgb * layer_d[1].rgb;
-		orm = textureLod(layer_orm[1], uv, albedo_lod).rgb;
-	} else if (pebble_layer == 2) {
-		albedo = textureLod(layer_albedo[2], uv, albedo_lod).rgb * layer_d[2].rgb;
-		orm = textureLod(layer_orm[2], uv, albedo_lod).rgb;
-	} else if (pebble_layer == 3) {
-		albedo = textureLod(layer_albedo[3], uv, albedo_lod).rgb * layer_d[3].rgb;
-		orm = textureLod(layer_orm[3], uv, albedo_lod).rgb;
-	}
+	// A sampler2DArray indexes dynamically on every renderer, so no per-layer branch is needed.
+	vec3 albedo = textureLod(layer_albedo, vec3(uv, float(pebble_layer)), albedo_lod).rgb * layer_d[pebble_layer].rgb;
+	vec3 orm = textureLod(layer_orm, vec3(uv, float(pebble_layer)), albedo_lod).rgb;
 	// A few pixels wide, a pebble is shaded like the mip-mapped ground around it: its normals
 	// bend towards the ground's (up) between 1 and 4 m. Otherwise its side facing the camera,
 	// unlit when the sun is behind it, makes it a dark speck on the averaged, lit gravel.
