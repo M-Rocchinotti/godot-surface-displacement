@@ -101,6 +101,10 @@ var _material: ShaderMaterial
 var _layers_dirty := true
 var _ground_dirty := true
 var _mesh_dirty := true
+## Per-channel layer-array cache (see _layer_array): {channel: {"src": Array[Texture2D], "tex": ...}}.
+## Rebuilding a Texture2DArray is costly (decompress + mipmaps) and yields a new object every time,
+## so re-applying unchanged layers would needlessly re-upload them and bump the parameters version.
+var _layer_arrays := {}
 var _params_dirty := true
 var _baking := false
 var _no_ground := false # a runtime bake of existing ground meshes failed
@@ -601,11 +605,13 @@ func _apply_layers() -> void:
 	_set_param("layer_count", count)
 	# One array texture per channel (see GADSMaterials.build_layer_array): the shader samples all
 	# layers through a single texture unit, staying within the Compatibility 16-unit limit. Height
-	# keeps float precision (FORMAT_RF); the others are colour (FORMAT_RGBA8).
-	_set_param("layer_height", GADSMaterials.build_layer_array(heights, Image.FORMAT_RF, Color(0, 0, 0, 0)))
-	_set_param("layer_albedo", GADSMaterials.build_layer_array(albedos, Image.FORMAT_RGBA8, Color(1, 1, 1, 1)))
-	_set_param("layer_normal", GADSMaterials.build_layer_array(normals, Image.FORMAT_RGBA8, Color(0.5, 0.5, 1, 1)))
-	_set_param("layer_orm", GADSMaterials.build_layer_array(orms, Image.FORMAT_RGBA8, Color(1, 1, 1, 1)))
+	# keeps float precision (FORMAT_RF); the others are colour (FORMAT_RGBA8). Each slice keeps the
+	# source's imported mip chain, so the array's smaller levels match the per-material textures the
+	# field blends into (a plain regenerate flattened the normal mips and brightened the field).
+	_set_param("layer_height", _layer_array("height", heights, Image.FORMAT_RF, Color(0, 0, 0, 0)))
+	_set_param("layer_albedo", _layer_array("albedo", albedos, Image.FORMAT_RGBA8, Color(1, 1, 1, 1)))
+	_set_param("layer_normal", _layer_array("normal", normals, Image.FORMAT_RGBA8, Color(0.5, 0.5, 1, 1)))
+	_set_param("layer_orm", _layer_array("orm", orms, Image.FORMAT_RGBA8, Color(1, 1, 1, 1)))
 	_set_param("layer_a", a)
 	_set_param("layer_b", b)
 	_set_param("layer_c", c)
@@ -614,6 +620,18 @@ func _apply_layers() -> void:
 	_set_param("layer_anim", anim)
 	for k in EFFECT_PARAMS.size():
 		_set_param(EFFECT_PARAMS[k], effects[k])
+
+
+## The layer array for [param channel], reusing the cached one while the source textures are
+## unchanged (same references, compared by value) so re-applying identical layers neither rebuilds
+## the array nor bumps the parameters version. A changed texture reference misses and rebuilds.
+func _layer_array(channel: String, textures: Array[Texture2D], format: Image.Format, fill: Color) -> Texture2DArray:
+	var cached: Dictionary = _layer_arrays.get(channel, {})
+	if cached.get("src") == textures:
+		return cached["tex"]
+	var tex := GADSMaterials.build_layer_array(textures, format, fill)
+	_layer_arrays[channel] = {"src": textures.duplicate(), "tex": tex}
+	return tex
 
 
 ## The clipmap mesh: [param levels] rings of [param n] x [param n] quads (vertex positions in

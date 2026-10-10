@@ -342,6 +342,11 @@ static func combine_layers(materials: Array, masks: Array = [LayerMask.VERTEX_R,
 ## capped at [param max_size] -- so smaller layers are resized up. [param textures] may hold nulls
 ## and textures without a readable image; those become a [param fill] slice. [param format] is the
 ## slice format ([constant Image.FORMAT_RGBA8] for colour, [constant Image.FORMAT_RF] for height).
+## Each slice keeps the source texture's imported mip chain where it has one, so the array's smaller
+## levels match the per-material textures the field blends into -- the importer builds those mips
+## (sRGB albedo averaged in the stored space, normal maps renormalised), and regenerating them here
+## with a plain [method Image.generate_mipmaps] flattened the normals and brightened the field. Mips
+## are only (re)built for a fill slice or a layer resized to the common resolution, where none carry.
 static func build_layer_array(textures: Array, format: Image.Format, fill: Color, max_size := 2048) -> Texture2DArray:
 	var size := 4
 	for tex in textures:
@@ -360,8 +365,9 @@ static func build_layer_array(textures: Array, format: Image.Format, fill: Color
 				img.decompress()
 			img.convert(format)
 			if img.get_width() != size or img.get_height() != size:
-				img.resize(size, size, Image.INTERPOLATE_LANCZOS)
-		img.generate_mipmaps()
+				img.resize(size, size, Image.INTERPOLATE_LANCZOS)  # drops any imported mips
+		if not img.has_mipmaps():
+			img.generate_mipmaps()
 		images.append(img)
 	var array := Texture2DArray.new()
 	array.create_from_images(images)
