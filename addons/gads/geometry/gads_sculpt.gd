@@ -27,6 +27,9 @@ static var tool_strength := 0.002
 ## The terrain tool's brush radius (m) and strength (m per dab for Raise and Lower).
 static var terrain_radius := 4.0
 static var terrain_strength := 0.1
+## The terrain Colour brush's tint and the Wetness brush's target level (0..1), Stage 6.
+static var terrain_colour := Color.WHITE
+static var terrain_wetness := 1.0
 
 
 ## A new, flat sculpt map of [param size] x [param size] texels (FORMAT_RF).

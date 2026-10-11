@@ -5,10 +5,13 @@ extends EditorInspectorPlugin
 ## cuts and fills holes.
 ## Each stroke is one undoable step; the edited maps are saved into the terrain's data directory.
 
-const MODES := ["Raise", "Lower", "Smooth", "Flatten", "Paint layer 2", "Paint layer 3", "Erase layers", "Cut holes", "Fill holes"]
+const MODES := ["Raise", "Lower", "Smooth", "Flatten", "Paint layer 2", "Paint layer 3", "Erase layers", "Cut holes", "Fill holes", "Paint colour", "Paint wetness"]
 ## GADSSculpt.tool_paint values of the hole brushes (the layer brushes use 0-2).
 const CUT_HOLES := 10
 const FILL_HOLES := 11
+## GADSSculpt.tool_paint values of the Stage 6 surface brushes (colour tint and wetness).
+const PAINT_COLOUR := 20
+const PAINT_WETNESS := 21
 const KINDS := ["ridged", "noise", "billow", "craters"]
 
 ## The plugin's edit_terrain_heights(terrain, action name, callable): one undoable action.
@@ -55,6 +58,20 @@ class ToolPanel extends VBoxContainer:
 		_row.add_child(_spin("Radius (m)", 0.25, 500.0, 0.25, GADSSculpt.terrain_radius, func(v: float) -> void: GADSSculpt.terrain_radius = v))
 		_row.add_child(_spin("Strength (cm)", 0.5, 1000.0, 0.5, GADSSculpt.terrain_strength * 100.0,
 			func(v: float) -> void: GADSSculpt.terrain_strength = v / 100.0))
+		# Stage 6 surface brushes: the Colour tint (Paint colour) and the target wetness (Paint wetness).
+		var colour_box := HBoxContainer.new()
+		var colour_label := Label.new()
+		colour_label.text = "Colour"
+		colour_box.add_child(colour_label)
+		var colour := ColorPickerButton.new()
+		colour.custom_minimum_size = Vector2(48, 0)
+		colour.color = GADSSculpt.terrain_colour
+		colour.edit_alpha = false
+		colour.tooltip_text = "The tint the Paint colour brush multiplies onto the ground (white = no tint)."
+		colour.color_changed.connect(func(c: Color) -> void: GADSSculpt.terrain_colour = c)
+		colour_box.add_child(colour)
+		_row.add_child(colour_box)
+		_row.add_child(_spin("Wetness", 0.0, 1.0, 0.05, GADSSculpt.terrain_wetness, func(v: float) -> void: GADSSculpt.terrain_wetness = v))
 		_row.visible = _toggle.button_pressed
 		# Generate (and, with the native library, Erode).
 		var gen := HBoxContainer.new()
@@ -114,6 +131,10 @@ class ToolPanel extends VBoxContainer:
 				return 7
 			FILL_HOLES:
 				return 8
+			PAINT_COLOUR:
+				return 9
+			PAINT_WETNESS:
+				return 10
 		return GADSSculpt.tool_mode
 
 	static func set_mode(index: int) -> void:
@@ -121,7 +142,7 @@ class ToolPanel extends VBoxContainer:
 			GADSSculpt.tool_mode = index as GADSSculpt.Mode
 			GADSSculpt.tool_paint = -1
 		else:
-			GADSSculpt.tool_paint = [1, 2, 0, CUT_HOLES, FILL_HOLES][index - 4]
+			GADSSculpt.tool_paint = [1, 2, 0, CUT_HOLES, FILL_HOLES, PAINT_COLOUR, PAINT_WETNESS][index - 4]
 
 	func _on_generate() -> void:
 		var kind: String = KINDS[_kind.selected]

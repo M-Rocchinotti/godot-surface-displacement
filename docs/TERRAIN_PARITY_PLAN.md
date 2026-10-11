@@ -163,3 +163,35 @@ Not code: **maturity** — shipped projects, community, longevity.
   set imports byte-identically to the equivalent whole map). New terrain tests
   (`imports_heightmaps_as_regions`) import a synthetic `.r16` and `.exr` and a 2x2 tiled set and check
   the heights match the source within 16-bit precision and that tiled == whole. Full suite 15/15.
+- **Stage 6: per-texel colour and wetness painting is done (plan complete).** The last paint targets
+  — a per-texel surface COLOUR (an albedo tint) and WETNESS — join height, layers and holes. A single
+  optional RGBA map (the surface-paint map) is sampled by world XZ, the twin of the Stage 2 control
+  map: RGB a colour tint multiplied onto the blended albedo (`albedo *= tint`), A an extra wetness fed
+  into the existing surface effects as a `max` with the global weather (`gads_surface_effects`'
+  new `extra_wetness`, and the field's `e.wetness`). It is a runtime branch inside the `GADS_LAYERED`
+  path (`gads_core.gdshaderinc` + the field `gads_field.gdshaderinc`), a no-op when
+  `surface_paint_rect.z <= 0` (unbound), so unpainted terrains, every non-layered / whole-texture case
+  and the variant table are byte-identical; the extra sampler (one unit, `source_color` so the tint
+  reads as linear and the wetness stays in A) keeps the layered fragment within WebGL's 16. The field
+  binds the same texture and rect (`GADSDisplacementField3D.set_surface_paint`), so the near-camera
+  relief tints exactly like the chunks across a painted spot (no seam), as Stage 2's control map does.
+  - **Paint API + tools.** `GADSTerrain3D.paint_colour(world, radius, Color, strength, falloff)` and
+    `paint_wetness(world, radius, amount, strength, falloff)` paint the surface map with the same
+    brush the layer tools use (`paint_layer`'s falloff), making it an editable map of one RGBA8 texel
+    per vertex (`surfacemap`, `make_surface_editable`, quantized to 8 bits so a saved map reads back
+    the same). The viewport Sculpt/Paint inspector gains Colour and Wetness modes (a colour picker and
+    a wetness level); each stroke is one undoable step, exactly as the splat tool registers undo
+    (`set_surface_region` / `get_surface_image`).
+  - **Persistence.** The surface map travels through the region files: `GADSTerrainRegion` carries
+    `surface_dims` + `surface_tile` (additive — absent on an old file, so a terrain that never painted
+    loads unchanged), and `save_regions` / `load_regions` / `build_region_store` / the Stage 5 import
+    write and reassemble it alongside height, splat and holes. A streamed world therefore carries
+    colour and wetness authored on a resident terrain; painting a live sparse-streaming terrain in
+    place stays DEFERRED (as Stage 4 documented — the control map is off there too), but the whole-
+    resident load binds and draws it.
+  - New terrain tests: `surface_paint_round_trips` (paint colour + wetness, save/load regions, the
+    coalesced surface map is byte-identical, a loaded terrain rebinds it, an unpainted one binds
+    nothing) and the headed `paints_colour_and_wetness` (a colour brush tints the surface red at its
+    spot and nowhere else, a wetness brush darkens it, the detail field tints the spot exactly as the
+    chunks do). Full suite 15/15; visual-regression baselines unchanged (no demo scene paints a
+    surface).

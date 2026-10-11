@@ -73,6 +73,16 @@ uniform vec4 layer_fx_radius[GADS_FIELD_LAYERS];      // cavity radius (mip leve
 // same texture and rect on both. No mips: textureLod(..., 0.0) is safe in the in-bounds branch.
 uniform sampler2D control_map : filter_linear, repeat_disable;
 uniform vec4 control_rect = vec4(0.0);
+// Per-texel painted surface (Stage 6), the twin of the one the layered chunk material samples
+// (gads_core.gdshaderinc): an RGBA map read by world XZ, RGB a colour tint multiplied onto the
+// field's albedo, A an extra wetness folded into the surface effects as a max like the weather.
+// surface_paint_rect = (origin.x, origin.z, 1/extent.x, 1/extent.z) in world metres; .z <= 0 means
+// unbound, so gads_surface_paint returns the no-op (1, 1, 1, 0) and the field is byte-identical.
+// GADSTerrain3D binds the same texture and rect here and on its chunks, so the near-camera relief
+// shades like the ground it covers across a painted spot (no seam). source_color reads the tint as
+// linear; no mips, so textureLod(..., 0.0) is safe.
+uniform sampler2D surface_paint_map : source_color, filter_linear, repeat_disable;
+uniform vec4 surface_paint_rect = vec4(0.0);
 
 varying vec3 f_base_normal;
 varying float f_ground;
@@ -129,6 +139,20 @@ vec3 gads_control_masks(vec2 xz) {
 		return vec3(-1.0, 0.0, 0.0);
 	}
 	return textureLod(control_map, uv, 0.0).rgb;
+}
+
+// The painted surface (Stage 6) at world xz: RGB a colour tint, A an extra wetness, or the no-op
+// (1, 1, 1, 0) when no map is bound or xz lies outside it. The same map and convention the chunk
+// material samples (gads_core.gdshaderinc).
+vec4 gads_surface_paint(vec2 xz) {
+	if (surface_paint_rect.z <= 0.0) {
+		return vec4(1.0, 1.0, 1.0, 0.0);
+	}
+	vec2 uv = (xz - surface_paint_rect.xy) * surface_paint_rect.zw;
+	if (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) {
+		return vec4(1.0, 1.0, 1.0, 0.0);
+	}
+	return textureLod(surface_paint_map, uv, 0.0);
 }
 
 // The layers' relief above the ground (m) at world xz, selected and blended by the control map
@@ -386,6 +410,10 @@ void fragment() {
 		nsum += w[i] * gads_apply_normal_map(GADS_LAYER_GRAD(layer_normal, i, uv, ddx, ddy).rgb, right, image_up, n, layer_a[i].w);
 		spec += w[i] * layer_e[i].x;
 	}
+	// Per-texel painted surface (Stage 6): tint the albedo before the effects (as the chunk material
+	// does) and feed the painted wetness into e.wetness below; a no-op where no map is bound.
+	vec4 surface_paint = gads_surface_paint(xz_hit);
+	albedo *= surface_paint.rgb;
 	float ao_out = orm.r;
 	float roughness_out = clamp(orm.g, 0.0, 1.0);
 	float metallic_out = clamp(orm.b, 0.0, 1.0);
@@ -431,7 +459,7 @@ void fragment() {
 		radius *= inv;
 	}
 	e.cover.x = max(e.cover.x, gads_weather.y * response);
-	e.wetness = max(e.wetness, gads_weather.x * response);
+	e.wetness = max(max(e.wetness, gads_weather.x * response), surface_paint.a);
 	e.puddle = max(e.puddle, gads_weather.z * response);
 	if (gads_effects_on(e)) {
 		vec2 uv = gads_layer_uv(main_layer, xz_hit);

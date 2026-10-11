@@ -270,14 +270,17 @@ float gads_relief_mask(vec4 color) {
 
 // Surface effects (see the effects uniforms, plus the weather) at the hit uv (main map mip lod)
 // on a surface whose world normal has y = up. normal_keep: how much of the normal map stays.
-void gads_surface_effects(vec2 uv, float lod, float up, vec4 vertex_color,
+// extra_wetness is the per-texel painted wetness (Stage 6; 0 on every non-layered path and wherever
+// no surface-paint map is bound), folded into the effects' wetness as a max like the global weather:
+// max(., 0.0) leaves e.wetness and so the whole function bit-for-bit unchanged when it is 0.
+void gads_surface_effects(vec2 uv, float lod, float up, vec4 vertex_color, float extra_wetness,
 		inout vec3 albedo, inout float roughness, inout float metallic, inout float ao, out float normal_keep) {
 	normal_keep = 1.0;
 	GADSEffects e;
 	e.cover_color = vec4(cover_color.rgb, cover_roughness);
 	e.cover = vec4(max(cover_amount, gads_weather.y * weather_response), cover_slope, cover_height_bias);
 	e.sharpness = cover_sharpness;
-	e.wetness = max(wetness, gads_weather.x * weather_response);
+	e.wetness = max(max(wetness, gads_weather.x * weather_response), extra_wetness);
 	e.puddle = max(puddle_level, gads_weather.z * weather_response);
 	e.cavity = vec4(cavity_color.rgb, cavity_amount);
 	e.edge = vec4(edge_color.rgb, edge_amount);
@@ -378,6 +381,33 @@ vec3 gads_custom_layer_masks(vec3 masks, vec3 world_pos, vec3 world_normal) {
 	return m;
 }
 #endif
+
+// Optional per-texel painted surface (Stage 6 of the terrain-parity plan): an RGBA map sampled by
+// world XZ -- RGB a colour tint multiplied onto the blended albedo (albedo *= tint), A an extra
+// wetness fed into the surface effects as a max, exactly like the global weather wetness
+// (gads_surface_effects' extra_wetness). surface_paint_rect = (origin.x, origin.z, 1/extent.x,
+// 1/extent.z) in world metres (origin = the map's min corner); .z <= 0 means no map is bound, so
+// gads_surface_paint returns the no-op (1, 1, 1, 0) -- a white tint and no wetness -- and an unpainted
+// terrain (and every non-layered / whole-texture case, which never reaches this block) is
+// byte-identical. The whole thing is a runtime branch, not a shader variant: the variant table is
+// untouched and it costs one extra texture unit, well within WebGL's 16. source_color reads the tint
+// as linear (the stored map is sRGB RGBA8); the alpha (wetness) stays linear. filter_linear smooths
+// between the painted texels; the map carries no mips, so textureLod(..., 0.0) is safe. The
+// near-camera GADSDisplacementField3D samples the same map the same way (gads_field.gdshaderinc), so
+// the field and the chunks agree on a painted spot (no seam).
+uniform sampler2D surface_paint_map : source_color, filter_linear, repeat_disable;
+uniform vec4 surface_paint_rect = vec4(0.0);
+
+vec4 gads_surface_paint(vec3 world_pos) {
+	if (surface_paint_rect.z <= 0.0) {
+		return vec4(1.0, 1.0, 1.0, 0.0); // no map bound: white tint, no wetness (a no-op)
+	}
+	vec2 uv = (world_pos.xz - surface_paint_rect.xy) * surface_paint_rect.zw;
+	if (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) {
+		return vec4(1.0, 1.0, 1.0, 0.0); // outside the map: unpainted
+	}
+	return textureLod(surface_paint_map, uv, 0.0);
+}
 
 // Blend weights t[i] of the extra layers at uv, and the blended relief (m, scale 1): each active
 // layer (mask arg[i + 1] > 0) lies over the result so far by its height-aware weight, the higher

@@ -5,7 +5,7 @@ extends Resource
 ##
 ## A large world is saved as one of these resources per region (see [method GADSTerrain3D.save_regions]),
 ## so a 16k terrain lives as a set of per-region files on disk rather than one giant texture. Each
-## file holds this region's tile of each editable map that exists (height, splat, holes) plus enough
+## file holds this region's tile of each editable map that exists (height, splat, surface, holes) plus enough
 ## header to put the tile back in its place and to reconstruct the terrain's grid:
 ## [member GADSTerrain3D.load_regions] reads the set, reassembles the whole maps and rebuilds.
 ##
@@ -44,6 +44,10 @@ extends Resource
 @export var height_dims := Vector3i.ZERO
 ## The WHOLE splat map's dimensions (width, height, channels = 4), or zero if there is no splat map.
 @export var splat_dims := Vector3i.ZERO
+## The WHOLE surface-paint map's dimensions (width, height, channels = 4 = RGB colour tint + A
+## wetness, Stage 6), or zero if the terrain has no surface-paint map. Absent on an old region file
+## (the default), so a terrain that never painted colour or wetness loads unchanged.
+@export var surface_dims := Vector3i.ZERO
 ## The WHOLE hole map's dimensions (width, height, channels = 1 = one vertex), or zero if none.
 @export var holes_dims := Vector3i.ZERO
 ## This region's height texels (row-major over the region's rectangle, one float a texel), empty if
@@ -51,5 +55,8 @@ extends Resource
 @export var height_tile := PackedFloat32Array()
 ## This region's splat texels (row-major, four floats a texel: RGBA), empty if no splat map.
 @export var splat_tile := PackedFloat32Array()
+## This region's surface-paint texels (row-major, four floats a texel: RGB colour tint + A wetness,
+## Stage 6), empty if no surface-paint map.
+@export var surface_tile := PackedFloat32Array()
 ## This region's hole flags (row-major, one byte a vertex: non-zero = a hole), empty if no hole map.
 @export var holes_tile := PackedByteArray()

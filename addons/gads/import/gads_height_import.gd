@@ -322,8 +322,9 @@ static func import_texture(path: String, options := {}) -> ImageTexture:
 ## importer takes them), configures an off-tree terrain with the geometry from [param params]
 ## ("size" in metres -- default the heightmap sized at "vertex_spacing" per texel -- "vertex_spacing",
 ## "chunk_quads", "region_size", "height_scale", "height_offset") and that map, then calls
-## [method GADSTerrain3D.save_regions]. "splat" and "holes" ([Image], [Texture2D] or a path) add those
-## maps. Returns [constant OK] or an error. Editor use: holding the whole heightmap in memory for this
+## [method GADSTerrain3D.save_regions]. "splat", "surface" (RGBA colour tint + wetness, Stage 6) and
+## "holes" ([Image], [Texture2D] or a path) add those maps. Returns [constant OK] or an error.
+## Editor use: holding the whole heightmap in memory for this
 ## one-time import is fine; it is the runtime residency the region files keep sparse.
 static func import_as_regions(height_path: String, out_dir: String, params := {}) -> Error:
 	var height := load_height(height_path, params)
@@ -445,7 +446,7 @@ static func _optional_map_image(value: Variant) -> Image:
 
 
 ## Configures an off-tree [GADSTerrain3D] with [param params]' geometry and [param height] (plus an
-## optional "splat" / "holes" map) and writes its region files to [param out_dir]. Shared by
+## optional "splat" / "surface" / "holes" map) and writes its region files to [param out_dir]. Shared by
 ## [method import_as_regions] and [method import_tiles_as_regions]. The terrain is never added to the
 ## scene: [method GADSTerrain3D.build_region_store] builds only the maps the save needs, no geometry.
 static func _save_image_as_regions(height: Image, out_dir: String, params := {}) -> Error:
@@ -462,6 +463,9 @@ static func _save_image_as_regions(height: Image, out_dir: String, params := {})
 	var splat := _optional_map_image(params.get("splat"))
 	if splat != null:
 		t.splatmap = ImageTexture.create_from_image(splat)
+	var surface := _optional_map_image(params.get("surface"))
+	if surface != null:
+		t.surfacemap = ImageTexture.create_from_image(surface) # Stage 6: colour tint (RGB) + wetness (A)
 	var holes := _optional_map_image(params.get("holes"))
 	if holes != null:
 		t.holes = ImageTexture.create_from_image(holes)

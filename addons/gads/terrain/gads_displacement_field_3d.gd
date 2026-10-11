@@ -111,6 +111,11 @@ var _params_dirty := true
 var _control_map: Texture2D
 var _control_rect := Vector4.ZERO
 var _control_dirty := false
+## Per-texel painted surface map bound by GADSTerrain3D (see [method set_surface_paint]); null = the
+## field draws no painted colour or wetness (Stage 6).
+var _surface_paint_map: Texture2D
+var _surface_paint_rect := Vector4.ZERO
+var _surface_paint_dirty := false
 var _baking := false
 var _no_ground := false # a runtime bake of existing ground meshes failed
 var _ground_texture: ImageTexture
@@ -215,6 +220,21 @@ func set_control_map(map: Texture2D, rect: Vector4) -> void:
 	_control_map = map
 	_control_rect = new_rect
 	_control_dirty = true
+
+
+## Binds a per-texel painted surface map (Stage 6) so the field tints its albedo and darkens / glosses
+## where it is painted, the same map and convention the layered chunk material samples, so the
+## near-camera relief matches the ground across a painted spot (no seam). [param map]: an RGBA texture,
+## RGB a colour tint, A an extra wetness, sampled by world XZ. [param rect]: (origin.x, origin.z,
+## 1/extent.x, 1/extent.z) in world metres. A null map (or rect.z <= 0) clears it. GADSTerrain3D binds
+## the same texture and rect here and on its chunks' material.
+func set_surface_paint(map: Texture2D, rect: Vector4) -> void:
+	var new_rect := rect if map != null else Vector4.ZERO
+	if map == _surface_paint_map and new_rect == _surface_paint_rect:
+		return
+	_surface_paint_map = map
+	_surface_paint_rect = new_rect
+	_surface_paint_dirty = true
 
 
 ## Quality variant of the field shader (flat, POM, POM with self-shadow), as the surfaces use.
@@ -484,6 +504,10 @@ func _process(_delta: float) -> void:
 		_control_dirty = false
 		_set_param("control_map", _control_map)
 		_set_param("control_rect", _control_rect)
+	if _surface_paint_dirty:
+		_surface_paint_dirty = false
+		_set_param("surface_paint_map", _surface_paint_map)
+		_set_param("surface_paint_rect", _surface_paint_rect)
 	if Engine.is_editor_hint() and Engine.get_process_frames() % 30 == 0:
 		# Parameters may have been edited on the layer materials.
 		_apply_layers()

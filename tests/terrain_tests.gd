@@ -33,6 +33,9 @@ func _run() -> void:
 	await _test("layers_by_rules_and_splat_map", test_layers)
 	if DisplayServer.get_name() != "headless":
 		await _test("control_map_layers_per_texel", test_control_map)
+	await _test("surface_paint_round_trips", test_surface_round_trip)
+	if DisplayServer.get_name() != "headless":
+		await _test("paints_colour_and_wetness", test_surface_paint)
 	await _test("collision_matches_the_surface", test_collision)
 	await _test("detail_field_ground_data", test_ground_data)
 	await _test("holes", test_holes)
@@ -1109,6 +1112,135 @@ func test_control_map() -> void:
 	print("  boundary at the camera: field %.3f m, chunk %.3f m" % [field_b, chunk_b])
 	check(not is_nan(field_b) and not is_nan(chunk_b) and absf(field_b - chunk_b) < 0.06 and absf(field_b - bound) < 0.08,
 		"the field places the layer boundary where the chunks do (no seam)")
+	ft.queue_free()
+	h.clear_scene()
+	await process_frame
+
+
+## Stage 6 persistence: a painted surface (colour + wetness) travels through save_regions /
+## load_regions byte-identical, alongside the height, splat and hole maps. Logic only (no renderer),
+## so it runs headless too.
+func test_surface_round_trip() -> void:
+	var grass := layer_material(2.0, Color(0.5, 0.5, 0.5))
+	var dir := "user://gads_surface_rt"
+	_clear_dir(dir)
+	var t := make_terrain({"layers": [grass] as Array[ShaderMaterial], "region_size": 16.0, "height_scale": 20.0})
+	root.add_child(t)
+	# Paint a colour patch in one region and a wetness patch in another (both become part of the map).
+	t.paint_colour(Vector3(-22, 0, -22), 4.0, Color(0.9, 0.15, 0.2), 1.0)
+	t.paint_wetness(Vector3(20, 0, 20), 4.0, 1.0, 1.0)
+	t.flush_edits()
+	check(t.is_surface_editable() and not t._surface.is_empty(), "painting makes an editable per-vertex surface map")
+	# The painted spots carry the colour / wetness; an untouched vertex is the white, dry no-op.
+	var img := t.get_surface_image()
+	var painted := img.get_pixelv(_grid_of(t, Vector3(-22, 0, -22)))
+	var dry := img.get_pixelv(_grid_of(t, Vector3(0, 0, 0)))
+	var wet := img.get_pixelv(_grid_of(t, Vector3(20, 0, 20)))
+	check(painted.r > 0.7 and painted.g < 0.35 and dry.is_equal_approx(Color(1, 1, 1, 0)) and wet.a > 0.9,
+		"colour at its spot (%s), wetness in A (%.2f), white + dry elsewhere" % [painted, wet.a])
+	var err := t.save_regions(dir)
+	var files := _dir_files(dir, "region_", "res")
+	check(err == OK and files.size() == 16, "save_regions() wrote the surface tiles into each region file (%d files, err %d)" % [files.size(), err])
+	var l := make_terrain({"layers": [grass] as Array[ShaderMaterial], "region_size": 16.0, "height_scale": 20.0})
+	l.heightmap = null
+	l.surfacemap = null
+	root.add_child(l)
+	var ok := l.load_regions(dir)
+	check(ok and l.is_surface_editable(), "load_regions() restored the surface map as an editable per-vertex map")
+	# The coalesced surface map is byte-identical (as the height / splat / hole maps are).
+	var a: PackedFloat32Array = t._region_coalesce("surface")
+	var b: PackedFloat32Array = l._region_coalesce("surface")
+	var same := a.size() == b.size() and a.size() == t.get_grid_size().x * t.get_grid_size().y * 4
+	for i in range(0, a.size(), 29):
+		same = same and absf(a[i] - b[i]) < 1e-7
+	check(same, "the reloaded surface map is byte-identical (%d floats)" % a.size())
+	# And the terrain binds it again after the load (so a loaded world draws its colour / wetness).
+	var mat := l.get_material() as ShaderMaterial
+	check(mat.get_shader_parameter("surface_paint_map") is Texture2D and (mat.get_shader_parameter("surface_paint_rect") as Vector4).z > 0.0,
+		"a loaded terrain rebinds the surface map on its material")
+	# A terrain that never painted binds nothing (byte-identical, the branch is a no-op).
+	var plain := make_terrain({"layers": [grass] as Array[ShaderMaterial]})
+	root.add_child(plain)
+	await process_frame
+	var pmat := plain.get_material() as ShaderMaterial
+	check(pmat.get_shader_parameter("surface_paint_map") == null and (pmat.get_shader_parameter("surface_paint_rect") as Vector4).z <= 0.0,
+		"an unpainted terrain binds no surface map")
+	t.queue_free()
+	l.queue_free()
+	plain.queue_free()
+	await process_frame
+	_clear_dir(dir)
+
+
+## The surface map's texel (grid vertex) under a world position, for get_pixelv().
+func _grid_of(t: GADSTerrain3D, world: Vector3) -> Vector2i:
+	var local := t.to_local(world)
+	var g := (Vector2(local.x, local.z) + Vector2(t.get_extent()) * 0.5) / t.get_vertex_spacing()
+	return Vector2i(roundi(g.x), roundi(g.y)).clamp(Vector2i.ZERO, t.get_grid_size() - Vector2i.ONE)
+
+
+## Stage 6 render: painting a colour tints the surface there and nowhere else; painting wetness
+## darkens it there; the near-camera detail field tints like the chunks on a painted spot (no seam).
+func test_surface_paint() -> void:
+	var grey := flat_layer(Color(0.4, 0.4, 0.4)) # a neutral base so a colour tint and a darkening show
+	# Flat ambient only (no sun): wetness darkens the diffuse albedo, and with the sun's specular gone
+	# (a vertical sun and a top camera would reflect it straight back, hiding the darkening) the drop
+	# is visible. Colour and the field / chunk match need only the albedo, so ambient suffices.
+	var s := h.new_lit_scene(Color(1, 1, 1))
+	var t := make_terrain({"layers": [grey] as Array[ShaderMaterial], "height_scale": 1.0})
+	s.add_child(t)
+	top_camera(s, Vector2(0, 0), 0.05) # +-16 m across; world (wx, wz) -> px (320 + wx/0.05, 180 + wz/0.05)
+	await h.frames(5)
+	var cy := SIZE.y / 2
+	var colour_px := SIZE.x / 2 - 160 # world x = -8
+	var wet_px := SIZE.x / 2 + 160     # world x = +8
+	var ref_px := SIZE.x / 2           # world x = 0, between the two spots, untouched
+	var base := await h.capture()
+	var base_colour := base.get_pixel(colour_px, cy)
+	var base_wet := base.get_pixel(wet_px, cy)
+	var base_ref := base.get_pixel(ref_px, cy)
+	check(absf(base_colour.r - base_colour.g) < 0.03 and absf(base_wet.r - base_wet.g) < 0.03, "the unpainted ground is neutral grey")
+	t.paint_colour(Vector3(-8, 0, 0), 3.0, Color(1.0, 0.0, 0.0), 1.0)
+	t.paint_wetness(Vector3(8, 0, 0), 3.0, 1.0, 1.0)
+	await h.frames(5)
+	var mat := t.get_material() as ShaderMaterial
+	check(mat.get_shader_parameter("surface_paint_map") is Texture2D and (mat.get_shader_parameter("surface_paint_rect") as Vector4).z > 0.0,
+		"painting binds the surface map on the chunk material")
+	var img := await h.capture()
+	var painted := img.get_pixel(colour_px, cy)
+	var wet := img.get_pixel(wet_px, cy)
+	var ref := img.get_pixel(ref_px, cy)
+	print("  colour spot %s (was %s), wetness spot lum %.3f (was %.3f), reference %s (was %s)" %
+		[painted, base_colour, Harness.luminance(wet), Harness.luminance(base_wet), ref, base_ref])
+	check(painted.r - maxf(painted.g, painted.b) > 0.1 and painted.g < base_colour.g - 0.05,
+		"the colour brush tints the surface red at its spot")
+	check(Harness.luminance(wet) < Harness.luminance(base_wet) * 0.8,
+		"the wetness brush darkens the surface at its spot")
+	check(absf(ref.r - base_ref.r) < 0.03 and absf(ref.g - base_ref.g) < 0.03 and absf(ref.r - ref.g) < 0.03,
+		"the ground between the two spots is unchanged (the paint is local)")
+	t.queue_free()
+	await process_frame
+	# --- Field and chunk agree: the detail field tints from the same surface map as the chunks. ---
+	var s2 := h.new_lit_scene(Color(1, 1, 1))
+	var ft := make_terrain({"layers": [grey] as Array[ShaderMaterial], "height_scale": 1.0, "detail_field": true})
+	s2.add_child(ft)
+	top_camera(s2, Vector2(0, 0), 0.02)
+	await h.frames(8)
+	ft.paint_colour(Vector3(0, 0, 0), 2.0, Color(1.0, 0.0, 0.0), 1.0)
+	await h.frames(8)
+	var field := ft.get_detail_field()
+	var fmat := field.get_material() if field != null else null
+	check(field != null and field.visible and fmat != null and fmat.get_shader_parameter("surface_paint_map") is Texture2D,
+		"the detail field is bound the same surface map")
+	var with_field := await h.capture()
+	var field_c := with_field.get_pixel(SIZE.x / 2, cy)
+	field.visible = false # the chunks show in its place
+	await h.frames(3)
+	var without := await h.capture()
+	var chunk_c := without.get_pixel(SIZE.x / 2, cy)
+	print("  tint at the camera: field %s, chunk %s" % [field_c, chunk_c])
+	check(field_c.r - maxf(field_c.g, field_c.b) > 0.1 and chunk_c.r - maxf(chunk_c.g, chunk_c.b) > 0.1
+		and absf(field_c.r - chunk_c.r) < 0.08, "the field tints the spot as the chunks do (no seam)")
 	ft.queue_free()
 	h.clear_scene()
 	await process_frame

@@ -926,7 +926,11 @@ func _forward_3d_draw_over_viewport(overlay: Control) -> void:
 	var colors := {GADSSculpt.Mode.RAISE: Color(1.0, 0.75, 0.3), GADSSculpt.Mode.LOWER: Color(0.4, 0.7, 1.0),
 		GADSSculpt.Mode.SMOOTH: Color(0.6, 1.0, 0.6), GADSSculpt.Mode.FLATTEN: Color(1.0, 1.0, 1.0)}
 	var color: Color = colors.get(GADSSculpt.tool_mode, Color.WHITE)
-	if terrain != null and GADSSculpt.tool_paint >= TerrainInspector.CUT_HOLES:
+	if terrain != null and GADSSculpt.tool_paint == TerrainInspector.PAINT_COLOUR:
+		color = Color(GADSSculpt.terrain_colour, 1.0) # the tint being painted
+	elif terrain != null and GADSSculpt.tool_paint == TerrainInspector.PAINT_WETNESS:
+		color = Color(0.3, 0.55, 1.0) # water blue
+	elif terrain != null and GADSSculpt.tool_paint >= TerrainInspector.CUT_HOLES:
 		color = Color(1.0, 0.2, 0.15) if GADSSculpt.tool_paint == TerrainInspector.CUT_HOLES else Color(0.2, 0.9, 0.9)
 	elif terrain != null and GADSSculpt.tool_paint >= 0:
 		color = Color(1.0, 0.45, 0.9)
@@ -1015,14 +1019,27 @@ func _terrain_dab(terrain: GADSTerrain3D, origin: Vector3, direction: Vector3) -
 		return false
 	if _stroke_node == null:
 		_stroke_node = terrain
-		_stroke_kind = "holes" if GADSSculpt.tool_paint >= TerrainInspector.CUT_HOLES else ("splat" if GADSSculpt.tool_paint >= 0 else "height")
+		var paint := GADSSculpt.tool_paint
+		if paint == TerrainInspector.PAINT_COLOUR or paint == TerrainInspector.PAINT_WETNESS:
+			_stroke_kind = "surface" # the Colour and Wetness brushes share one RGBA map (Stage 6)
+		elif paint >= TerrainInspector.CUT_HOLES:
+			_stroke_kind = "holes"
+		elif paint >= 0:
+			_stroke_kind = "splat"
+		else:
+			_stroke_kind = "height"
 		_stroke_was_editable = _terrain_map(terrain, "editable")
 		_stroke_original = terrain.get(_terrain_map(terrain, "property"))
 		_stroke_before = terrain.call(_terrain_map(terrain, "getter"))
 		_stroke_rect = Rect2i()
 		_stroke_flatten = hit.y
 	var rect: Rect2i
-	if _stroke_kind == "holes":
+	if _stroke_kind == "surface":
+		if GADSSculpt.tool_paint == TerrainInspector.PAINT_COLOUR:
+			rect = terrain.paint_colour(hit, GADSSculpt.terrain_radius, GADSSculpt.terrain_colour, 0.25)
+		else:
+			rect = terrain.paint_wetness(hit, GADSSculpt.terrain_radius, GADSSculpt.terrain_wetness, 0.25)
+	elif _stroke_kind == "holes":
 		rect = terrain.cut_holes(hit, GADSSculpt.terrain_radius, GADSSculpt.tool_paint == TerrainInspector.FILL_HOLES)
 	elif _stroke_kind == "splat":
 		rect = terrain.paint_splatmap(hit, GADSSculpt.terrain_radius, maxi(GADSSculpt.tool_paint, 0), 0.25)
@@ -1069,7 +1086,7 @@ func _end_terrain_stroke(terrain: GADSTerrain3D) -> void:
 	var property: String = _terrain_map(terrain, "property")
 	var setter: String = _terrain_map(terrain, "setter")
 	var undo := get_undo_redo()
-	undo.create_action({"splat": "GADS Terrain Paint", "holes": "GADS Terrain Holes"}.get(_stroke_kind, "GADS Terrain Sculpt"), UndoRedo.MERGE_DISABLE, terrain)
+	undo.create_action({"splat": "GADS Terrain Paint", "holes": "GADS Terrain Holes", "surface": "GADS Terrain Surface Paint"}.get(_stroke_kind, "GADS Terrain Sculpt"), UndoRedo.MERGE_DISABLE, terrain)
 	if not _stroke_was_editable:
 		undo.add_do_property(terrain, property, terrain.get(property))
 	undo.add_do_method(terrain, setter, _stroke_rect.position, after)
@@ -1089,6 +1106,7 @@ func _terrain_map(terrain: GADSTerrain3D, what: String) -> Variant:
 		"height": {"property": "heightmap", "getter": "get_height_image", "setter": "set_height_region", "editable": "is_height_editable"},
 		"splat": {"property": "splatmap", "getter": "get_splat_image", "setter": "set_splat_region", "editable": "is_splat_editable"},
 		"holes": {"property": "holes", "getter": "get_hole_image", "setter": "set_hole_region", "editable": "is_holes_editable"},
+		"surface": {"property": "surfacemap", "getter": "get_surface_image", "setter": "set_surface_region", "editable": "is_surface_editable"},
 	}[_stroke_kind]
 	return terrain.call(names["editable"]) if what == "editable" else names[what]
 

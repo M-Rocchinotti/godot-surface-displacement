@@ -121,6 +121,19 @@ const MAX_STREAM_TASKS := 4
 	set(value):
 		height_band = value
 		_queue_rebuild()
+## Per-texel surface paint (Stage 6): an RGBA map sampled by world XZ, RGB a colour tint multiplied
+## onto the blended albedo, A an extra wetness (darker, glossier; combined with the global weather
+## wetness as a max). Empty: no painted colour or wetness, byte-identical to before. Painted with
+## [method paint_colour] / [method paint_wetness] (the inspector's Colour and Wetness brushes), which
+## make it an editable map of one RGBA8 texel per vertex; it travels with [method save_regions] /
+## [method load_regions] so a streamed world carries colour and wetness authored on a resident one.
+@export var surfacemap: Texture2D:
+	set(value):
+		surfacemap = value
+		if not _swapping_edit_map:
+			if value != null:
+				_leave_sparse()
+			_queue_rebuild()
 
 @export_group("Geometry")
 ## The distance between vertices of the finest LOD (m); the size divides into whole chunks.
@@ -228,6 +241,7 @@ var _spacing := 1.0
 var _origin := Vector2.ZERO # local XZ of vertex (0, 0)
 var _src := {} # the heightmap's red channel {"width", "height", "data"}; empty: flat
 var _splat := {} # the splat map, RGBA float {"width", "height", "data"}; empty: rules
+var _surface := {} # the surface-paint map, RGBA float {"width", "height", "data"}; empty: none (Stage 6)
 var _heights := PackedFloat32Array() # whole terrain only: local y per vertex, row-major (_nx per row)
 var _w1 := PackedFloat32Array() # whole terrain only: the second layer's weight per vertex
 var _w2 := PackedFloat32Array() # the third layer's
@@ -283,6 +297,8 @@ var _queued := false
 var _build_ms := 0.0
 var _src_texture: Texture2D # the heightmap _src was read from
 var _splat_texture: Texture2D # the splat map _splat was read from
+var _surface_texture: Texture2D # the surface-paint map _surface was read from (also the bound map)
+var _surface_paint_rect := Vector4.ZERO # world->surface-paint-uv, as _control_rect (0 = none bound)
 var _swapping_edit_map := false
 var _whole_shape: CollisionShape3D # the whole terrain's height shape (not streaming)
 var _edit_dirty := Rect2i() # grid vertices whose ground data and map textures wait for flush_edits()
@@ -343,8 +359,10 @@ func rebuild() -> void:
 	_setup_grid()
 	_src = _float_image(heightmap)
 	_splat = _rgba_image(splatmap)
+	_surface = _rgba_image(surfacemap)
 	_src_texture = heightmap
 	_splat_texture = splatmap
+	_surface_texture = surfacemap
 	_build_holes()
 	_edit_dirty = Rect2i()
 	_edit_maps_dirty = {}
@@ -370,6 +388,7 @@ func rebuild() -> void:
 	_build_collision()
 	_build_field()
 	_update_control_map()
+	_update_surface_paint()
 	_window_center = Vector2.INF
 	set_process(is_streaming())
 	_build_ms = (Time.get_ticks_usec() - t0) / 1000.0
@@ -613,6 +632,37 @@ func _update_control_map() -> void:
 		_field.set_control_map(_control_texture, _control_rect)
 
 
+## Whether the painted surface map (Stage 6) earns a binding: only when a surface map exists (one
+## was painted, or a texture was assigned). Unlike the control map there is no per-vertex fallback --
+## colour and wetness live only in this texture -- so it binds at any resolution, not only when finer
+## than the grid. A sparse streaming terrain holds no whole [member _surface] (its data stays in the
+## region files; painting it in place is deferred, like the control map), so this is false there and
+## the map is simply not drawn live, while the tiles still travel through the region files.
+func _should_surface_paint() -> bool:
+	return not _surface.is_empty() and _nx >= 2 and not _sparse_active()
+
+
+## Binds (or clears) the painted surface map on the chunks' layered material and the detail field, so
+## both sample the same RGBA texture by world XZ and agree on a painted spot. The bound map is the
+## surface texture itself (one RGBA8 texel per vertex when editable); the rect maps world XZ to its
+## 0..1 uv over the terrain's extent, exactly as [method _update_control_map] does, so the field and
+## the chunks use one convention. Cheap and a no-op when nothing is painted (no texture bound).
+func _update_surface_paint() -> void:
+	var tex: Texture2D = surfacemap if _should_surface_paint() else null
+	var rect := Vector4.ZERO
+	if tex != null:
+		var gp := global_position if is_inside_tree() else Vector3.ZERO
+		var corner := _origin + Vector2(gp.x, gp.z)
+		var ext := get_extent()
+		rect = Vector4(corner.x, corner.y, 1.0 / maxf(ext.x, 1e-6), 1.0 / maxf(ext.y, 1e-6))
+	_surface_paint_rect = rect
+	if _material is ShaderMaterial and GADSMaterials.parse((_material as ShaderMaterial).shader).get("layered", false):
+		(_material as ShaderMaterial).set_shader_parameter("surface_paint_map", tex)
+		(_material as ShaderMaterial).set_shader_parameter("surface_paint_rect", _surface_paint_rect)
+	if _field != null:
+		_field.set_surface_paint(tex, _surface_paint_rect)
+
+
 func _repaint_chunks(rect: Rect2) -> void:
 	var cq := chunk_quads
 	for key: Vector2i in _chunk_data.keys():
@@ -824,6 +874,69 @@ func paint_splatmap(world_position: Vector3, radius: float, layer: int, strength
 			data[k + 1] = roundf(clampf(painted.y, 0.0, 1.0) * 255.0) / 255.0
 	var rect := Rect2i(g0, g1 - g0 + Vector2i.ONE)
 	_weights_changed(rect)
+	return rect
+
+
+## Paints a per-texel surface COLOUR (Stage 6) into the surface map within [param radius] metres of
+## [param world_position]: the vertices there move towards [param colour] by up to [param strength]
+## (0..1) in the middle, fading out over the outer [param falloff] of the radius (as
+## [method paint_layer]). The colour multiplies the blended albedo in the shader (white = no tint),
+## so painting a tint darkens or colours the ground there. Persistent: the surface map becomes an
+## editable map of one RGBA8 texel per vertex ([method make_surface_editable]). Returns the grid
+## vertices it changed. The near-camera detail field tints the same, from the same map.
+func paint_colour(world_position: Vector3, radius: float, colour: Color, strength := 1.0, falloff := 0.5) -> Rect2i:
+	return _paint_surface(world_position, radius, strength, falloff, Vector3(colour.r, colour.g, colour.b), 0b0111)
+
+
+## Paints per-texel WETNESS (Stage 6) into the surface map within [param radius] metres of
+## [param world_position]: the vertices there move towards [param amount] (0..1) by up to
+## [param strength] in the middle, fading over the outer [param falloff] of the radius. Wetness
+## darkens and glosses the surface (combined with the global weather wetness as a max, like
+## [code]e.wetness[/code]); paint 0 to dry. Persistent and editable like [method paint_colour].
+## Returns the grid vertices it changed.
+func paint_wetness(world_position: Vector3, radius: float, amount: float, strength := 1.0, falloff := 0.5) -> Rect2i:
+	return _paint_surface(world_position, radius, strength, falloff, Vector3(amount, 0.0, 0.0), 0b1000)
+
+
+## The shared surface-paint brush (Stage 6): towards [param target] (x/y/z for whichever of RGB the
+## [param channels] bitmask selects, x again for A), by up to [param strength] (0..1) with
+## [method paint_layer]'s smooth falloff ([param falloff] of the radius fades out). Edits the editable
+## surface map in place, quantized to 8 bits so a saved RGBA8 map reads back the same, then refreshes
+## the binding, the region store and the map texture. [param channels]: bit 0..2 = R/G/B (colour),
+## bit 3 = A (wetness).
+func _paint_surface(world_position: Vector3, radius: float, strength: float, falloff: float, target: Vector3, channels: int) -> Rect2i:
+	if _nx < 2 or radius <= 0.0:
+		return Rect2i()
+	make_surface_editable()
+	_wait_tasks()
+	var local := to_local(world_position)
+	var centre := Vector2(local.x, local.z)
+	var g0 := Vector2i(((centre - Vector2.ONE * radius - _origin) / _spacing).floor()).clamp(Vector2i.ZERO, Vector2i(_nx - 1, _nz - 1))
+	var g1 := Vector2i(((centre + Vector2.ONE * radius - _origin) / _spacing).ceil()).clamp(Vector2i.ZERO, Vector2i(_nx - 1, _nz - 1))
+	var inner := radius * (1.0 - clampf(falloff, 0.0, 1.0))
+	var data: PackedFloat32Array = _surface["data"]
+	# The four channels' targets; bit set = painted. A (wetness) takes target.x like R.
+	var targets := [target.x, target.y, target.z, target.x]
+	var changed := false
+	for gz in range(g0.y, g1.y + 1):
+		for gx in range(g0.x, g1.x + 1):
+			var d := centre.distance_to(_origin + Vector2(gx, gz) * _spacing)
+			if d > radius:
+				continue
+			var amount := clampf(strength, 0.0, 1.0) * (1.0 - smoothstep(inner, radius, d) if radius > inner else 1.0)
+			if amount <= 0.0:
+				continue
+			var k := (gz * _nx + gx) * 4
+			for c in 4:
+				if (channels & (1 << c)) == 0:
+					continue
+				var v := lerpf(data[k + c], clampf(targets[c], 0.0, 1.0), amount)
+				data[k + c] = roundf(clampf(v, 0.0, 1.0) * 255.0) / 255.0 # 8-bit quantized (RGBA8 map)
+			changed = true
+	if not changed:
+		return Rect2i()
+	var rect := Rect2i(g0, g1 - g0 + Vector2i.ONE)
+	_surface_changed(rect)
 	return rect
 
 
@@ -1080,6 +1193,66 @@ func set_splat_region(position: Vector2i, region: Image) -> void:
 	flush_edits()
 
 
+## Whether [member surfacemap] is an editable map (an ImageTexture of one RGBA8 texel per vertex).
+func is_surface_editable() -> bool:
+	var tex := surfacemap as ImageTexture
+	return tex != null and _nx >= 2 and tex.get_width() == _nx and tex.get_height() == _nz and tex.get_format() == Image.FORMAT_RGBA8
+
+
+## Replaces [member surfacemap] by an editable map of one RGBA8 texel per vertex, unless it is one:
+## RGB a white (no-op) colour tint and A = 0 (no wetness) everywhere, so making it editable changes
+## nothing on screen until a stroke paints into it. An existing surface map (a texture assigned or
+## loaded) is fitted to the vertex grid first, so its colour and wetness are kept.
+func make_surface_editable() -> void:
+	_sync_maps()
+	if _nx < 2 or is_surface_editable():
+		return
+	_wait_tasks()
+	var data := PackedFloat32Array()
+	data.resize(_nx * _nz * 4)
+	if _surface.is_empty():
+		for i in _nx * _nz:
+			data[i * 4] = 1.0 # white tint, no wetness: a no-op until painted
+			data[i * 4 + 1] = 1.0
+			data[i * 4 + 2] = 1.0
+			data[i * 4 + 3] = 0.0
+	else:
+		data = (_fit_to_grid(_surface, 4) as Dictionary)["data"] # keep an assigned map's colour / wetness
+	_surface = {"width": _nx, "height": _nz, "data": data}
+	_swapping_edit_map = true
+	surfacemap = ImageTexture.create_from_image(_surface_image())
+	_swapping_edit_map = false
+	_surface_texture = surfacemap
+	_region_sync() # _surface is now an editable per-vertex map: re-partition it into the store
+
+
+## The editable surface map (FORMAT_RGBA8, one texel per vertex, RGB colour tint + A wetness), a copy.
+func get_surface_image() -> Image:
+	make_surface_editable()
+	return _surface_image() if not _surface.is_empty() else null
+
+
+func _surface_image() -> Image:
+	var img := Image.create_from_data(_nx, _nz, false, Image.FORMAT_RGBAF, (_surface["data"] as PackedFloat32Array).to_byte_array())
+	img.convert(Image.FORMAT_RGBA8)
+	return img
+
+
+## Writes [param region] (FORMAT_RGBA8, as [method get_surface_image] has it) into the editable
+## surface map at grid vertex [param position] and updates the terrain there. The Colour / Wetness
+## brushes' undo and redo.
+func set_surface_region(position: Vector2i, region: Image) -> void:
+	make_surface_editable()
+	if _surface.is_empty() or region == null:
+		return
+	_wait_tasks()
+	var img := region.duplicate() as Image
+	img.convert(Image.FORMAT_RGBAF)
+	var rect := _blit(_surface["data"], 4, img.get_data().to_float32_array(), img.get_size(), position)
+	_surface_changed(rect)
+	flush_edits()
+
+
 ## Copies [param src] ([param size], [param channels] floats a texel) into the grid-sized
 ## [param dst] at [param position]; returns the grid rectangle written.
 func _blit(dst: PackedFloat32Array, channels: int, src: PackedFloat32Array, size: Vector2i, position: Vector2i) -> Rect2i:
@@ -1107,6 +1280,8 @@ func flush_edits() -> void:
 		(splatmap as ImageTexture).update(_splat_image())
 	if _edit_maps_dirty.get("holes", false) and is_holes_editable() and holes == _holes_texture:
 		(holes as ImageTexture).update(_hole_image())
+	if _edit_maps_dirty.get("surface", false) and is_surface_editable() and surfacemap == _surface_texture:
+		(surfacemap as ImageTexture).update(_surface_image())
 	_edit_maps_dirty = {}
 	_update_ground_region(rect)
 
@@ -1118,7 +1293,7 @@ func save_edited_maps() -> void:
 	if not Engine.is_editor_hint():
 		return
 	flush_edits()
-	for entry in [["heightmap", "height", is_height_editable()], ["splatmap", "splat", is_splat_editable()], ["holes", "holes", is_holes_editable()]]:
+	for entry in [["heightmap", "height", is_height_editable()], ["splatmap", "splat", is_splat_editable()], ["holes", "holes", is_holes_editable()], ["surfacemap", "surface", is_surface_editable()]]:
 		var tex := get(entry[0]) as ImageTexture
 		if tex == null or not entry[2]:
 			continue
@@ -1185,6 +1360,9 @@ func save_regions(dir := data_directory) -> Error:
 		if _region_dims.has("splat"):
 			region.splat_dims = _dims_vec("splat")
 			region.splat_tile = _region_slice(coord, "splat")
+		if _region_dims.has("surface"):
+			region.surface_dims = _dims_vec("surface")
+			region.surface_tile = _region_slice(coord, "surface")
 		if _region_dims.has("holes"):
 			region.holes_dims = _dims_vec("holes")
 			region.holes_tile = _region_slice(coord, "holes")
@@ -1222,8 +1400,10 @@ func build_region_store() -> void:
 	_setup_grid()
 	_src = _fit_to_grid(_float_image(heightmap), 1)
 	_splat = _fit_to_grid(_rgba_image(splatmap), 4)
+	_surface = _fit_to_grid(_rgba_image(surfacemap), 4)
 	_src_texture = heightmap
 	_splat_texture = splatmap
+	_surface_texture = surfacemap
 	_build_holes() # already fits the hole map to the vertex grid (one flag per vertex)
 	_region_sync()
 
@@ -1298,6 +1478,7 @@ func load_regions(dir := data_directory) -> bool:
 	# Stage 3b did, so a small terrain and a whole-texture import are unchanged.
 	var per_vertex := header.height_dims == Vector3i(_nx, _nz, 1) \
 		and (header.splat_dims == Vector3i.ZERO or header.splat_dims == Vector3i(_nx, _nz, 4)) \
+		and (header.surface_dims == Vector3i.ZERO or header.surface_dims == Vector3i(_nx, _nz, 4)) \
 		and (header.holes_dims == Vector3i.ZERO or header.holes_dims == Vector3i(_nx, _nz, 1))
 	if is_streaming() and per_vertex:
 		return _load_regions_sparse(header, files, dir)
@@ -1314,10 +1495,12 @@ func load_regions(dir := data_directory) -> bool:
 			tiles["height"] = region.height_tile
 		if region.splat_dims != Vector3i.ZERO:
 			tiles["splat"] = region.splat_tile
+		if region.surface_dims != Vector3i.ZERO:
+			tiles["surface"] = region.surface_tile
 		if region.holes_dims != Vector3i.ZERO:
 			tiles["holes"] = region.holes_tile
 		_regions[coord] = tiles
-	for entry in [["height", header.height_dims], ["splat", header.splat_dims], ["holes", header.holes_dims]]:
+	for entry in [["height", header.height_dims], ["splat", header.splat_dims], ["surface", header.surface_dims], ["holes", header.holes_dims]]:
 		var d: Vector3i = entry[1]
 		if d != Vector3i.ZERO:
 			_region_dims[entry[0]] = {"w": d.x, "h": d.y, "ch": d.z}
@@ -1334,6 +1517,13 @@ func load_regions(dir := data_directory) -> bool:
 			(_region_coalesce("splat") as PackedFloat32Array).to_byte_array())
 		splatmap = ImageTexture.create_from_image(img)
 		_splat_texture = splatmap
+	if _region_dims.has("surface"):
+		var d: Dictionary = _region_dims["surface"]
+		var img := Image.create_from_data(d["w"], d["h"], false, Image.FORMAT_RGBAF,
+			(_region_coalesce("surface") as PackedFloat32Array).to_byte_array())
+		img.convert(Image.FORMAT_RGBA8) # the surface map is an RGBA8 texture (colour + wetness)
+		surfacemap = ImageTexture.create_from_image(img)
+		_surface_texture = surfacemap
 	if _region_dims.has("holes"):
 		var d: Dictionary = _region_dims["holes"]
 		# One L8 texel a vertex, 255 for a hole (as _hole_image() stores it, so _build_holes() reads
@@ -1364,19 +1554,23 @@ func _load_regions_sparse(header: GADSTerrainRegion, files: PackedStringArray, d
 		if c.x >= 0:
 			_region_files[c] = true
 	_region_dims.clear()
-	for entry in [["height", header.height_dims], ["splat", header.splat_dims], ["holes", header.holes_dims]]:
+	for entry in [["height", header.height_dims], ["splat", header.splat_dims], ["surface", header.surface_dims], ["holes", header.holes_dims]]:
 		var d: Vector3i = entry[1]
 		if d != Vector3i.ZERO:
 			_region_dims[entry[0]] = {"w": d.x, "h": d.y, "ch": d.z}
 	# No whole maps: the data lives in the files, loaded by distance. Clear the map textures (without
-	# re-queuing a rebuild or leaving sparse) so rebuild() reads nothing into _src / _splat / _holes.
+	# re-queuing a rebuild or leaving sparse) so rebuild() reads nothing into _src / _splat / _holes /
+	# _surface. Painting a sparse terrain's colour / wetness in place is deferred (like the control
+	# map), but the surface tiles still travel in the files for a resident load.
 	_swapping_edit_map = true
 	heightmap = null
 	splatmap = null
+	surfacemap = null
 	holes = null
 	_swapping_edit_map = false
 	_src_texture = null
 	_splat_texture = null
+	_surface_texture = null
 	_holes_texture = null
 	_regions.clear()
 	_region_loads.clear()
@@ -1425,6 +1619,8 @@ func _tiles_from_region(region: GADSTerrainRegion) -> Dictionary:
 		tile["height"] = region.height_tile
 	if region.splat_dims != Vector3i.ZERO:
 		tile["splat"] = region.splat_tile
+	if region.surface_dims != Vector3i.ZERO:
+		tile["surface"] = region.surface_tile
 	if region.holes_dims != Vector3i.ZERO:
 		tile["holes"] = region.holes_tile
 	return tile
@@ -1437,7 +1633,7 @@ func _validate_tile(coord: Vector2i, tile: Dictionary) -> bool:
 		return false
 	var rect := _region_vertex_rect(coord)
 	var texels := rect.size.x * rect.size.y
-	for pair in [["height", 1], ["splat", 4], ["holes", 1]]:
+	for pair in [["height", 1], ["splat", 4], ["surface", 4], ["holes", 1]]:
 		if _region_dims.has(pair[0]):
 			if not tile.has(pair[0]) or (tile[pair[0]] as Variant).size() != texels * int(pair[1]):
 				return false
@@ -1532,7 +1728,7 @@ func intersect_ray(origin: Vector3, direction: Vector3, max_distance := 1e6, thr
 
 ## Reads the maps again if a property set them since (undo and redo swap them).
 func _sync_maps() -> void:
-	if _nx >= 2 and (heightmap != _src_texture or splatmap != _splat_texture or holes != _holes_texture):
+	if _nx >= 2 and (heightmap != _src_texture or splatmap != _splat_texture or holes != _holes_texture or surfacemap != _surface_texture):
 		rebuild()
 
 
@@ -1578,6 +1774,18 @@ func _weights_changed(rect: Rect2i) -> void:
 	_update_control_map()
 	_queue_edit_flush(rect, "splat")
 	_region_sync() # the edited splat weights (and the caches) back into the store
+
+
+## After the surface-paint texels of grid [param rect] changed in [member _surface] (Stage 6): bind
+## the map (the chunks and field sample the texture directly, so no chunk rebuild is needed), queue
+## the map texture's update and save, and re-partition the store. The colour and wetness show the
+## moment the texture updates on the next flush.
+func _surface_changed(rect: Rect2i) -> void:
+	if not rect.has_area():
+		return
+	_update_surface_paint()
+	_queue_edit_flush(rect, "surface")
+	_region_sync() # the edited surface paint back into the store
 
 
 func _build_weights_rect(rect: Rect2i) -> void:
@@ -1702,6 +1910,8 @@ func _region_sync() -> void:
 		_region_put("height", int(_src["width"]), int(_src["height"]), 1, _src["data"])
 	if not _splat.is_empty():
 		_region_put("splat", int(_splat["width"]), int(_splat["height"]), 4, _splat["data"])
+	if not _surface.is_empty():
+		_region_put("surface", int(_surface["width"]), int(_surface["height"]), 4, _surface["data"])
 	if not _holes.is_empty():
 		_region_put("holes", _nx, _nz, 1, _holes)
 	if not _heights.is_empty():

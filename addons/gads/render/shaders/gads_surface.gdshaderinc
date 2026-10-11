@@ -293,14 +293,20 @@ void fragment() {
 
 #ifdef GADS_LAYERED
 	vec3 albedo_out = albedo_sum * gads_tint.rgb; // Each layer's tint is applied in gads_sample_surface().
+	// Per-texel painted surface (Stage 6): a colour tint on the albedo and an extra wetness for the
+	// effects, both a no-op where no map is bound (white tint, 0 wetness).
+	vec4 surface_paint = gads_surface_paint(gads_world_pos);
+	albedo_out *= surface_paint.rgb;
+	float extra_wetness = surface_paint.a;
 #else
 	vec3 albedo_out = albedo_sum * albedo_tint.rgb * gads_tint.rgb;
+	float extra_wetness = 0.0;
 #endif
 	float ao_out = mix(1.0, orm_sum.r, ao_strength);
 	float roughness_out = clamp(orm_sum.g * roughness_scale, 0.0, 1.0);
 	float metallic_out = clamp(orm_sum.b * metallic_scale, 0.0, 1.0);
 	float normal_keep;
-	gads_surface_effects(main_uv, main_lod, normalize(gads_world_normal).y, COLOR, albedo_out, roughness_out, metallic_out, ao_out, normal_keep);
+	gads_surface_effects(main_uv, main_lod, normalize(gads_world_normal).y, COLOR, extra_wetness, albedo_out, roughness_out, metallic_out, ao_out, normal_keep);
 #ifdef GADS_CUSTOM_SURFACE
 	gads_custom_surface(main_uv, gads_world_pos, normalize(gads_world_normal), gads_main_height(main_uv, main_lod), albedo_out, roughness_out,
 			metallic_out, ao_out);
