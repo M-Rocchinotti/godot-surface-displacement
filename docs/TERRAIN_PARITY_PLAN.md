@@ -14,8 +14,8 @@ between sessions.
 ## Stages
 
 1. **Texture-array layers (keystone).** Replace the per-layer sampler arrays (`sampler2D layer_x[N]`,
-   N units) with `sampler2DArray` (one unit, any depth). Lifts the layer cap well past 3 and drops
-   the fragment-sampler count under WebGL's 16-unit limit, so multi-layer terrain renders on the web.
+   N units) with `sampler2DArray` (one unit, any depth). Lifts the layer cap well past 3 and sharply
+   cuts the fragment-sampler count toward WebGL's 16-unit limit (field ~19→7, chunk ~17→12).
    - 1a. The detail field (`gads_field.gdshaderinc`) + its GDScript upload.
    - 1b. The layered surface material (`gads_core.gdshaderinc` layer1_/layer2_) used by terrain chunks.
    - Dynamic `sampler2DArray` indexing is legal on all three renderers, so the unrolled
@@ -36,7 +36,8 @@ Not code: **maturity** — shipped projects, community, longevity.
 - **Stage 1a: done.** Layer samplers (field + pebble shaders) and the `GADS_LAYER_LOD/GRAD` macros
   are converted to `sampler2DArray`; the GDScript builds the arrays via
   `GADSMaterials.build_layer_array` (height `FORMAT_RF`, colour `FORMAT_RGBA8`, resized to the
-  largest layer). Shaders compile on all renderers, the sampler count fits WebGL, and the full suite
+  largest layer). Shaders compile on all renderers, the field's 7 samplers fit WebGL (browser-verified,
+  see the verification note below), and the full suite
   (`tests/run_all.py`) is green on all renderers, including the two "field shades like the parallax
   ground" checks (0.56 % / 0.19 % mean luminance, limits 1 % / 2 %).
   - **Shading fix (was the open issue).** The drift was *not* a mip colour-space problem. Measured:
@@ -57,8 +58,9 @@ Not code: **maturity** — shipped projects, community, longevity.
   `GADS_LAYERED` path) is converted from the fixed `layer1_`/`layer2_` `sampler2D` uniforms to a
   `sampler2DArray` N-layer system (`layer_albedo`/`layer_normal`/`layer_orm`/`layer_height` plus
   `layer_*[]` scalar arrays sized by `#define GADS_LAYERED_LAYERS 3`), lifting the cap from base + 2
-  to **base + 3 = 4** (matching the field's `GADS_FIELD_LAYERS`) and dropping the layered fragment's
-  sampler count so a four-layer material fits WebGL's 16-unit limit. `GADSMaterials.combine_layers`
+  to **base + 3 = 4** (matching the field's `GADS_FIELD_LAYERS`) and cutting the layered fragment's own
+  sampler count from ~17 to 12 (but see the verification note: 12 + GLES3 built-ins still overflows
+  WebGL's 16, so the three-layer chunk does *not* yet render on the web). `GADSMaterials.combine_layers`
   and `create_layered` build the arrays with `build_layer_array` and linearise each layer's tint as
   the field does (an array uniform cannot carry `source_color`); the source height textures are kept
   as the `gads_layer_heights` metadata for the CPU bake.
@@ -74,6 +76,21 @@ Not code: **maturity** — shipped projects, community, longevity.
     (R, G) — a third needs the control map (Stage 2) or hand-painted vertex colour.
   - The full suite (`tests/run_all.py`) stays green on all renderers; the layered demo shot (Hills)
     moved only 0.0001 mean (limit 0.003) from the array repacking, so the baseline is unchanged.
+  - **Browser verification (2026-10-11) — the WebGL claim was wrong.** Tested the Web export in a real
+    browser (WebKit/WebGL2, `renderer=gl_compatibility`) over the tailnet HTTPS build, native lib
+    loaded (`native_library=true`). Result: the **field fits** — the Gravel-path detail field (7
+    samplers) renders on the web with POM + pebbles. The **three-layer terrain chunk does not**: with
+    the demo's single-material fallback removed, the Hills terrain draws flat dark grey and the console
+    logs `SceneShaderGLES3: Program linking failed: FRAGMENT shader texture image units count exceeds
+    MAX_TEXTURE_IMAGE_UNITS(16)`. The earlier "fits WebGL" claims counted only the shader's own
+    samplers (12 ≤ 16) and ignored Godot's built-in GLES3 fragment samplers, which push the total over
+    16. Desktop/headless `gl_compatibility` has more than 16 units and hides this — only a browser
+    reproduces it. So the demo keeps its single-material web fallback (`demo_builder.gd:build_hills`),
+    and "multi-layer terrain on the web" remains open.
+  - **Fix path (Stage 1c, not done).** Fold the base layer into the arrays too (base + 3 all carried by
+    the four `layer_*` `sampler2DArray`s instead of base using separate `albedo/normal/orm/height`
+    2D textures): 12 → 8 own samplers, which plus the GLES3 built-ins should fit 16. Re-verify in a
+    browser (not on desktop GL) before claiming the web path works.
 - **Stage 3 is being done in increments; 3a (region foundation) is done.** The terrain now
   partitions its maps — the heightmap source (`_src`), the splat source (`_splat`), the holes and
   the per-vertex caches (`_heights`/`_w1`/`_w2`) — into a sparse grid of fixed-size regions, keyed
@@ -172,7 +189,7 @@ Not code: **maturity** — shipped projects, community, longevity.
   path (`gads_core.gdshaderinc` + the field `gads_field.gdshaderinc`), a no-op when
   `surface_paint_rect.z <= 0` (unbound), so unpainted terrains, every non-layered / whole-texture case
   and the variant table are byte-identical; the extra sampler (one unit, `source_color` so the tint
-  reads as linear and the wetness stays in A) keeps the layered fragment within WebGL's 16. The field
+  reads as linear and the wetness stays in A) is one of the layered fragment's 12 samplers. The field
   binds the same texture and rect (`GADSDisplacementField3D.set_surface_paint`), so the near-camera
   relief tints exactly like the chunks across a painted spot (no seam), as Stage 2's control map does.
   - **Paint API + tools.** `GADSTerrain3D.paint_colour(world, radius, Color, strength, falloff)` and
