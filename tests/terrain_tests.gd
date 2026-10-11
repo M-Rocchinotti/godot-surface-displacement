@@ -27,6 +27,7 @@ func _run() -> void:
 	await _test("partitions_into_regions", test_region_grid)
 	await _test("persists_regions_to_files", test_region_persistence)
 	await _test("region_data_streams_by_distance", test_region_residency)
+	await _test("collision_streams_by_distance", test_collision_streaming)
 	await _test("chunk_lods_and_skirts", test_lods)
 	await _test("layers_by_rules_and_splat_map", test_layers)
 	if DisplayServer.get_name() != "headless":
@@ -605,6 +606,71 @@ func test_region_residency() -> void:
 	check(m > 100 and worst2 < 1e-4, "a reloaded region reads correctly")
 	holder.queue_free()
 	ref.queue_free()
+	await process_frame
+	_clear_dir(dir)
+
+
+## Stage 4 collision at scale: a region-file-backed streaming terrain builds a per-chunk collision
+## shape only for the chunks near the camera (no whole-terrain height shape), and frees them as the
+## camera moves on -- so collision costs a bounded ring, like the data and the chunks. Builds on the
+## same sparse residency as test_region_residency.
+func test_collision_streaming() -> void:
+	var grass := layer_material(2.0, Color(0.2, 0.6, 0.2))
+	var dir := "user://gads_collision_stream"
+	_clear_dir(dir)
+	# A 128 m terrain at 0.5 m is 257 x 257 vertices in 8 x 8 chunks of 32 quads (16 m); a 32 m
+	# region is 2 chunks, a 4 x 4 region grid. Per-vertex maps so the files are the sparse path.
+	var nx := 257
+	var src := GADSTerrain3D.new()
+	src.name = "CollisionSrc"
+	src.heightmap = ImageTexture.create_from_image(_ramp_height(nx))
+	src.size = Vector2(128, 128)
+	src.height_scale = 20.0
+	src.vertex_spacing = 0.5
+	src.chunk_quads = 32
+	src.detail_field = false
+	src.layers = [grass] as Array[ShaderMaterial]
+	src.region_size = 32.0
+	root.add_child(src)
+	check(src.save_regions(dir) == OK and _dir_files(dir, "region_", "res").size() == 16, "the source saved 16 region files")
+	var holder := Node3D.new()
+	root.add_child(holder)
+	var cam := Camera3D.new()
+	holder.add_child(cam)
+	cam.position = Vector3(-56, 20, -56) # the -X / -Z corner
+	var t := GADSTerrain3D.new()
+	t.name = "CollisionStream"
+	t.height_scale = 20.0
+	t.vertex_spacing = 0.5
+	t.chunk_quads = 32
+	t.stream_radius = 20.0
+	t.collision = true
+	t.detail_field = false
+	t.layers = [grass] as Array[ShaderMaterial]
+	holder.add_child(t)
+	t.stream_camera = t.get_path_to(cam)
+	check(t.load_regions(dir), "the streaming terrain loaded the region files")
+	await _settle(t)
+	# Streaming: per-chunk shapes, no whole-terrain shape; one shape per built chunk, near the camera.
+	var near_shapes: Array = t._shapes.keys()
+	var near_corner := Vector2i(0, 0)
+	var far_corner := Vector2i(7, 7)
+	print("  collision shapes near the -X / -Z corner: %d (%s)" % [near_shapes.size(), near_shapes])
+	check(t._whole_shape == null, "a streaming terrain has no whole-terrain collision shape")
+	check(near_shapes.size() > 0 and near_shapes.size() == t.get_chunks().size(), "one collision shape per streamed chunk (%d shapes, %d chunks)" % [near_shapes.size(), t.get_chunks().size()])
+	check(near_shapes.has(near_corner) and not near_shapes.has(far_corner), "collision is built at the camera's corner, not the far one")
+	# The streamed shape at the camera's chunk is a real height shape attached to the body.
+	var cs := t._shapes[near_corner] as CollisionShape3D
+	check(cs != null and cs.shape != null and cs.get_parent() == t.get_collision_body(), "the streamed collision shape is on the terrain body")
+	# Fly to the far corner: collision follows -- built there, freed at the near corner.
+	cam.position = Vector3(56, 20, 56)
+	await _settle(t)
+	var far_shapes: Array = t._shapes.keys()
+	print("  after flying to the +X / +Z corner: %d shapes (%s)" % [far_shapes.size(), far_shapes])
+	check(far_shapes.has(far_corner) and not far_shapes.has(near_corner) and far_shapes.size() <= 16,
+		"collision followed the camera (built far, freed near)")
+	holder.queue_free()
+	src.queue_free()
 	await process_frame
 	_clear_dir(dir)
 

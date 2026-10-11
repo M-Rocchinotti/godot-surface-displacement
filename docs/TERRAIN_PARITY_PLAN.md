@@ -134,5 +134,18 @@ Not code: **maturity** — shipped projects, community, longevity.
     approach), heights/weights near the camera match a full-resident reference (border-correct across
     a region boundary), and resident tile memory is ~12 % of the whole map. Visual-regression
     baselines unchanged (no scene uses a sparse terrain).
-  - **Deferred to 4b:** coarser region-LOD data for distant regions; a native (rather than GDScript)
-    chunk build for the sparse path; editing a sparse terrain.
+- **Stage 4b: collision streams by distance (Stage 4 core complete).** A streaming terrain already
+  builds one collision shape per streamed chunk and frees it with the chunk (no whole-terrain height
+  shape); on a region-file-backed terrain those shapes are built from the resident region tiles, so
+  collision costs the same bounded ring the data and chunks do. A new terrain test
+  (`collision_streams_by_distance`) confirms it: a 128 m, 16-region streaming terrain builds one
+  shape per chunk at the camera's corner (none at the far corner, no whole shape), and flying across
+  rebuilds them at the far corner and frees the near ones. With chunk mesh LODs (and the detail
+  field for near-camera relief) already streaming per 4a, Stage 4's core — load/free of region data,
+  chunks and collision by distance, with LOD at scale — is complete; full suite 15/15.
+  - **Deliberately deferred (beyond the AA parity bar; not maturity):** coarser region-DATA mip-LOD
+    for distant regions (a further memory optimization — near detail is the field's job and the mesh
+    already LODs per chunk); a native (rather than GDScript) chunk build for the sparse path (a
+    speed optimization); and sculpting/painting a sparse streaming terrain in place (editing a 16k
+    world's loaded region). These are optimizations/extensions, not required for the streaming a
+    large world needs, which Stages 3–4 now provide.
