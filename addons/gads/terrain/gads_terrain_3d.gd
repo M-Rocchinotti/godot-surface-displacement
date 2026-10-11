@@ -53,6 +53,8 @@ const MAX_STREAM_TASKS := 4
 	set(value):
 		heightmap = value
 		if not _swapping_edit_map:
+			if value != null:
+				_leave_sparse() # a whole heightmap overrides region-file-backed residency
 			_queue_rebuild()
 ## Holes (cave and tunnel entrances): where the map's red channel is over 0.5, sampled at each
 ## vertex, the terrain has no surface. A triangle with a vertex in a hole is left out of the chunks
@@ -96,6 +98,8 @@ const MAX_STREAM_TASKS := 4
 	set(value):
 		splatmap = value
 		if not _swapping_edit_map:
+			if value != null:
+				_leave_sparse()
 			_queue_rebuild()
 ## The layer (1 or 2; 0 = none) that covers slopes steeper than [member slope_range] (degrees,
 ## fading in over the range): rock on cliffs.
@@ -244,6 +248,17 @@ var _region_dims := {} # map_name -> {"w", "h", "ch"} of the whole (coalesced) m
 var _region_quads := 0 # a region's side in quads on the finest grid (a whole number of chunks)
 var _region_cols := 1
 var _region_rows := 1
+# Sparse DATA residency (Stage 4a). A terrain whose source is per-region files (loaded by
+# load_regions) and that streams keeps only the regions near the camera in memory: _regions then
+# holds just the RESIDENT tiles (loaded from region_<x>_<y>.res, freed when the camera leaves),
+# not every region, so a 16k world costs a bounded handful of region tiles rather than the whole
+# ~1 GB map. The whole-texture import and every non-streaming terrain keep the Stage 3a behaviour
+# (all regions resident, the flat arrays as the hot-path view) unchanged: _sparse is false for them
+# and the accessors fall back to _src/_heights/_splat exactly as before.
+var _sparse := false # region-file-backed data residency is active (see _sparse_active)
+var _region_dir := "" # where the region_<x>_<y>.res files live (sparse source)
+var _region_files := {} # Vector2i -> true: a region that has a file on disk (available to load)
+var _region_loads := {} # Vector2i -> file path of a region load in progress (ResourceLoader threaded)
 var _chunks: Array[MeshInstance3D] = []
 var _chunk_nodes := {} # Vector2i -> MeshInstance3D
 var _chunk_data := {} # Vector2i -> its arrays and LODs (kept for repainting)
@@ -339,7 +354,13 @@ func rebuild() -> void:
 	if not is_streaming():
 		_build_heights()
 		_build_weights()
-	_region_sync() # partition the freshly read maps into the region store
+	if _sparse_active():
+		# Region-file-backed streaming: the store is residency-managed (filled and freed by distance
+		# in _process), not derived from the flat maps -- which are empty here. Start from nothing so
+		# the near regions load afresh; _region_dims/_region_files set by load_regions stay.
+		_regions.clear()
+	else:
+		_region_sync() # partition the freshly read maps into the region store
 	_material = material if material != null else GADSMaterials.combine_layers(layers.slice(0, MAX_LAYERS))
 	if not is_streaming():
 		var levels := _levels()
@@ -358,6 +379,14 @@ func rebuild() -> void:
 
 func is_streaming() -> bool:
 	return stream_radius > 0.0
+
+
+## Whether sparse region-DATA residency (Stage 4a) is in effect: the terrain is backed by per-region
+## files [method load_regions] loaded, and it streams. Only then do [member _regions], the grid
+## accessors and the chunk builder work from resident region tiles instead of the whole maps; a
+## whole-texture terrain or a non-streaming one keeps every map resident and this is false.
+func _sparse_active() -> bool:
+	return _sparse and is_streaming()
 
 
 # --- Queries ------------------------------------------------------------------------------------
@@ -385,6 +414,15 @@ func get_chunk_grid() -> Vector2i:
 ## [member region_size]); at least 1 x 1. The last region on each axis may be partial.
 func get_region_grid() -> Vector2i:
 	return Vector2i(_region_cols, _region_rows)
+
+
+## The integer coordinates of the regions whose map tiles are currently resident in memory. With
+## sparse residency (Stage 4a: a region-file-backed streaming terrain) this is only the regions near
+## the camera -- far regions' tiles are freed and reloaded on approach, so the set stays a bounded
+## handful however large the world is. For a whole-texture or non-streaming terrain every region is
+## resident, so it is the whole grid.
+func get_resident_regions() -> Array:
+	return _regions.keys()
 
 
 ## World height of the terrain's surface (as its finest LOD draws it) under [param world_position];
@@ -459,7 +497,7 @@ func get_build_seconds() -> float:
 
 ## Whether streamed chunks are being built on worker threads.
 func is_streaming_busy() -> bool:
-	return not _pending.is_empty() or _window_task >= 0
+	return not _pending.is_empty() or not _region_loads.is_empty() or _window_task >= 0
 
 
 # --- Painting -------------------------------------------------------------------------------------
@@ -639,8 +677,8 @@ func get_ground_texel() -> float:
 ## LOD and the dominant layer per texel, texel centres on the vertices (see
 ## [method get_ground_texel]). [param rect]: the local XZ part to cover (empty: all of it).
 ## Reads no node: a worker thread may call it.
-func make_ground_bake(rect := Rect2()) -> GADSGroundBake:
-	var part := _ground_arrays(rect)
+func make_ground_bake(rect := Rect2(), store := {}) -> GADSGroundBake:
+	var part := _ground_arrays(rect, store)
 	if part.is_empty():
 		return null
 	var texel: float = part["texel"]
@@ -650,8 +688,9 @@ func make_ground_bake(rect := Rect2()) -> GADSGroundBake:
 
 
 ## The ground data's texels within local [param rect] (all: empty): {"first" (the first texel's
-## index on the terrain's texel grid), "size", "heights" (world), "codes", "texel"}, or {}.
-func _ground_arrays(rect := Rect2()) -> Dictionary:
+## index on the terrain's texel grid), "size", "heights" (world), "codes", "texel"}, or {}. Sparse
+## ([param store] a resident-tile snapshot) takes the GDScript path reading those tiles.
+func _ground_arrays(rect := Rect2(), store := {}) -> Dictionary:
 	if _nx < 2:
 		return {}
 	var extent := get_extent()
@@ -668,11 +707,12 @@ func _ground_arrays(rect := Rect2()) -> Dictionary:
 	if OS.get_thread_caller_id() == OS.get_main_thread_id() and is_inside_tree():
 		_ground_offset_cache = global_position
 	var gp := _ground_offset_cache
-	if ClassDB.class_exists(MESHER) and _paint.is_empty():
+	var holed := _hole_count > 0 if store.is_empty() else _region_dims.has("holes")
+	if ClassDB.class_exists(MESHER) and _paint.is_empty() and store.is_empty():
 		var part: Dictionary = ClassDB.class_call_static(MESHER, &"ground_arrays", _grid_state(1), i0, Vector2i(w, d), texel, gp.y, layers.size())
 		part.merge({"first": i0, "size": Vector2i(w, d), "texel": texel})
-		if _hole_count > 0:
-			_cut_ground_holes(part)
+		if holed:
+			_cut_ground_holes(part, store)
 		return part
 	var heights := PackedFloat32Array()
 	heights.resize(w * d)
@@ -682,14 +722,14 @@ func _ground_arrays(rect := Rect2()) -> Dictionary:
 		for x in w:
 			var p := _origin + Vector2(i0.x + x, i0.y + z) * texel
 			var i := z * w + x
-			heights[i] = _height_local(p.clamp(_origin, _origin + extent)) + gp.y
+			heights[i] = _height_local(p.clamp(_origin, _origin + extent), store) + gp.y
 			var g := ((p - _origin) / _spacing).clamp(Vector2.ZERO, Vector2(_nx - 1, _nz - 1))
-			var wts := _weights_at(g)
+			var wts := _weights_at(g, store)
 			var layer := 2 if wts.y >= 0.5 else (1 if wts.x >= 0.5 else 0)
 			codes[i] = layer if layer < layers.size() else -1
 	var out := {"first": i0, "size": Vector2i(w, d), "heights": heights, "codes": codes, "texel": texel}
-	if _hole_count > 0:
-		_cut_ground_holes(out)
+	if holed:
+		_cut_ground_holes(out, store)
 	return out
 
 
@@ -698,7 +738,7 @@ func _ground_arrays(rect := Rect2()) -> Dictionary:
 ## (h00 + h11 - h10 - h01) times the texel over the spacing, halved; quads steeper than the
 ## field's step limit are left out (the field does not displace them). [param rect]: the local XZ
 ## part to look at (empty: all).
-func ground_data_error(rect := Rect2()) -> float:
+func ground_data_error(rect := Rect2(), store := {}) -> float:
 	if _nx < 2:
 		return 0.0
 	var ratio := get_ground_texel() / _spacing
@@ -709,15 +749,15 @@ func ground_data_error(rect := Rect2()) -> float:
 	if rect.has_area():
 		g0 = Vector2i(((rect.position - _origin) / _spacing).floor()).clamp(Vector2i.ZERO, g1)
 		g1 = Vector2i(((rect.end - _origin) / _spacing).ceil()).clamp(Vector2i.ZERO, g1)
-	if ClassDB.class_exists(MESHER):
+	if ClassDB.class_exists(MESHER) and store.is_empty():
 		return float(ClassDB.class_call_static(MESHER, &"ground_error", _grid_state(1), Rect2i(g0, g1 - g0), steep)) * factor
 	var worst := 0.0
 	for z in range(g0.y, g1.y):
 		for x in range(g0.x, g1.x):
-			var h00 := _grid_h(x, z)
-			var h10 := _grid_h(x + 1, z)
-			var h01 := _grid_h(x, z + 1)
-			var h11 := _grid_h(x + 1, z + 1)
+			var h00 := _grid_h(x, z, store)
+			var h10 := _grid_h(x + 1, z, store)
+			var h01 := _grid_h(x, z + 1, store)
+			var h11 := _grid_h(x + 1, z + 1, store)
 			if maxf(maxf(absf(h10 - h00), absf(h01 - h00)), maxf(absf(h11 - h10), absf(h11 - h01))) > steep:
 				continue
 			worst = maxf(worst, absf(h00 + h11 - h10 - h01))
@@ -1165,13 +1205,18 @@ func save_regions(dir := data_directory) -> Error:
 ## files. The terrain's own configuration that is not part of the maps (height scale and offset, the
 ## layer materials) is left as it is -- only the grid geometry and the maps come from the files.
 func load_regions(dir := data_directory) -> bool:
-	var loaded := _read_region_files(dir)
-	if loaded.is_empty():
+	# Read only ONE file for the header (geometry and map dimensions); the tiles stay on disk until
+	# needed. A 16k world has thousands of files -- loading them all here to read a header would be
+	# the very cost the region system exists to avoid.
+	var files := _list_region_files(dir)
+	if files.is_empty():
+		return false
+	var header := ResourceLoader.load(dir.path_join(files[0]), "", ResourceLoader.CACHE_MODE_IGNORE) as GADSTerrainRegion
+	if header == null:
 		return false
 	# Restore the grid from the header (any file carries it; they all agree), so _setup_grid()
 	# reproduces _nx/_nz/_spacing/_origin and the region split, then the tiles land where they came
 	# from. The setters queue a deferred rebuild, which our explicit rebuild() below makes a no-op.
-	var header: GADSTerrainRegion = loaded.values()[0]
 	size = header.terrain_size
 	chunk_quads = header.chunk_quads
 	region_size = header.region_size
@@ -1180,9 +1225,19 @@ func load_regions(dir := data_directory) -> bool:
 	if Vector2i(_region_cols, _region_rows) != header.region_grid:
 		push_warning("GADS: %s: region grid %s does not match the files' %s; loading anyway." %
 			[name, Vector2i(_region_cols, _region_rows), header.region_grid])
-	# Rebuild the store from the loaded tiles, then coalesce each map into one whole array and bind
-	# it as a texture. rebuild() re-reads the textures and re-partitions the store itself, so this
-	# store is transient -- only _region_coalesce() reads it, the inverse of save's split.
+	# Sparse residency (Stage 4a): a streaming terrain whose maps are one texel per vertex keeps only
+	# the near regions resident and loads / frees the rest by distance -- the large-world memory win.
+	# Anything else (not streaming, or a map at a different resolution than the grid) loads whole, as
+	# Stage 3b did, so a small terrain and a whole-texture import are unchanged.
+	var per_vertex := header.height_dims == Vector3i(_nx, _nz, 1) \
+		and (header.splat_dims == Vector3i.ZERO or header.splat_dims == Vector3i(_nx, _nz, 4)) \
+		and (header.holes_dims == Vector3i.ZERO or header.holes_dims == Vector3i(_nx, _nz, 1))
+	if is_streaming() and per_vertex:
+		return _load_regions_sparse(header, files, dir)
+	# --- Whole-resident path (Stage 3b): coalesce every region into one map and bind it. ---
+	var loaded := _read_region_files(dir)
+	if loaded.is_empty():
+		return false
 	_regions.clear()
 	_region_dims.clear()
 	for coord: Vector2i in loaded:
@@ -1225,6 +1280,100 @@ func load_regions(dir := data_directory) -> bool:
 		_holes_texture = holes
 	_swapping_edit_map = false
 	rebuild()
+	return true
+
+
+## Sets up sparse DATA residency from the region files under [param dir] (Stage 4a): records the
+## grid, the whole-map dimensions and which region coordinates have a file, but loads NO tiles --
+## [method _update_residency] loads the near ones and frees the far ones as the camera moves. The
+## whole maps stay empty (null textures), so the terrain never holds more than a bounded handful of
+## region tiles. [param header] is any one region (for the dimensions); [param files] their names.
+func _load_regions_sparse(header: GADSTerrainRegion, files: PackedStringArray, dir: String) -> bool:
+	_sparse = true
+	_region_dir = dir
+	_region_files.clear()
+	for f in files:
+		var c := _coord_from_filename(f)
+		if c.x >= 0:
+			_region_files[c] = true
+	_region_dims.clear()
+	for entry in [["height", header.height_dims], ["splat", header.splat_dims], ["holes", header.holes_dims]]:
+		var d: Vector3i = entry[1]
+		if d != Vector3i.ZERO:
+			_region_dims[entry[0]] = {"w": d.x, "h": d.y, "ch": d.z}
+	# No whole maps: the data lives in the files, loaded by distance. Clear the map textures (without
+	# re-queuing a rebuild or leaving sparse) so rebuild() reads nothing into _src / _splat / _holes.
+	_swapping_edit_map = true
+	heightmap = null
+	splatmap = null
+	holes = null
+	_swapping_edit_map = false
+	_src_texture = null
+	_splat_texture = null
+	_holes_texture = null
+	_regions.clear()
+	_region_loads.clear()
+	rebuild()
+	return true
+
+
+## Leaves sparse residency (a whole heightmap / splat was assigned, overriding the region files).
+func _leave_sparse() -> void:
+	_sparse = false
+	_region_dir = ""
+	_region_files = {}
+
+
+## The region_*.res file names under [param dir] (not loaded), or empty if it has none / cannot open.
+func _list_region_files(dir: String) -> PackedStringArray:
+	var out := PackedStringArray()
+	var da := DirAccess.open(dir)
+	if da == null:
+		return out
+	for f in da.get_files():
+		if f.begins_with("region_") and f.get_extension() == "res":
+			out.append(f)
+	return out
+
+
+## The region coordinate a [code]region_<x>_<y>.res[/code] file name encodes, or (-1, -1) if the
+## name does not match (save_regions writes the coordinate into the name).
+func _coord_from_filename(file: String) -> Vector2i:
+	var parts := file.get_basename().split("_")
+	if parts.size() != 3 or parts[0] != "region" or not parts[1].is_valid_int() or not parts[2].is_valid_int():
+		return Vector2i(-1, -1)
+	return Vector2i(int(parts[1]), int(parts[2]))
+
+
+## The file path of region [param coord]'s resource.
+func _region_path(coord: Vector2i) -> String:
+	return _region_dir.path_join("region_%d_%d.res" % [coord.x, coord.y])
+
+
+## The {map_name: tile} of each map a loaded [param region] holds. The tiles are flat arrays copied
+## by value, so the resource can be freed immediately after (on the main thread, no leak).
+func _tiles_from_region(region: GADSTerrainRegion) -> Dictionary:
+	var tile := {}
+	if region.height_dims != Vector3i.ZERO:
+		tile["height"] = region.height_tile
+	if region.splat_dims != Vector3i.ZERO:
+		tile["splat"] = region.splat_tile
+	if region.holes_dims != Vector3i.ZERO:
+		tile["holes"] = region.holes_tile
+	return tile
+
+
+## Whether a freshly loaded [param tile] for [param coord] has the sizes the region grid expects (a
+## guard against a corrupt or stale file producing out-of-range reads in the accessors).
+func _validate_tile(coord: Vector2i, tile: Dictionary) -> bool:
+	if tile.is_empty():
+		return false
+	var rect := _region_vertex_rect(coord)
+	var texels := rect.size.x * rect.size.y
+	for pair in [["height", 1], ["splat", 4], ["holes", 1]]:
+		if _region_dims.has(pair[0]):
+			if not tile.has(pair[0]) or (tile[pair[0]] as Variant).size() != texels * int(pair[1]):
+				return false
 	return true
 
 
@@ -1506,11 +1655,11 @@ func _region_put(name: String, w: int, h: int, ch: int, flat: Variant) -> void:
 		_regions[Vector2i.ZERO][name] = flat
 		return
 	for ry in _region_rows:
-		var y0 := _split(h, _region_rows, ry)
-		var y1 := _split(h, _region_rows, ry + 1)
+		var y0 := _axis_bound(h, _region_rows, ry)
+		var y1 := _axis_bound(h, _region_rows, ry + 1)
 		for rx in _region_cols:
-			var x0 := _split(w, _region_cols, rx)
-			var x1 := _split(w, _region_cols, rx + 1)
+			var x0 := _axis_bound(w, _region_cols, rx)
+			var x1 := _axis_bound(w, _region_cols, rx + 1)
 			var tile: Variant = PackedByteArray() if name == "holes" else PackedFloat32Array()
 			for y in range(y0, y1):
 				tile.append_array(flat.slice((y * w + x0) * ch, (y * w + x1) * ch))
@@ -1535,11 +1684,11 @@ func _region_coalesce(name: String) -> Variant:
 	var flat: Variant = PackedByteArray() if name == "holes" else PackedFloat32Array()
 	flat.resize(w * h * ch)
 	for ry in _region_rows:
-		var y0 := _split(h, _region_rows, ry)
-		var y1 := _split(h, _region_rows, ry + 1)
+		var y0 := _axis_bound(h, _region_rows, ry)
+		var y1 := _axis_bound(h, _region_rows, ry + 1)
 		for rx in _region_cols:
-			var x0 := _split(w, _region_cols, rx)
-			var x1 := _split(w, _region_cols, rx + 1)
+			var x0 := _axis_bound(w, _region_cols, rx)
+			var x1 := _axis_bound(w, _region_cols, rx + 1)
 			var tile: Variant = _regions[Vector2i(rx, ry)][name]
 			var ti := 0
 			for y in range(y0, y1):
@@ -1564,34 +1713,91 @@ func _region_of_vertex(gx: int, gy: int) -> Vector2i:
 		_region_axis(clampi(gy, 0, _nz - 1), _nz, _region_rows))
 
 
-static func _region_axis(i: int, n: int, parts: int) -> int:
+func _region_axis(i: int, n: int, parts: int) -> int:
 	for p in range(parts - 1, -1, -1):
-		if _split(n, parts, p) <= i:
+		if _axis_bound(n, parts, p) <= i:
 			return p
 	return 0
 
 
 ## The grid vertices [param coord]'s region covers: [x0, x0 + w) by [y0, y0 + h).
 func _region_vertex_rect(coord: Vector2i) -> Rect2i:
-	var x0 := _split(_nx, _region_cols, coord.x)
-	var x1 := _split(_nx, _region_cols, coord.x + 1)
-	var y0 := _split(_nz, _region_rows, coord.y)
-	var y1 := _split(_nz, _region_rows, coord.y + 1)
+	var x0 := _axis_bound(_nx, _region_cols, coord.x)
+	var x1 := _axis_bound(_nx, _region_cols, coord.x + 1)
+	var y0 := _axis_bound(_nz, _region_rows, coord.y)
+	var y1 := _axis_bound(_nz, _region_rows, coord.y + 1)
 	return Rect2i(x0, y0, x1 - x0, y1 - y0)
 
 
-## The i-th boundary when [0, n) is divided into [param parts] contiguous, near-equal integer
-## ranges; region r covers [_split(n, parts, r), _split(n, parts, r + 1)). Monotonic, 0 at i = 0 and
-## n at i = parts, so coalescing the regions reproduces the whole map exactly.
-static func _split(n: int, parts: int, i: int) -> int:
+## The i-th boundary when a map axis of [param n] texels is divided into [param parts] contiguous
+## ranges; region r covers [_axis_bound(n, parts, r), _axis_bound(n, parts, r + 1)). Monotonic, 0 at
+## i = 0 and n at i = parts, so coalescing the regions reproduces the whole map exactly.
+##
+## WHY TWO REGIMES. Stage 4a loads and frees region DATA by distance, and builds each near chunk from
+## its region's resident tile (plus a one-texel apron the neighbour regions supply). For that the
+## region boundaries on the VERTEX grid must land on whole chunks, so a chunk lies within exactly one
+## region and a region's tile is a whole-chunk block -- hence the chunk-aligned boundary ([member
+## _region_quads] quads, the last region partial) whenever the axis is the vertex grid (n == _nx or
+## _nz). A map at a different resolution than the grid (a whole-texture import's heightmap or a
+## low-res splat) stays resident in full, so its split need only partition it; the near-equal regime
+## (i * n / parts) keeps those byte-identical to Stages 3a/3b. For the common geometries (a region a
+## whole power-of-two multiple of the chunk size) the two regimes coincide.
+func _axis_bound(n: int, parts: int, i: int) -> int:
+	if _region_quads > 0 and (n == _nx or n == _nz):
+		return n if i >= parts else mini(i * _region_quads, n)
 	return i * n / parts
 
 
-## Height of grid vertex (gx, gz) (clamped to the grid): from the whole-terrain array, or sampled
-## from the heightmap (streaming). Thread-safe.
-func _grid_h(gx: int, gz: int) -> float:
+# --- Resident region tiles (Stage 4a) -----------------------------------------------------------
+# The grid accessors below (_grid_h / _compute_weights / ... and, through them, _height_local,
+# _weights_at and the GDScript chunk builder) take an optional [store]: the set of resident region
+# tiles to read. A worker thread is handed a SNAPSHOT of the store (a shallow copy of _regions taken
+# on the main thread) so it never touches _regions while the main thread loads or frees regions --
+# the tiles are immutable PackedArrays, so a freed region's tile stays alive for any task that still
+# holds it. A main-thread query passes nothing and reads the live _regions. For a non-sparse terrain
+# the store is empty and every accessor keeps its original whole-map path, byte-identical.
+
+## The owning region's tile value for map [param name] at grid vertex (gx, gz) in [param store]
+## (channel [param channel] of [param ch]), or [param dflt] if that region or map is not resident.
+## [param gx], [param gz] must already be clamped to the grid.
+func _tile_value(store: Dictionary, gx: int, gz: int, name: String, ch: int, channel: int, dflt: float) -> float:
+	var coord := _region_of_vertex(gx, gz)
+	var tile: Dictionary = store.get(coord, {})
+	if not tile.has(name):
+		return dflt
+	var rect := _region_vertex_rect(coord)
+	var i := ((gz - rect.position.y) * rect.size.x + (gx - rect.position.x)) * ch + channel
+	var arr: Variant = tile[name]
+	if i < 0 or i >= arr.size():
+		return dflt
+	return arr[i]
+
+
+## Whether grid vertex (gx, gz) is in a hole according to the resident hole tiles in [param store].
+func _tile_hole(store: Dictionary, gx: int, gz: int) -> bool:
+	return _tile_value(store, clampi(gx, 0, _nx - 1), clampi(gz, 0, _nz - 1), "holes", 1, 0, 0.0) != 0.0
+
+
+## The resident store the accessors should read for this call: an explicit worker snapshot if given,
+## else the live _regions when sparse residency is active (main-thread queries), else empty (the
+## whole-map fast path).
+func _read_store(store: Dictionary) -> Dictionary:
+	if not store.is_empty():
+		return store
+	if _sparse_active():
+		return _regions
+	return {}
+
+
+## Height of grid vertex (gx, gz) (clamped to the grid): from the resident region tile (sparse), the
+## whole-terrain array, or the heightmap sampled bilinearly (streaming). Thread-safe (a worker passes
+## its own [param store] snapshot).
+func _grid_h(gx: int, gz: int, store := {}) -> float:
 	gx = clampi(gx, 0, _nx - 1)
 	gz = clampi(gz, 0, _nz - 1)
+	var s := _read_store(store)
+	if not s.is_empty():
+		return height_offset + height_scale * _tile_value(s, gx, gz, "height", 1, 0, 0.0)
 	if not _heights.is_empty():
 		return _heights[gz * _nx + gx]
 	return _sample_source(gx, gz)
@@ -1658,9 +1864,18 @@ static func _rgba_image(tex: Texture2D) -> Dictionary:
 	return {"width": img.get_width(), "height": img.get_height(), "data": img.get_data().to_float32_array()}
 
 
-## The second and third layers' weights at grid vertex (gx, gz): the splat map's nearest pixel, or
-## the slope and height rules. Thread-safe.
-func _compute_weights(gx: int, gz: int) -> Vector2:
+## The second and third layers' weights at grid vertex (gx, gz): a resident region's splat tile
+## (sparse), the whole splat map's nearest pixel, or the slope and height rules. Thread-safe (a
+## worker passes its own [param store] snapshot).
+func _compute_weights(gx: int, gz: int, store := {}) -> Vector2:
+	var s := _read_store(store)
+	if not s.is_empty():
+		# Sparse: a per-vertex splat tile (nearest == the vertex), or the rules from the resident
+		# heights. _region_dims carries the whole-map dims the header recorded, so "has a splat map"
+		# is known without a flat _splat.
+		if _region_dims.has("splat"):
+			return Vector2(_tile_value(s, gx, gz, "splat", 4, 0, 0.0), _tile_value(s, gx, gz, "splat", 4, 1, 0.0))
+		return _rule_weights(_grid_normal(gx, gz, store).y, _grid_h(gx, gz, store))
 	if not _splat.is_empty():
 		var w: int = _splat["width"]
 		var h: int = _splat["height"]
@@ -1669,10 +1884,15 @@ func _compute_weights(gx: int, gz: int) -> Vector2:
 		var py := clampi(roundi(float(gz) / (_nz - 1) * (h - 1)), 0, h - 1)
 		var k := (py * w + px) * 4
 		return Vector2(data[k], data[k + 1])
+	return _rule_weights(_grid_normal(gx, gz).y, _grid_h(gx, gz))
+
+
+## The slope / height rules' weights from an up-normal Y and a local height (shared by the whole-map
+## and the resident-tile paths so both compute the rules identically).
+func _rule_weights(normal_y: float, h: float) -> Vector2:
 	var out := Vector2.ZERO
-	var nrm := _grid_normal(gx, gz)
-	var slope := smoothstep(slope_range.x, maxf(slope_range.y, slope_range.x + 0.001), rad_to_deg(acos(clampf(nrm.y, -1.0, 1.0))))
-	var high := smoothstep(height_band.x, maxf(height_band.y, height_band.x + 0.001), _grid_h(gx, gz))
+	var slope := smoothstep(slope_range.x, maxf(slope_range.y, slope_range.x + 0.001), rad_to_deg(acos(clampf(normal_y, -1.0, 1.0))))
+	var high := smoothstep(height_band.x, maxf(height_band.y, height_band.x + 0.001), h)
 	for rule in [[slope_layer, slope], [height_layer, high]]:
 		if rule[0] == 1:
 			out.x = maxf(out.x, rule[1])
@@ -1681,7 +1901,7 @@ func _compute_weights(gx: int, gz: int) -> Vector2:
 	return out
 
 
-func _grid_weights(gx: int, gz: int) -> Vector2:
+func _grid_weights(gx: int, gz: int, store := {}) -> Vector2:
 	gx = clampi(gx, 0, _nx - 1)
 	gz = clampi(gz, 0, _nz - 1)
 	if not _paint.is_empty():
@@ -1691,7 +1911,7 @@ func _grid_weights(gx: int, gz: int) -> Vector2:
 	if not _w1.is_empty():
 		var i := gz * _nx + gx
 		return Vector2(_w1[i], _w2[i])
-	return _compute_weights(gx, gz)
+	return _compute_weights(gx, gz, store)
 
 
 func _build_weights() -> void:
@@ -1710,30 +1930,30 @@ func _build_weights() -> void:
 			_w2[z * _nx + x] = wts.y
 
 
-func _grid_normal(x: int, z: int) -> Vector3:
+func _grid_normal(x: int, z: int, store := {}) -> Vector3:
 	var xa := maxi(x - 1, 0)
 	var xb := mini(x + 1, _nx - 1)
 	var za := maxi(z - 1, 0)
 	var zb := mini(z + 1, _nz - 1)
-	var dhdx := (_grid_h(xb, z) - _grid_h(xa, z)) / ((xb - xa) * _spacing)
-	var dhdz := (_grid_h(x, zb) - _grid_h(x, za)) / ((zb - za) * _spacing)
+	var dhdx := (_grid_h(xb, z, store) - _grid_h(xa, z, store)) / ((xb - xa) * _spacing)
+	var dhdz := (_grid_h(x, zb, store) - _grid_h(x, za, store)) / ((zb - za) * _spacing)
 	return Vector3(-dhdx, 1.0, -dhdz).normalized()
 
 
 ## Layer weights at grid position [param g] (fractional), bilinear between the vertices.
-func _weights_at(g: Vector2) -> Vector2:
+func _weights_at(g: Vector2, store := {}) -> Vector2:
 	var x0 := mini(floori(g.x), _nx - 2)
 	var z0 := mini(floori(g.y), _nz - 2)
 	var fx := g.x - x0
 	var fz := g.y - z0
-	var top := _grid_weights(x0, z0).lerp(_grid_weights(x0 + 1, z0), fx)
-	var bottom := _grid_weights(x0, z0 + 1).lerp(_grid_weights(x0 + 1, z0 + 1), fx)
+	var top := _grid_weights(x0, z0, store).lerp(_grid_weights(x0 + 1, z0, store), fx)
+	var bottom := _grid_weights(x0, z0 + 1, store).lerp(_grid_weights(x0 + 1, z0 + 1, store), fx)
 	return top.lerp(bottom, fz)
 
 
 ## Local height of the finest LOD's triangles at local [param p] (the grid's diagonal split); NAN
 ## outside.
-func _height_local(p: Vector2) -> float:
+func _height_local(p: Vector2, store := {}) -> float:
 	if _nx < 2:
 		return NAN
 	var g := (p - _origin) / _spacing
@@ -1742,7 +1962,7 @@ func _height_local(p: Vector2) -> float:
 	g = g.clamp(Vector2.ZERO, Vector2(_nx - 1, _nz - 1))
 	var x0 := mini(floori(g.x), _nx - 2)
 	var z0 := mini(floori(g.y), _nz - 2)
-	return _tri_interp(_grid_h(x0, z0), _grid_h(x0 + 1, z0), _grid_h(x0, z0 + 1), _grid_h(x0 + 1, z0 + 1), g.x - x0, g.y - z0)
+	return _tri_interp(_grid_h(x0, z0, store), _grid_h(x0 + 1, z0, store), _grid_h(x0, z0 + 1, store), _grid_h(x0 + 1, z0 + 1, store), g.x - x0, g.y - z0)
 
 
 ## Height in a quad split along its (1, 0)-(0, 1) diagonal, as the chunks triangulate it.
@@ -1783,16 +2003,22 @@ static func _ring(cq: int) -> Array[Vector2i]:
 ## collision)} (and "occluder"). Natively when the library is loaded (the same arrays as
 ## [method _chunk_arrays_gd], about thirty times faster). Reads no node: runs on worker threads
 ## while streaming.
-func _chunk_arrays(cx: int, cz: int, levels: int) -> Dictionary:
+func _chunk_arrays(cx: int, cz: int, levels: int, store := {}) -> Dictionary:
 	var out: Dictionary
-	if not ClassDB.class_exists(MESHER):
+	if not store.is_empty():
+		# Sparse: the chunk's data lives in resident region tiles, which the native mesher (built for
+		# a whole-terrain grid state) cannot read, so the GDScript builder draws from the snapshot.
+		# Its one-texel apron comes from the neighbour regions that residency keeps resident, so the
+		# chunk's border vertices get the same heights and normals as the whole terrain -- no seam.
+		out = _chunk_arrays_gd(cx, cz, levels, store)
+	elif not ClassDB.class_exists(MESHER):
 		out = _chunk_arrays_gd(cx, cz, levels)
 	else:
 		out = ClassDB.class_call_static(MESHER, &"build_chunk", _grid_state(levels), cx, cz)
 		if not _paint.is_empty():
 			_paint_chunk_colors(out, cx, cz)
-	if _hole_count > 0 and _chunk_has_holes(cx, cz):
-		_cut_chunk_holes(out, cx, cz)
+	if _chunk_has_holes(cx, cz, store):
+		_cut_chunk_holes(out, cx, cz, store)
 	return out
 
 
@@ -1824,31 +2050,48 @@ func _hole_at(gx: int, gz: int) -> bool:
 	return _hole_count > 0 and _holes[clampi(gz, 0, _nz - 1) * _nx + clampi(gx, 0, _nx - 1)] != 0
 
 
-func _chunk_has_holes(cx: int, cz: int) -> bool:
+func _chunk_has_holes(cx: int, cz: int, store := {}) -> bool:
+	if not store.is_empty():
+		# Sparse: the hole flags live per region. Only look when the terrain has a hole map at all
+		# (its whole dims were recorded on load), reading the resident tiles.
+		if not _region_dims.has("holes"):
+			return false
+	elif _hole_count == 0:
+		return false
 	var cq := chunk_quads
 	for z in range(cz * cq, cz * cq + cq + 1):
 		for x in range(cx * cq, cx * cq + cq + 1):
-			if _holes[z * _nx + x] != 0:
+			if _hole_flag(x, z, store):
 				return true
 	return false
 
 
+## Whether grid vertex (gx, gz) is in a hole, from the resident tiles ([param store], sparse) or the
+## whole hole array; (gx, gz) are already within the grid.
+func _hole_flag(gx: int, gz: int, store: Dictionary) -> bool:
+	if not store.is_empty():
+		return _tile_hole(store, gx, gz)
+	return _holes[gz * _nx + gx] != 0
+
+
 ## Leaves out of a built chunk the triangles of its LODs and skirts that touch a hole, and its
-## occluder (it would hide what lies below the holes).
-func _cut_chunk_holes(out: Dictionary, cx: int, cz: int) -> void:
+## occluder (it would hide what lies below the holes). Marks the chunk so its collision shape
+## becomes a trimesh (a height shape cannot carry holes).
+func _cut_chunk_holes(out: Dictionary, cx: int, cz: int, store := {}) -> void:
 	var ring := _ring(chunk_quads)
 	var arrays: Array = out["arrays"]
-	arrays[Mesh.ARRAY_INDEX] = _cut_indices(arrays[Mesh.ARRAY_INDEX], cx, cz, 1, ring)
+	arrays[Mesh.ARRAY_INDEX] = _cut_indices(arrays[Mesh.ARRAY_INDEX], cx, cz, 1, ring, store)
 	var keys: Array = (out["lods"] as Dictionary).keys()
 	keys.sort()
 	var lods := {}
 	for k in keys.size():
-		lods[keys[k]] = _cut_indices(out["lods"][keys[k]], cx, cz, 2 << k, ring)
+		lods[keys[k]] = _cut_indices(out["lods"][keys[k]], cx, cz, 2 << k, ring, store)
 	out["lods"] = lods
+	out["has_holes"] = true
 	out.erase("occluder")
 
 
-func _cut_indices(idx: PackedInt32Array, cx: int, cz: int, s: int, ring: Array[Vector2i]) -> PackedInt32Array:
+func _cut_indices(idx: PackedInt32Array, cx: int, cz: int, s: int, ring: Array[Vector2i], store := {}) -> PackedInt32Array:
 	var cq := chunk_quads
 	var n := cq + 1
 	var g0 := Vector2i(cx * cq, cz * cq)
@@ -1863,10 +2106,10 @@ func _cut_indices(idx: PackedInt32Array, cx: int, cz: int, s: int, ring: Array[V
 			# A skirt vertex hangs from a border vertex: the border vertex decides.
 			var g := Vector2i(v % n, v / n) if v < n * n else ring[v - n * n]
 			sum += g
-			hole = hole or _holes[(g0.y + g.y) * _nx + g0.x + g.x] != 0
+			hole = hole or _hole_flag(g0.x + g.x, g0.y + g.y, store)
 		if not hole and s > 1:
 			var c := Vector2i(roundi(sum.x / 3.0), roundi(sum.y / 3.0))
-			hole = _holes[(g0.y + c.y) * _nx + g0.x + c.x] != 0
+			hole = _hole_flag(g0.x + c.x, g0.y + c.y, store)
 		if not hole:
 			kept[count] = idx[t]
 			kept[count + 1] = idx[t + 1]
@@ -1997,7 +2240,7 @@ func _holes_changed(rect: Rect2i) -> void:
 
 ## The ground data's texels that lie on a hole get no ground (code -2): the near-camera field
 ## dives under them as at the end of the ground.
-func _cut_ground_holes(part: Dictionary) -> void:
+func _cut_ground_holes(part: Dictionary, store := {}) -> void:
 	var texel: float = part["texel"]
 	var first: Vector2i = part["first"]
 	var size: Vector2i = part["size"]
@@ -2008,7 +2251,7 @@ func _cut_ground_holes(part: Dictionary) -> void:
 	hi = hi.clamp(Vector2i.ZERO, Vector2i(_nx - 1, _nz - 1))
 	for gz in range(lo.y, hi.y + 1):
 		for gx in range(lo.x, hi.x + 1):
-			if _holes[gz * _nx + gx] == 0:
+			if not _hole_flag(gx, gz, store):
 				continue
 			# Every texel in the quads around the vertex.
 			var t0 := Vector2i(((Vector2(gx - 1, gz - 1) * _spacing) / texel).floor()) - first
@@ -2059,8 +2302,10 @@ func _paint_chunk_colors(out: Dictionary, cx: int, cz: int) -> void:
 	arrays[Mesh.ARRAY_COLOR] = colors
 
 
-## [method _chunk_arrays] in GDScript (without the native library).
-func _chunk_arrays_gd(cx: int, cz: int, levels: int) -> Dictionary:
+## [method _chunk_arrays] in GDScript (without the native library, or -- sparse -- reading the
+## resident region tiles in [param store] instead of the whole maps). Reads no node: runs on worker
+## threads while streaming.
+func _chunk_arrays_gd(cx: int, cz: int, levels: int, store := {}) -> Dictionary:
 	var cq := chunk_quads
 	var n := cq + 1
 	var gx0 := cx * cq
@@ -2085,8 +2330,8 @@ func _chunk_arrays_gd(cx: int, cz: int, levels: int) -> Dictionary:
 			var i := z * n + x
 			var gx := gx0 + x
 			var gz := gz0 + z
-			var nrm := _grid_normal(gx, gz)
-			heights[i] = _grid_h(gx, gz)
+			var nrm := _grid_normal(gx, gz, store)
+			heights[i] = _grid_h(gx, gz, store)
 			verts[i] = Vector3(_origin.x + gx * _spacing, heights[i], _origin.y + gz * _spacing)
 			normals[i] = nrm
 			var t := Vector3(1, 0, 0)
@@ -2095,7 +2340,7 @@ func _chunk_arrays_gd(cx: int, cz: int, levels: int) -> Dictionary:
 			tangents[i * 4 + 1] = t.y
 			tangents[i * 4 + 2] = t.z
 			tangents[i * 4 + 3] = 1.0
-			var wts := _grid_weights(gx, gz)
+			var wts := _grid_weights(gx, gz, store)
 			colors[i] = Color(wts.x, wts.y, 0.0, 1.0)
 			uvs[i] = Vector2(float(gx) * _spacing / extent.x, float(gz) * _spacing / extent.y)
 	# The height error of each LOD: the finest grid against the LOD's triangles.
@@ -2256,6 +2501,7 @@ func _process(_delta: float) -> void:
 		return
 	var p := to_local(cam.global_position)
 	var xz := Vector2(p.x, p.z)
+	_update_residency(xz) # sparse: load / free region tiles by distance before chunks read them
 	_update_stream(xz)
 	_update_ground_window(xz)
 
@@ -2288,22 +2534,30 @@ func _update_stream(xz: Vector2) -> void:
 	var side := chunk_quads * _spacing
 	var lo := Vector2i(((xz - Vector2.ONE * stream_radius - _origin) / side).floor()).clamp(Vector2i.ZERO, grid - Vector2i.ONE)
 	var hi := Vector2i(((xz + Vector2.ONE * stream_radius - _origin) / side).floor()).clamp(Vector2i.ZERO, grid - Vector2i.ONE)
+	var sparse := _sparse_active()
 	var wanted := []
 	for cz in range(lo.y, hi.y + 1):
 		for cx in range(lo.x, hi.x + 1):
 			var key := Vector2i(cx, cz)
 			if _chunk_nodes.has(key) or _pending.has(key):
 				continue
+			# Sparse: a chunk may start only once its region and the neighbour regions its apron
+			# reads into are resident, so its build task finds every texel in the snapshot.
+			if sparse and not _chunk_region_ready(key):
+				continue
 			var d := _rect_distance(_chunk_rect(key), xz)
 			if d <= stream_radius:
 				wanted.append([d, key])
 	wanted.sort_custom(func(a: Array, b: Array) -> bool: return a[0] < b[0])
+	# One immutable snapshot of the resident tiles for every task started this frame: the build runs
+	# on a worker thread and reads only this, so the main thread may load or free regions meanwhile.
+	var snap := _regions.duplicate() if sparse else {}
 	var levels := _levels()
 	for item: Array in wanted:
 		if _pending.size() >= MAX_STREAM_TASKS:
 			break
 		var key: Vector2i = item[1]
-		_pending[key] = WorkerThreadPool.add_task(_build_task.bind(key, levels), false, "GADS terrain chunk")
+		_pending[key] = WorkerThreadPool.add_task(_build_task.bind(key, levels, snap), false, "GADS terrain chunk")
 		_pending_version[key] = _paint_version
 	# Hysteresis: a chunk goes only once well beyond the radius, so a camera on the edge does not
 	# rebuild it back and forth.
@@ -2320,9 +2574,98 @@ func _update_stream(xz: Vector2) -> void:
 				_shapes.erase(key)
 
 
-## Worker thread: one chunk's arrays.
-func _build_task(key: Vector2i, levels: int) -> void:
-	var data := _chunk_arrays(key.x, key.y, levels)
+# --- Region residency (Stage 4a) ----------------------------------------------------------------
+# For a region-file-backed streaming terrain the map DATA is loaded and freed by distance, mirroring
+# the chunk stream. A region is LOADED (its file read by the engine's threaded loader on a background
+# thread) when it, or a near region whose chunks' aprons reach into it, comes within the stream
+# radius; it is FREED when it falls past a larger hysteresis distance so panning across a boundary
+# does not thrash. The residency set is thus a bounded ring around the camera -- a handful of region
+# tiles, not the whole ~1 GB map of a 16k world. _regions (the resident store) is touched only on the
+# main thread; worker build / ground tasks read an immutable snapshot, so a freed region's tile stays
+# alive for any task that still holds it and there is no data race on the store.
+
+## Loads the region tiles the camera needs and frees those it has left. Only the regions a chunk
+## reads (its own plus the neighbours its one-texel apron reaches) are kept, so a chunk can always
+## build from the resident set. [param xz]: the camera in the terrain's local XZ.
+func _update_residency(xz: Vector2) -> void:
+	if not _sparse_active():
+		return
+	var grid := get_region_grid()
+	var side := _region_quads * _spacing
+	var drop := stream_radius * 1.25 + side # free past this (hysteresis), as the chunk stream does
+	var reach := drop + side # the search box: the keep distance plus one region for the neighbour ring
+	var lo := Vector2i(((xz - Vector2.ONE * reach - _origin) / side).floor()).clamp(Vector2i.ZERO, grid - Vector2i.ONE)
+	var hi := Vector2i(((xz + Vector2.ONE * reach - _origin) / side).floor()).clamp(Vector2i.ZERO, grid - Vector2i.ONE)
+	var in_range := {}
+	var within_drop := {}
+	for cy in range(lo.y, hi.y + 1):
+		for cx in range(lo.x, hi.x + 1):
+			var coord := Vector2i(cx, cy)
+			var d := _rect_distance(_region_local_rect(coord), xz)
+			if d <= stream_radius:
+				in_range[coord] = true
+			if d <= drop:
+				within_drop[coord] = true
+	# A chunk at a region edge reads one texel into the neighbour region, so a region is needed (and
+	# kept) together with its eight neighbours.
+	var needed := _with_neighbors(in_range, grid)
+	var keep := _with_neighbors(within_drop, grid)
+	for coord: Vector2i in needed:
+		if _regions.has(coord) or _region_loads.has(coord) or not _region_files.has(coord):
+			continue
+		if _region_loads.size() >= MAX_STREAM_TASKS:
+			break
+		# The engine's threaded loader does the I/O on a background thread; we poll it in
+		# _collect_tasks and take the resource on the main thread (so it frees there -- a resource
+		# loaded AND freed on a worker thread leaks in Godot).
+		var path := _region_path(coord)
+		if ResourceLoader.load_threaded_request(path, "", false, ResourceLoader.CACHE_MODE_IGNORE) == OK:
+			_region_loads[coord] = path
+	for coord: Vector2i in _regions.keys():
+		if not keep.has(coord):
+			_regions.erase(coord)
+
+
+## [param coords] (a set: coord -> true) grown by the eight neighbours of each, clamped to the grid.
+func _with_neighbors(coords: Dictionary, grid: Vector2i) -> Dictionary:
+	var out := {}
+	for coord: Vector2i in coords:
+		for dy in range(-1, 2):
+			for dx in range(-1, 2):
+				var c := coord + Vector2i(dx, dy)
+				if c.x >= 0 and c.y >= 0 and c.x < grid.x and c.y < grid.y:
+					out[c] = true
+	return out
+
+
+## Region [param coord]'s footprint in local XZ (the chunks it owns), for the distance test.
+func _region_local_rect(coord: Vector2i) -> Rect2:
+	var rq := _region_quads
+	var x0 := coord.x * rq
+	var x1 := mini((coord.x + 1) * rq, _nx - 1)
+	var y0 := coord.y * rq
+	var y1 := mini((coord.y + 1) * rq, _nz - 1)
+	return Rect2(_origin + Vector2(x0, y0) * _spacing, Vector2(x1 - x0, y1 - y0) * _spacing)
+
+
+## Whether every region chunk [param key]'s vertices and their one-texel apron read is resident (or
+## has no file, so its texels default to the flat height). Only then may the chunk's build start.
+func _chunk_region_ready(key: Vector2i) -> bool:
+	var cq := chunk_quads
+	var r0 := _region_of_vertex(key.x * cq - 1, key.y * cq - 1)
+	var r1 := _region_of_vertex(key.x * cq + cq + 1, key.y * cq + cq + 1)
+	for ry in range(r0.y, r1.y + 1):
+		for rx in range(r0.x, r1.x + 1):
+			var c := Vector2i(rx, ry)
+			if not _regions.has(c) and _region_files.has(c):
+				return false
+	return true
+
+
+## Worker thread: one chunk's arrays. [param store] is the resident-tile snapshot for a sparse
+## terrain (empty otherwise); the task reads only it, never the live _regions.
+func _build_task(key: Vector2i, levels: int, store := {}) -> void:
+	var data := _chunk_arrays(key.x, key.y, levels, store)
 	_mutex.lock()
 	_results[key] = data
 	_mutex.unlock()
@@ -2363,6 +2706,21 @@ func _collect_tasks() -> void:
 			_field.lift = result["lift"]
 			_field.ground_bake = result["bake"]
 			_field.visible = true
+	# Install the region tiles whose background loads finished, so this frame's _update_stream can
+	# build the chunks that were waiting on them. load_threaded_get takes the resource on the main
+	# thread; its local reference drops here, so it frees on the main thread (no leak).
+	for coord: Vector2i in _region_loads.keys():
+		var path: String = _region_loads[coord]
+		var status := ResourceLoader.load_threaded_get_status(path)
+		if status == ResourceLoader.THREAD_LOAD_IN_PROGRESS:
+			continue
+		_region_loads.erase(coord)
+		if status == ResourceLoader.THREAD_LOAD_LOADED:
+			var region := ResourceLoader.load_threaded_get(path) as GADSTerrainRegion
+			if region != null:
+				var tile := _tiles_from_region(region)
+				if _validate_tile(coord, tile):
+					_regions[coord] = tile
 
 
 func _wait_tasks() -> void:
@@ -2371,6 +2729,10 @@ func _wait_tasks() -> void:
 	_pending.clear()
 	_pending_version.clear()
 	_results.clear()
+	# Drain any outstanding background region loads (blocks until each is done) so none lingers.
+	for path: String in _region_loads.values():
+		ResourceLoader.load_threaded_get(path)
+	_region_loads.clear()
 	if _window_task >= 0:
 		WorkerThreadPool.wait_for_task_completion(_window_task)
 		_window_task = -1
@@ -2396,12 +2758,15 @@ func _update_ground_window(xz: Vector2) -> void:
 	_window_center = xz
 	_ground_offset_cache = global_position
 	var rect := Rect2(xz - side * 0.5, side)
-	_window_task = WorkerThreadPool.add_task(_window_job.bind(rect), false, "GADS terrain ground data")
+	# Sparse: hand the job the same resident-tile snapshot the chunks use (the window stays within the
+	# near regions residency keeps loaded), so it reads tiles rather than the empty whole maps.
+	var snap := _regions.duplicate() if _sparse_active() else {}
+	_window_task = WorkerThreadPool.add_task(_window_job.bind(rect, snap), false, "GADS terrain ground data")
 
 
-func _window_job(rect: Rect2) -> void:
-	var bake := make_ground_bake(rect)
-	var lift := clampf(ground_data_error(rect) + 0.002, 0.002, 0.1)
+func _window_job(rect: Rect2, store := {}) -> void:
+	var bake := make_ground_bake(rect, store)
+	var lift := clampf(ground_data_error(rect, store) + 0.002, 0.002, 0.1)
 	_mutex.lock()
 	_window_result = {"bake": bake, "lift": lift}
 	_mutex.unlock()
@@ -2465,7 +2830,8 @@ func _add_chunk_shape(key: Vector2i, chunk: Dictionary) -> void:
 ## Godot's own physics warns about on every ray).
 func _chunk_shape(key: Vector2i, chunk: Dictionary) -> CollisionShape3D:
 	var n := chunk_quads + 1
-	if _hole_count > 0 and _chunk_has_holes(key.x, key.y):
+	# The builder marks a chunk whose triangles it cut for holes (whole array or resident tiles).
+	if chunk.get("has_holes", false):
 		var verts: PackedVector3Array = chunk["arrays"][Mesh.ARRAY_VERTEX]
 		var idx: PackedInt32Array = chunk["arrays"][Mesh.ARRAY_INDEX]
 		var faces := PackedVector3Array()

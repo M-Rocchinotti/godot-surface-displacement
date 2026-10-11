@@ -107,5 +107,32 @@ Not code: **maturity** — shipped projects, community, longevity.
   region still stays resident, and building is unchanged. This is the persistence primitive Stage 4
   uses to keep near regions and free far ones. Full suite 15/15; visual-regression baselines
   unchanged.
-  - **Remaining for the region system → Stage 4:** load/free region *data* (and their chunks and
-    collision) by distance for the actual 16k memory win, with cross-region border handling.
+- **Stage 4a: sparse region-DATA residency is done.** A region-file-backed streaming terrain
+  (`load_regions` on a terrain with `stream_radius > 0` and per-vertex maps) now keeps only the
+  regions near the camera in memory: `GADSTerrain3D._regions` holds just the resident tiles, loaded
+  from each `region_<x>_<y>.res` by distance (the engine's threaded loader, on a background thread)
+  and freed when the camera leaves. A 16k world costs a bounded handful of region tiles, not the
+  whole ~1 GB map — the actual large-world memory win. (`get_resident_regions()` reports the set.)
+  - **Chunk-aligned regions.** The region split (`_axis_bound`, replacing 3a's near-equal `_split`)
+    snaps region boundaries on the vertex grid to whole chunks (`_region_quads` quads, the last
+    region partial), so every chunk lies within one region and a region's tile is a whole-chunk
+    block. An off-grid map (a whole-texture import's heightmap, a low-res splat) keeps the near-equal
+    split and stays fully resident, so 3a/3b are byte-identical (the geometries coincide).
+  - **Borders (the apron).** Residency keeps each near region's eight neighbours resident too, so a
+    chunk at a region edge reads its one-texel apron (heights for bilinear/normals, splat for
+    weights) straight from the neighbour region's resident tile — identical to the whole terrain, no
+    seam. A chunk starts only once its region and that ring are resident.
+  - **Threading.** `_regions` is touched only on the main thread (loads installed, far regions
+    freed). Each chunk-build / ground-window worker task gets an immutable snapshot (`_regions`
+    shallow copy) and reads only that, so freeing a region never races a task and a freed tile stays
+    alive for any task still holding it. `_sample_source`/`_grid_weights`/`_grid_h`/`_height_local`/
+    `_weights_at` and the GDScript chunk+ground builders take an optional `store` (the snapshot);
+    the whole-texture (non-region-file) case keeps its native fast path untouched.
+  - The full suite stays 15/15 on all renderers; a new terrain test
+    (`region_data_streams_by_distance`) builds a 256 m, 64-region, streaming terrain, moves the
+    camera corner-to-corner and asserts only near regions are resident (far freed and reloaded on
+    approach), heights/weights near the camera match a full-resident reference (border-correct across
+    a region boundary), and resident tile memory is ~12 % of the whole map. Visual-regression
+    baselines unchanged (no scene uses a sparse terrain).
+  - **Deferred to 4b:** coarser region-LOD data for distant regions; a native (rather than GDScript)
+    chunk build for the sparse path; editing a sparse terrain.

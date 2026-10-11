@@ -26,6 +26,7 @@ func _run() -> void:
 	await _test("heights_follow_the_heightmap", test_heights)
 	await _test("partitions_into_regions", test_region_grid)
 	await _test("persists_regions_to_files", test_region_persistence)
+	await _test("region_data_streams_by_distance", test_region_residency)
 	await _test("chunk_lods_and_skirts", test_lods)
 	await _test("layers_by_rules_and_splat_map", test_layers)
 	if DisplayServer.get_name() != "headless":
@@ -454,6 +455,158 @@ func test_region_persistence() -> void:
 	await process_frame
 	_clear_dir(dir)
 	_clear_dir(dir_b)
+
+
+## A per-vertex height map (FORMAT_RF, nx x nx) with smooth relief plus a gentle ramp, built from a
+## flat array (fast; set_pixel on half a million texels would not be).
+static func _ramp_height(nx: int) -> Image:
+	var data := PackedFloat32Array()
+	data.resize(nx * nx)
+	for y in nx:
+		for x in nx:
+			var u := float(x) / (nx - 1)
+			var v := float(y) / (nx - 1)
+			data[y * nx + x] = clampf(0.3 + 0.2 * sin(u * TAU * 3.0) * cos(v * TAU * 2.0) + 0.15 * u, 0.0, 1.0)
+	return Image.create_from_data(nx, nx, false, Image.FORMAT_RF, data.to_byte_array())
+
+
+## A per-vertex splat map (RGBA8, nx x nx): R a gradient along +X, G along +Z, so layer weights vary
+## smoothly everywhere and a bilinear read straddling a region boundary is a real test of the apron.
+static func _gradient_splat(nx: int) -> Image:
+	var bytes := PackedByteArray()
+	bytes.resize(nx * nx * 4)
+	for y in nx:
+		for x in nx:
+			var k := (y * nx + x) * 4
+			bytes[k] = int(roundf(float(x) / (nx - 1) * 255.0))
+			bytes[k + 1] = int(roundf(float(y) / (nx - 1) * 255.0))
+			bytes[k + 2] = 0
+			bytes[k + 3] = 255
+	return Image.create_from_data(nx, nx, false, Image.FORMAT_RGBA8, bytes)
+
+
+## The float count of the resident height tiles (the sparse memory footprint).
+static func _resident_height_floats(t: GADSTerrain3D) -> int:
+	var total := 0
+	for coord: Vector2i in t.get_resident_regions():
+		total += (t._region_slice(coord, "height") as PackedFloat32Array).size()
+	return total
+
+
+## Stage 4a sparse region-DATA residency: a region-file-backed STREAMING terrain bigger than the
+## stream radius keeps only the near regions' map tiles in memory and loads / frees the rest by
+## distance. (a) After settling at one corner only a bounded handful of regions is resident and the
+## far corner is not; (b) heights and weights sampled near the camera match a full-resident reference
+## exactly, including a probe straddling a region border (the one-texel apron); (c) flying to the far
+## corner reloads its regions and frees the near ones, and reads there are correct; (d) peak resident
+## tile memory stays far below the whole map.
+func test_region_residency() -> void:
+	var grass := layer_material(2.0, Color(0.2, 0.6, 0.2))
+	var rock := layer_material(4.0, Color(0.5, 0.5, 0.5))
+	var dir := "user://gads_region_residency"
+	_clear_dir(dir)
+	# A 256 m terrain at 0.5 m is 513 x 513 vertices in 16 x 16 chunks of 32 quads (16 m). A 32 m
+	# region is 2 chunks, so the maps tile into an 8 x 8 grid (64 regions). Per-vertex height and
+	# splat so the files are one texel per vertex (the sparse path's requirement).
+	var nx := 513
+	var height_img := _ramp_height(nx)
+	var splat_img := _gradient_splat(nx)
+	# Reference: a whole-resident, non-streaming terrain with the same maps.
+	var ref := GADSTerrain3D.new()
+	ref.name = "RefTerrain"
+	ref.heightmap = ImageTexture.create_from_image(height_img)
+	ref.splatmap = ImageTexture.create_from_image(splat_img)
+	ref.size = Vector2(256, 256)
+	ref.height_scale = 30.0
+	ref.vertex_spacing = 0.5
+	ref.chunk_quads = 32
+	ref.lod_levels = 5
+	ref.detail_field = false
+	ref.layers = [grass, rock] as Array[ShaderMaterial]
+	ref.region_size = 32.0
+	root.add_child(ref)
+	check(ref.get_grid_size() == Vector2i(513, 513) and ref.get_region_grid() == Vector2i(8, 8),
+		"a 256 m terrain is 513 x 513 in an 8 x 8 region grid (%s, %s)" % [ref.get_grid_size(), ref.get_region_grid()])
+	check(ref.save_regions(dir) == OK and _dir_files(dir, "region_", "res").size() == 64, "it saves 64 per-region files")
+	var whole_floats := 513 * 513 # the whole height map, one float per vertex
+	# A streaming terrain loads the same files sparsely around a camera at the -X / -Z corner.
+	var holder := Node3D.new()
+	root.add_child(holder)
+	var cam := Camera3D.new()
+	holder.add_child(cam)
+	cam.position = Vector3(-120, 30, -120)
+	var t := GADSTerrain3D.new()
+	t.name = "StreamTerrain"
+	t.height_scale = 30.0
+	t.vertex_spacing = 0.5
+	t.chunk_quads = 32
+	t.lod_levels = 5
+	t.stream_radius = 24.0
+	t.layers = [grass, rock] as Array[ShaderMaterial]
+	t.detail_field = true
+	holder.add_child(t)
+	t.stream_camera = t.get_path_to(cam)
+	check(t.load_regions(dir) and t.get_grid_size() == Vector2i(513, 513) and t.get_region_grid() == Vector2i(8, 8),
+		"the streaming terrain loads the region files (grid %s)" % t.get_region_grid())
+	await _settle(t)
+	# (a) Only a bounded handful of regions is resident; the far corner is not.
+	var resident: Array = t.get_resident_regions()
+	var far_region := Vector2i(7, 7)
+	print("  %d of 64 regions resident near the -X / -Z corner: %s" % [resident.size(), resident])
+	check(resident.size() >= 1 and resident.size() <= 16 and not resident.has(far_region),
+		"only near regions are resident (%d of 64), the far corner is not" % resident.size())
+	check(t.get_chunks().size() > 0, "chunks built near the camera (%d)" % t.get_chunks().size())
+	# (d) Peak resident tile memory is far below the whole map.
+	var resident_floats := _resident_height_floats(t)
+	print("  resident height tiles %d floats, whole map %d (%.1f %%)" % [resident_floats, whole_floats, 100.0 * resident_floats / whole_floats])
+	check(resident_floats > 0 and resident_floats < whole_floats / 4, "resident tile memory is a fraction of the whole map (%d vs %d)" % [resident_floats, whole_floats])
+	# (b) Heights and weights near the camera match the full-resident reference, border-correct.
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 41
+	var worst_h := 0.0
+	var worst_w := 0.0
+	var n := 0
+	for i in 200:
+		var p := Vector3(cam.position.x + rng.randf_range(-20, 20), 0, cam.position.z + rng.randf_range(-20, 20))
+		if is_nan(t.get_height(p)) or is_nan(ref.get_height(p)):
+			continue
+		n += 1
+		worst_h = maxf(worst_h, absf(t.get_height(p) - ref.get_height(p)))
+		worst_w = maxf(worst_w, t.get_layer_weights(p).distance_to(ref.get_layer_weights(p)))
+	print("  near the camera (%d samples): largest height difference %.6f mm, weight %.6f" % [n, worst_h * 1000.0, worst_w])
+	check(n > 100 and worst_h < 1e-4 and worst_w < 1e-4, "heights and weights near the camera match the full-resident reference")
+	# A probe straddling a region boundary (world x = -96 m is the (0,*) -> (1,*) edge) reads vertices
+	# from two different region tiles: the apron carries the neighbour's boundary texel.
+	var border := Vector3(-96.3, 0, -110.0)
+	var border2 := border + Vector3(0.6, 0, 0)
+	check(absf(t.get_height(border) - ref.get_height(border)) < 1e-4 and absf(t.get_height(border2) - ref.get_height(border2)) < 1e-4,
+		"a height straddling a region boundary is border-correct (the apron)")
+	# The detail field's ground window is a bake around the camera, read from the resident tiles.
+	var field := t.get_detail_field()
+	var bake := field.ground_bake if field != null else null
+	check(bake != null and field.visible and bake.get_rect().has_point(Vector2(cam.position.x, cam.position.z)),
+		"the detail field's ground window followed the camera, built from resident tiles")
+	# (c) Fly to the far corner: its regions load, the near ones free, reads there are correct.
+	cam.position = Vector3(120, 30, 120)
+	await _settle(t)
+	var resident2: Array = t.get_resident_regions()
+	print("  after flying to the +X / +Z corner: %s" % [resident2])
+	check(resident2.has(far_region) and not resident2.has(Vector2i(0, 0)) and resident2.size() <= 16,
+		"approaching the far corner reloaded its regions and freed the near ones")
+	var worst2 := 0.0
+	var m := 0
+	for i in 150:
+		var p := Vector3(114 + rng.randf_range(-12, 12), 0, 114 + rng.randf_range(-12, 12))
+		if is_nan(t.get_height(p)) or is_nan(ref.get_height(p)):
+			continue
+		m += 1
+		worst2 = maxf(worst2, absf(t.get_height(p) - ref.get_height(p)))
+	print("  at the far corner (%d samples): largest height difference %.6f mm" % [m, worst2 * 1000.0])
+	check(m > 100 and worst2 < 1e-4, "a reloaded region reads correctly")
+	holder.queue_free()
+	ref.queue_free()
+	await process_frame
+	_clear_dir(dir)
 
 
 func test_lods() -> void:
