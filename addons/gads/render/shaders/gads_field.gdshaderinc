@@ -63,6 +63,16 @@ uniform vec4 layer_fx_water[GADS_FIELD_LAYERS];       // wetness, puddle level, 
 uniform vec4 layer_fx_cavity[GADS_FIELD_LAYERS];      // cavity colour rgb, amount
 uniform vec4 layer_fx_edge[GADS_FIELD_LAYERS];        // edge colour rgb, amount
 uniform vec4 layer_fx_radius[GADS_FIELD_LAYERS];      // cavity radius (mip levels), unused x3
+// Optional per-texel control map (Stage 2 of the terrain-parity plan), the twin of the one the
+// layered surface material samples (gads_core.gdshaderinc): an RGB weight texture read by world XZ,
+// R/G/B = the three extra field layers' (1, 2, 3) masks (0..1). control_rect = (origin.x, origin.z,
+// 1/size.x, 1/size.z) in world metres; .z <= 0 means unbound, so the field keeps the ground bake's
+// layer codes (backward compatible). Where it is bound the field selects and blends its layers per
+// fragment from it, base-first, exactly as the chunk material does, so the near-camera relief shades
+// like the ground it covers right across a layer boundary (no visible seam). GADSTerrain3D binds the
+// same texture and rect on both. No mips: textureLod(..., 0.0) is safe in the in-bounds branch.
+uniform sampler2D control_map : filter_linear, repeat_disable;
+uniform vec4 control_rect = vec4(0.0);
 
 varying vec3 f_base_normal;
 varying float f_ground;
@@ -107,12 +117,56 @@ float gads_field_height_blend(float below, float above, float m, float width) {
 	return smoothstep(-width, width, above - below + (2.0 * m - 1.0) * (1.0 + width));
 }
 
+// The control map's extra-layer masks (R/G/B = field layers 1, 2, 3) at world xz, or x = -1 when
+// no map is bound there (sentinel: a real mask is 0..1), so the caller keeps its ground-bake
+// weights. textureLod with an explicit level is safe in the march's non-uniform control flow.
+vec3 gads_control_masks(vec2 xz) {
+	if (control_rect.z <= 0.0) {
+		return vec3(-1.0, 0.0, 0.0);
+	}
+	vec2 uv = (xz - control_rect.xy) * control_rect.zw;
+	if (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) {
+		return vec3(-1.0, 0.0, 0.0);
+	}
+	return textureLod(control_map, uv, 0.0).rgb;
+}
+
+// The layers' relief above the ground (m) at world xz, selected and blended by the control map
+// base-first, bit-for-bit the same scheme the chunk material uses (gads_core's gads_layered_relief):
+// field layer 0 is the base (always present), the extra layers 1..3 lie over it by their control
+// mask with the higher relief winning (gads_field_height_blend, the same transition width the
+// layered material's layers default to). `eff` gets each layer's effective weight for the shading
+// blend -- the same mix chain the ground material applies -- so the field's albedo, ORM and normal
+// equal the ground's across a boundary. The distance fade / coverage is applied by the caller.
+float gads_field_control_relief(vec2 xz, float lod, vec3 masks, out vec4 eff) {
+	float h = gads_layer_h(0, xz, max(lod + layer_e[0].w, 0.0));
+	float relief = layer_a[0].x * gads_pulse(layer_anim[0].z, layer_anim[0].w) * h;
+	eff = vec4(1.0, 0.0, 0.0, 0.0);
+	for (int i = 1; i < GADS_FIELD_LAYERS; i++) {
+		if (i >= layer_count || masks[i - 1] <= 0.0) {
+			continue;
+		}
+		float hi = gads_layer_h(i, xz, max(lod + layer_e[i].w, 0.0));
+		float t = gads_field_height_blend(h, hi, masks[i - 1], GADS_FIELD_BLEND_WIDTH);
+		relief = mix(relief, layer_a[i].x * gads_pulse(layer_anim[i].z, layer_anim[i].w) * hi, t);
+		h = mix(h, hi, t);
+		eff *= 1.0 - t;
+		eff[i] = t;
+	}
+	return relief;
+}
+
 // The layers' relief above the ground (m) at world xz, blended by height: each layer lies over
 // the ones before it by its share of their weights so far, the higher relief winning in between;
 // scaled by the weights' sum (the distance fade passes scaled weights). `eff`: the weight the
 // blend gives each layer, for the shading. `lod` is log2 of metres per sample; each layer adds
-// -log2 of its texel size.
+// -log2 of its texel size. With a control map bound it defers to the base-first blend above so the
+// field matches the chunks; `w`'s sum then carries the fade / coverage the caller folded in.
 float gads_field_layers(vec2 xz, float lod, vec4 w, out vec4 eff) {
+	vec3 masks = gads_control_masks(xz);
+	if (masks.x >= 0.0) {
+		return gads_field_control_relief(xz, lod, masks, eff) * (w.x + w.y + w.z + w.w);
+	}
 	eff = vec4(0.0);
 	float relief = 0.0;
 	float h_acc = 0.0;
@@ -142,8 +196,21 @@ float gads_field_relief(vec2 xz, float lod, vec4 w) {
 }
 
 // The deepest relief the weighted layers can show (the march's slab): the highest active layer's
-// depth (blended by height, the relief reaches any of them), scaled like the relief.
-float gads_field_amp(vec4 w) {
+// depth (blended by height, the relief reaches any of them), scaled like the relief. With a control
+// map bound the base is always present (base-first blend) and the extras are the ones the map
+// selects; the caller multiplies by the fade as before, and the per-fragment coverage gate
+// (displaceable) stands in for the weight sum the non-control path folds into `acc`.
+float gads_field_amp(vec2 xz, vec4 w) {
+	vec3 masks = gads_control_masks(xz);
+	if (masks.x >= 0.0) {
+		float a = layer_a[0].x;
+		for (int i = 1; i < GADS_FIELD_LAYERS; i++) {
+			if (i < layer_count && masks[i - 1] > 0.0) {
+				a = max(a, layer_a[i].x);
+			}
+		}
+		return a;
+	}
 	float a = 0.0;
 	float acc = 0.0;
 	for (int i = 0; i < GADS_FIELD_LAYERS; i++) {
@@ -253,7 +320,7 @@ void fragment() {
 	float displaceable = f_displaceable;
 	vec4 w = f_weights;
 	float pom_fade = gads_fade(length(VERTEX)) * gads_split(FRAGCOORD.x / VIEWPORT_SIZE.x);
-	float amp = gads_field_amp(w) * pom_fade;
+	float amp = gads_field_amp(wpos.xz, w) * pom_fade;
 	// log2 of metres per pixel on the ground (uniform control flow). The footprint is taken on the
 	// ground plane under the proxy: the view ray's point there is the same for every point of the
 	// ray, so its derivatives are smooth across the proxy's bumps and silhouettes (the proxy's own

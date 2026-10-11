@@ -12,8 +12,10 @@ extends Node3D
 ##   combined into one layered material ([method GADSMaterials.combine_layers]): the first covers
 ##   everything, the rest lie on top where their mask channel (R, G, B by order) puts them, or by
 ##   the slope and height rules below. The built-in sculpt/splat tools paint the second and third
-##   layers ([member splatmap] R, G); a fourth is combined but only drives from hand-painted vertex
-##   colour until the control-map stage. The layers blend by height (the higher relief wins).
+##   layers ([member splatmap] R, G). A [member splatmap] finer than the vertex grid also drives a
+##   per-texel control map (R, G, B = the second, third and fourth material's weight) that the chunks
+##   and the detail field sample per fragment, so boundaries stay crisp between the vertices and all
+##   three extra layers can be painted. The layers blend by height (the higher relief wins).
 ## - Collision: a HeightMapShape3D of the same grid.
 ## - Detail: a [GADSDisplacementField3D] (real displaced geometry from the layers' height maps
 ##   around the camera) on the terrain's own ground data, and the layers take the marks of a
@@ -230,6 +232,8 @@ var _ground_offset_cache := Vector3.ZERO # the node's world position, for worker
 var _body: StaticBody3D
 var _field: GADSDisplacementField3D
 var _material: Material
+var _control_texture: Texture2D # per-texel control map built from _splat (null = none bound)
+var _control_rect := Vector4.ZERO # world->control-uv: origin.x, origin.z, 1/extent.x, 1/extent.y
 var _queued := false
 var _build_ms := 0.0
 var _src_texture: Texture2D # the heightmap _src was read from
@@ -313,6 +317,7 @@ func rebuild() -> void:
 				_make_chunk(Vector2i(cx, cz), _chunk_arrays(cx, cz, levels))
 	_build_collision()
 	_build_field()
+	_update_control_map()
 	_window_center = Vector2.INF
 	set_process(is_streaming())
 	_build_ms = (Time.get_ticks_usec() - t0) / 1000.0
@@ -485,6 +490,52 @@ func clear_paint() -> void:
 func _repaint(rect: Rect2) -> void:
 	_repaint_chunks(rect)
 	_repaint_ground(rect)
+	_update_control_map()
+
+
+## Whether a per-texel control map earns its keep: only when the splat map is finer than the vertex
+## grid (otherwise the per-vertex vertex colours already carry the layers crisply enough and the
+## field agrees via its ground-bake codes -- so the rule / low-res-splat path stays byte-identical).
+## Runtime vertex painting ([method paint_layer], [member _paint]) is an alternative authoritative
+## source, so it switches the control map off and the vertex colours take over.
+func _should_control_map() -> bool:
+	return _paint.is_empty() and not _splat.is_empty() and _nx >= 2 \
+		and (int(_splat["width"]) > _nx or int(_splat["height"]) > _nz)
+
+
+## A per-texel control map from the splat map (one RGB texel per splat texel, at the splat's own
+## resolution, so a splat finer than the mesh gives layer boundaries crisper than the per-vertex
+## vertex colours can): R, G, B = the second, third and fourth material's weight (0..1). Sampled
+## with [member _control_rect] (filter_linear in the shaders) by both the chunks' layered material
+## and the detail field, so the two agree at a boundary.
+func _build_control_texture() -> Texture2D:
+	var w: int = _splat["width"]
+	var h: int = _splat["height"]
+	var data: PackedFloat32Array = _splat["data"]
+	# _splat holds four floats a texel (RGBA); keep R, G, B (the three extra layers) as an RGB map.
+	var img := Image.create_from_data(w, h, false, Image.FORMAT_RGBAF, data.to_byte_array())
+	img.convert(Image.FORMAT_RGB8)
+	return ImageTexture.create_from_image(img)
+
+
+## Rebuilds and binds (or clears) the control map on the chunks' material and the detail field, so
+## painting and rebuilds keep it current. Cheap when no control map is wanted (no texture is built).
+func _update_control_map() -> void:
+	var tex: Texture2D = null
+	var rect := Vector4.ZERO
+	if _should_control_map():
+		tex = _build_control_texture()
+		var gp := global_position if is_inside_tree() else Vector3.ZERO
+		var corner := _origin + Vector2(gp.x, gp.z)
+		var ext := get_extent()
+		rect = Vector4(corner.x, corner.y, 1.0 / maxf(ext.x, 1e-6), 1.0 / maxf(ext.y, 1e-6))
+	_control_texture = tex
+	_control_rect = rect
+	if _material is ShaderMaterial and GADSMaterials.parse((_material as ShaderMaterial).shader).get("layered", false):
+		(_material as ShaderMaterial).set_shader_parameter("control_map", _control_texture)
+		(_material as ShaderMaterial).set_shader_parameter("control_rect", _control_rect)
+	if _field != null:
+		_field.set_control_map(_control_texture, _control_rect)
 
 
 func _repaint_chunks(rect: Rect2) -> void:
@@ -1115,6 +1166,7 @@ func _weights_changed(rect: Rect2i) -> void:
 	_paint_version += 1
 	var local := Rect2(_origin + Vector2(rect.position) * _spacing, Vector2(rect.size - Vector2i.ONE) * _spacing)
 	_repaint_chunks(local)
+	_update_control_map()
 	_queue_edit_flush(rect, "splat")
 
 

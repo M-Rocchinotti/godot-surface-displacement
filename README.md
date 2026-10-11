@@ -658,6 +658,15 @@ Height Map, which RAW and R16 files are by default), a `size` and up to three `l
   them, else by rules: `slope_layer` on slopes steeper than `slope_range` (degrees; rock on
   cliffs), `height_layer` above `height_band` (m; snow on peaks). Within a layer's mask the higher
   relief wins (height-aware blending).
+- **Control map** (per-texel layers): assign a `splatmap` texture finer than the vertex grid and the
+  terrain builds a control map from it — an RGB weight texture (R, G, B = the second, third and
+  fourth material's weight, 0..1) sampled per fragment by world position — so layer boundaries are
+  crisp wherever the splat says, not limited to the per-vertex vertex colours, and all three extra
+  layers can be painted (B needs a four-material layer stack). The chunks' layered material and the
+  near-camera detail field sample the same control map, so they agree at every boundary. A
+  vertex-resolution splat (the editable map a brush stroke or `paint_splatmap()` makes, or a rules-
+  only terrain) uses the per-vertex vertex colours instead, exactly as before — the control map is
+  bound only when the splat is finer than the mesh, so the rule/paint path is unchanged.
 - **Collision**: a HeightMapShape3D of the same grid and triangulation (`collision`,
   `collision_layer`, `collision_mask`).
 - **Holes** (cave and tunnel entrances): `holes`, a map white where the ground is open (sampled

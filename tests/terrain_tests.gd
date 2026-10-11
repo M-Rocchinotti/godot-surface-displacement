@@ -26,6 +26,8 @@ func _run() -> void:
 	await _test("heights_follow_the_heightmap", test_heights)
 	await _test("chunk_lods_and_skirts", test_lods)
 	await _test("layers_by_rules_and_splat_map", test_layers)
+	if DisplayServer.get_name() != "headless":
+		await _test("control_map_layers_per_texel", test_control_map)
 	await _test("collision_matches_the_surface", test_collision)
 	await _test("detail_field_ground_data", test_ground_data)
 	await _test("holes", test_holes)
@@ -390,6 +392,159 @@ func test_layers() -> void:
 	check(t.get_layer_weights(Vector3(-20, 0, 0)) == Vector2(1, 0) and t.get_layer_weights(Vector3(20, 0, 0)) == Vector2.ZERO,
 		"a splat map puts the layers where it says")
 	t.queue_free()
+	await process_frame
+
+
+## A flat-height GADS layer of one colour, so layers blend exactly where the mask crosses 0.5 (no
+## height-aware shift), which lets the control-map test read a layer boundary's world x precisely.
+static func flat_layer(color: Color) -> ShaderMaterial:
+	var height := Image.create(4, 4, false, Image.FORMAT_RF)
+	height.fill(Color(0.5, 0, 0))
+	var albedo := Image.create(4, 4, false, Image.FORMAT_RGB8)
+	albedo.fill(color)
+	return GADSMaterials.create(GADSMaterials.Mapping.WORLD,
+		{"height": ImageTexture.create_from_image(height), "albedo": ImageTexture.create_from_image(albedo)},
+		{"height_m": 0.02, "height_center": 0.0, "texture_size_m": Vector2(2, 2)}, GADSMaterials.Quality.POM)
+
+
+## A splat (RGBA8) of [param size], R = 1 left of world x [param boundary], G = 1 inside the world
+## rect [param g_rect], over a 64 m terrain centred on the origin (texel centres on the world grid).
+static func control_splat(size: int, boundary: float, g_rect := Rect2()) -> ImageTexture:
+	var img := Image.create(size, size, false, Image.FORMAT_RGBA8)
+	for j in size:
+		for i in size:
+			var wx := -32.0 + (i + 0.5) / size * 64.0
+			var wz := -32.0 + (j + 0.5) / size * 64.0
+			img.set_pixel(i, j, Color(1.0 if wx < boundary else 0.0, 1.0 if g_rect.has_point(Vector2(wx, wz)) else 0.0, 0.0, 1.0))
+	return ImageTexture.create_from_image(img)
+
+
+## The same boundary painted per vertex (one texel per vertex, so it goes through the chunks' vertex
+## colours, not a control map): the boundary can land only at a vertex-quad midpoint.
+static func vertex_splat(nx: int, boundary: float) -> ImageTexture:
+	var img := Image.create(nx, nx, false, Image.FORMAT_RGBA8)
+	for j in nx:
+		for i in nx:
+			img.set_pixel(i, j, Color(1.0 if -32.0 + i * 0.5 < boundary else 0.0, 0.0, 0.0, 1.0))
+	return ImageTexture.create_from_image(img)
+
+
+## An orthographic camera straight down over world [param centre] with pixels of [param pixel_m]
+## (image right = +X, image down = +Z), added to the current scene.
+func top_camera(scene: Node3D, centre: Vector2, pixel_m: float) -> Camera3D:
+	var cam := Camera3D.new()
+	cam.projection = Camera3D.PROJECTION_ORTHOGONAL
+	cam.keep_aspect = Camera3D.KEEP_HEIGHT
+	cam.size = SIZE.y * pixel_m
+	cam.near = 0.1
+	cam.far = 80.0
+	scene.add_child(cam)
+	cam.global_transform = Transform3D(Basis(Vector3(1, 0, 0), Vector3(0, 0, -1), Vector3(0, 1, 0)), Vector3(centre.x, 40.0, centre.y))
+	cam.current = true
+	return cam
+
+
+## The world x where the rock->grass boundary (greenness = green - max(red, blue)) crosses the
+## midpoint of its range along image row [param py], scanning world x in [param x0]..[param x1];
+## NAN if the row shows no clear boundary. Grass reads high greenness, rock about zero.
+func boundary_x(img: Image, py: int, centre: Vector2, pixel_m: float, x0: float, x1: float) -> float:
+	var samples := []
+	var lo := INF
+	var hi := -INF
+	for px in SIZE.x:
+		var wx := centre.x + (px + 0.5 - SIZE.x * 0.5) * pixel_m
+		if wx < x0 or wx > x1:
+			continue
+		var c := img.get_pixel(px, py)
+		var g := c.g - maxf(c.r, c.b)
+		samples.append([wx, g])
+		lo = minf(lo, g)
+		hi = maxf(hi, g)
+	if hi - lo < 0.05 or samples.size() < 4:
+		return NAN
+	var mid := (lo + hi) * 0.5
+	for i in range(1, samples.size()):
+		var g0 := float(samples[i - 1][1])
+		var g1 := float(samples[i][1])
+		if g0 < mid and g1 >= mid:
+			var t := (mid - g0) / (g1 - g0)
+			return lerpf(float(samples[i - 1][0]), float(samples[i][0]), t)
+	return NAN
+
+
+## The per-texel control map (Stage 2): a splat finer than the vertex grid selects and blends the
+## layers per fragment through GADS_CUSTOM_LAYER_MASKS, so a layer boundary lands exactly where the
+## splat says (not pulled to a vertex-quad midpoint like the per-vertex vertex colours), a painted
+## control texel shows the right layer, and the near-camera detail field agrees with the chunks at
+## the boundary because it samples the same control map.
+func test_control_map() -> void:
+	var grass := flat_layer(Color(0.15, 0.6, 0.15))
+	var rock := flat_layer(Color(0.5, 0.5, 0.5))
+	var snow := flat_layer(Color(1.0, 1.0, 1.0))
+	var bound := 0.4 # between vertices at x = 0 and x = 0.5, nearer 0.5 (its quad midpoint is 0.25)
+	# --- Per-texel beats per-vertex: a 512-texel splat (control map) vs a per-vertex one. ---
+	var s := h.new_lit_scene(Color(1, 1, 1))
+	h.add_sun(90.0, 0.0, false)
+	var ctrl := make_terrain({"layers": [grass, rock, snow] as Array[ShaderMaterial], "height_scale": 1.0})
+	ctrl.splatmap = control_splat(512, bound, Rect2(3.0, -1.0, 1.0, 2.0)) # plus a snow patch at x 3..4
+	s.add_child(ctrl)
+	top_camera(s, Vector2(0, 0), 0.02)
+	await h.frames(5)
+	var mat := ctrl.get_material() as ShaderMaterial
+	check(mat.get_shader_parameter("control_map") is Texture2D and (mat.get_shader_parameter("control_rect") as Vector4).z > 0.0,
+		"a splat finer than the vertex grid binds a control map on the chunk material")
+	var img := await h.capture()
+	var cy := SIZE.y / 2
+	var ctrl_b := boundary_x(img, cy, Vector2(0, 0), 0.02, -1.0, 1.0)
+	print("  control-map boundary at x = %.3f m (authored %.2f m)" % [ctrl_b, bound])
+	check(not is_nan(ctrl_b) and absf(ctrl_b - bound) < 0.08, "the control map puts the boundary where the splat says (sub-vertex)")
+	# A control texel shows the layer it selects: the snow patch (x 3..4) reads white, grass beside it.
+	var snow_px := int((3.5 - 0.0) / 0.02 + SIZE.x * 0.5)
+	var grass_px := int((2.0 - 0.0) / 0.02 + SIZE.x * 0.5)
+	var snow_c := img.get_pixel(snow_px, cy)
+	var grass_c := img.get_pixel(grass_px, cy)
+	print("  snow patch %s, grass beside it %s" % [snow_c, grass_c])
+	check(snow_c.r > 0.8 and snow_c.b > 0.8 and grass_c.g - grass_c.r > 0.15, "a painted control texel shows the right layer (a snow patch on grass)")
+	ctrl.queue_free()
+	await process_frame
+	# The same boundary per vertex: it collapses onto the quad midpoint (x = 0.25), not 0.4.
+	var vtx := make_terrain({"layers": [grass, rock, snow] as Array[ShaderMaterial], "height_scale": 1.0})
+	vtx.splatmap = vertex_splat(129, bound)
+	s.add_child(vtx)
+	top_camera(s, Vector2(0, 0), 0.02)
+	await h.frames(5)
+	var vmat := vtx.get_material() as ShaderMaterial
+	check((vmat.get_shader_parameter("control_rect") as Vector4).z <= 0.0, "a per-vertex splat binds no control map (the vertex colours carry it)")
+	var vimg := await h.capture()
+	var vtx_b := boundary_x(vimg, cy, Vector2(0, 0), 0.02, -1.0, 1.0)
+	print("  per-vertex boundary at x = %.3f m (it cannot land between the vertices at 0.0 and 0.5)" % vtx_b)
+	check(not is_nan(vtx_b) and absf(vtx_b - bound) > 0.08 and absf(vtx_b - ctrl_b) > 0.08,
+		"per texel beats per vertex: control lands at %.2f m (authored %.2f), the per-vertex splat at %.2f m" % [ctrl_b, bound, vtx_b])
+	vtx.queue_free()
+	await process_frame
+	# --- Field and chunk agree: the detail field samples the same control map as the chunks. ---
+	var s2 := h.new_lit_scene(Color(1, 1, 1))
+	h.add_sun(90.0, 0.0, false)
+	var ft := make_terrain({"layers": [grass, rock, snow] as Array[ShaderMaterial], "height_scale": 1.0, "detail_field": true})
+	ft.splatmap = control_splat(512, bound)
+	s2.add_child(ft)
+	top_camera(s2, Vector2(0, 0), 0.02)
+	await h.frames(8)
+	var field := ft.get_detail_field()
+	var fmat := field.get_material() if field != null else null
+	check(field != null and field.visible and fmat != null and fmat.get_shader_parameter("control_map") is Texture2D,
+		"the detail field is bound the same control map")
+	var with_field := await h.capture()
+	var field_b := boundary_x(with_field, cy, Vector2(0, 0), 0.02, -1.0, 1.0)
+	field.visible = false # the chunks show in its place
+	await h.frames(3)
+	var without := await h.capture()
+	var chunk_b := boundary_x(without, cy, Vector2(0, 0), 0.02, -1.0, 1.0)
+	print("  boundary at the camera: field %.3f m, chunk %.3f m" % [field_b, chunk_b])
+	check(not is_nan(field_b) and not is_nan(chunk_b) and absf(field_b - chunk_b) < 0.06 and absf(field_b - bound) < 0.08,
+		"the field places the layer boundary where the chunks do (no seam)")
+	ft.queue_free()
+	h.clear_scene()
 	await process_frame
 
 

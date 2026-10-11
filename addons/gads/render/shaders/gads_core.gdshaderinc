@@ -341,6 +341,44 @@ float gads_layer_mask(int i, vec4 color, float up) {
 	return gads_mask_channel(color, layer_mask_channel[i]) * layer_amount[i] * gads_slope_band(layer_slope[i], up);
 }
 
+// Optional per-texel control map (Stage 2 of the terrain-parity plan): the seam the
+// GADS_CUSTOM_LAYER_MASKS hook was reserved for. An RGB weight texture sampled by world XZ, R/G/B =
+// the three extra layers' masks (0..1), so layer boundaries are crisp per fragment instead of
+// limited to the per-vertex vertex colours. control_rect = (origin.x, origin.z, 1/size.x, 1/size.z)
+// in world metres (origin = the map's min corner); .z <= 0 means no map is bound, so the incoming
+// vertex-colour + slope/height-rule masks stand unchanged (backward compatible) -- the whole thing
+// is a runtime branch, not a shader variant, so the variant table and the sampler budget (one extra
+// unit, well within WebGL's 16) are untouched. Where a map is bound and the fragment lies inside it,
+// the map is authoritative for the per-texel layer selection, but each layer still rides its own
+// amount and slope band (gads_layer_mask's modifiers), so a layer can be limited to slopes or
+// switched off (an unused layer has amount 0, so the control map cannot turn it on). filter_linear
+// keeps the boundary one texel wide; the map carries no mips, so textureLod(..., 0.0) is safe in the
+// in-bounds branch. The near-camera GADSDisplacementField3D samples the same map the same way
+// (gads_field.gdshaderinc), so the field and the chunks agree at a boundary. A custom shader may
+// still provide its own gads_custom_layer_masks by defining GADS_CUSTOM_LAYER_MASKS before this file.
+#ifndef GADS_CUSTOM_LAYER_MASKS
+#define GADS_CUSTOM_LAYER_MASKS
+uniform sampler2D control_map : filter_linear, repeat_disable;
+uniform vec4 control_rect = vec4(0.0);
+
+vec3 gads_custom_layer_masks(vec3 masks, vec3 world_pos, vec3 world_normal) {
+	if (control_rect.z <= 0.0) {
+		return masks; // no control map: the vertex-colour + slope/height-rule masks stand
+	}
+	vec2 uv = (world_pos.xz - control_rect.xy) * control_rect.zw;
+	if (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) {
+		return masks; // outside the map: keep the incoming masks (rules continue past its edge)
+	}
+	vec3 c = textureLod(control_map, uv, 0.0).rgb;
+	float up = world_normal.y;
+	vec3 m;
+	for (int i = 0; i < GADS_LAYERED_LAYERS; i++) {
+		m[i] = c[i] * layer_amount[i] * gads_slope_band(layer_slope[i], up);
+	}
+	return m;
+}
+#endif
+
 // Blend weights t[i] of the extra layers at uv, and the blended relief (m, scale 1): each active
 // layer (mask arg[i + 1] > 0) lies over the result so far by its height-aware weight, the higher
 // relief winning in between (gads_height_blend) -- the same sequential blend layers 1 and 2 did

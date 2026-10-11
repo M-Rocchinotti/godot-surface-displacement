@@ -106,6 +106,11 @@ var _mesh_dirty := true
 ## so re-applying unchanged layers would needlessly re-upload them and bump the parameters version.
 var _layer_arrays := {}
 var _params_dirty := true
+## Per-texel control map bound by GADSTerrain3D (see [method set_control_map]); null = the field
+## keeps the ground bake's layer codes.
+var _control_map: Texture2D
+var _control_rect := Vector4.ZERO
+var _control_dirty := false
 var _baking := false
 var _no_ground := false # a runtime bake of existing ground meshes failed
 var _ground_texture: ImageTexture
@@ -194,6 +199,22 @@ func is_baking() -> bool:
 ## layers] is assigned; call it after changing a layer material's parameters).
 func sync_layers() -> void:
 	_layers_dirty = true
+
+
+## Binds a per-texel control map so the field selects and blends its layers per fragment, base-first,
+## exactly as the layered chunk material does, so the near-camera relief shades like the ground right
+## across a layer boundary (no visible seam). [param map]: an RGB weight texture, R/G/B = the three
+## extra layers' (field layers 1, 2, 3) masks, sampled by world XZ. [param rect]: (origin.x,
+## origin.z, 1/size.x, 1/size.z) in world metres (origin = the map's min corner). A null map (or
+## rect.z <= 0) clears it and the field falls back to its ground bake's layer codes. GADSTerrain3D
+## binds the same texture and rect here and on its chunks' material.
+func set_control_map(map: Texture2D, rect: Vector4) -> void:
+	var new_rect := rect if map != null else Vector4.ZERO
+	if map == _control_map and new_rect == _control_rect:
+		return
+	_control_map = map
+	_control_rect = new_rect
+	_control_dirty = true
 
 
 ## Quality variant of the field shader (flat, POM, POM with self-shadow), as the surfaces use.
@@ -459,6 +480,10 @@ func _process(_delta: float) -> void:
 		_ground_dirty = false
 		_apply_ground()
 		_params_dirty = true
+	if _control_dirty:
+		_control_dirty = false
+		_set_param("control_map", _control_map)
+		_set_param("control_rect", _control_rect)
 	if Engine.is_editor_hint() and Engine.get_process_frames() % 30 == 0:
 		# Parameters may have been edited on the layer materials.
 		_apply_layers()
