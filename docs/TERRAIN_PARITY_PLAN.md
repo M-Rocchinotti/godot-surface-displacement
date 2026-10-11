@@ -149,3 +149,17 @@ Not code: **maturity** — shipped projects, community, longevity.
     speed optimization); and sculpting/painting a sparse streaming terrain in place (editing a 16k
     world's loaded region). These are optimizations/extensions, not required for the streaming a
     large world needs, which Stages 3–4 now provide.
+- **Stage 5: heightmap region import is done.** The single-file loader (`GADSHeightImport`: 16-bit
+  RAW/r16 with endianness, 16-bit PNG, EXR and the rest through the engine, with remap and
+  displacement-aware mipmaps) now bridges to the region system: `import_as_regions(height_path,
+  out_dir, params)` loads a large heightmap (World Machine / Unreal / Unity / HTerrain), fits it to
+  the terrain's vertex grid off-tree (`GADSTerrain3D.build_region_store`, the data-only subset of
+  rebuild — no chunks, collision or field, so the whole world's geometry is never built or held) and
+  writes one `region_<x>_<y>.res` per region (`save_regions`), which a streaming terrain then loads
+  sparsely (Stage 4a). `import_tiles_as_regions` + `assemble_tiles` do the same from a grid of tile
+  files (`<name>_<col>_<row>.<ext>`, with an `overlap` option). The per-tool sizing/endianness/scale
+  conventions are documented in the code and the README. A region set built from an off-grid source
+  reads back through the grid exactly as the terrain would sample that source directly (a pre-tiled
+  set imports byte-identically to the equivalent whole map). New terrain tests
+  (`imports_heightmaps_as_regions`) import a synthetic `.r16` and `.exr` and a 2x2 tiled set and check
+  the heights match the source within 16-bit precision and that tiled == whole. Full suite 15/15.

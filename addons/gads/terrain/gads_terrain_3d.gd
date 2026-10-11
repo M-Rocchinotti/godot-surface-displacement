@@ -1197,6 +1197,73 @@ func save_regions(dir := data_directory) -> Error:
 	return first_error
 
 
+# --- Off-tree region import (Stage 5) -----------------------------------------------------------
+# A whole heightmap (up to ~16k, from World Machine / Unreal / Unity / HTerrain) is imported into a
+# region set by GADSHeightImport.import_as_regions, which configures a GADSTerrain3D off-tree (.new(),
+# never added to the scene) and calls save_regions. rebuild() needs the scene tree and would build
+# the whole world's chunks, collision and detail field -- exactly what the region system exists to
+# avoid for a 16k world -- so build_region_store() does only the data subset the save needs: resolve
+# the grid, read the assigned maps, fit them to the vertex grid, and partition them into the store.
+# It reuses the tested splitter (_region_sync) and persistence (save_regions); no new splitting code.
+
+## Builds the region store (the Stage 3a split) from the maps currently assigned -- [member heightmap],
+## [member splatmap] and [member holes] -- fitted to the vertex grid (one texel per vertex), WITHOUT
+## entering the scene tree or building any chunks, collision or detail field. It is the data-only
+## subset of [method rebuild] an off-tree editor import needs: create the terrain with [code]new()[/code],
+## set [member size], [member vertex_spacing], [member chunk_quads], [member region_size] and
+## [member height_scale] and the maps, call this, then [method save_regions] writes the per-region
+## files -- so importing a large heightmap into a region set never builds (or holds) the whole world's
+## geometry, only its maps. Fitting to the grid (the same corner-aligned bilinear [method get_height]
+## samples the heightmap with) makes the files one texel per vertex, which is what a streaming
+## terrain's sparse residency (Stage 4a) requires, whatever resolution the source heightmap had.
+## [method GADSHeightImport.import_as_regions] drives it; it is additional to [method rebuild] and
+## changes none of the existing paths.
+func build_region_store() -> void:
+	_setup_grid()
+	_src = _fit_to_grid(_float_image(heightmap), 1)
+	_splat = _fit_to_grid(_rgba_image(splatmap), 4)
+	_src_texture = heightmap
+	_splat_texture = splatmap
+	_build_holes() # already fits the hole map to the vertex grid (one flag per vertex)
+	_region_sync()
+
+
+## Map [param dict] ([method _float_image] / [method _rgba_image]'s {"width", "height", "data"}, with
+## [param ch] values a texel) resampled to the vertex grid ([member _nx] x [member _nz]) with the SAME
+## corner-aligned bilinear [method _sample_source] uses, returned in the same shape. So a region set
+## built from an off-grid heightmap (a power-of-two World Machine export, say) reads back through the
+## grid exactly as the terrain would sample that heightmap directly -- the imported terrain equals a
+## whole-texture terrain with the same source and geometry. Returns the dict unchanged (no copy) when
+## the map is already one texel per vertex, so an aligned import (the usual [code]n * chunk + 1[/code]
+## heightmap) is byte-identical to its source. [param dict] empty (no such map) returns empty.
+func _fit_to_grid(dict: Dictionary, ch: int) -> Dictionary:
+	if dict.is_empty():
+		return {}
+	var w: int = dict["width"]
+	var h: int = dict["height"]
+	if w == _nx and h == _nz:
+		return dict # already one texel per vertex: the aligned fast path, byte-identical
+	var src: PackedFloat32Array = dict["data"]
+	var out := PackedFloat32Array()
+	out.resize(_nx * _nz * ch)
+	for gz in _nz:
+		var py := float(gz) / (_nz - 1) * (h - 1) if _nz > 1 else 0.0
+		var y0 := mini(floori(py), h - 2) if h > 1 else 0
+		var fy := py - y0 if h > 1 else 0.0
+		var y1 := mini(y0 + 1, h - 1)
+		for gx in _nx:
+			var px := float(gx) / (_nx - 1) * (w - 1) if _nx > 1 else 0.0
+			var x0 := mini(floori(px), w - 2) if w > 1 else 0
+			var fx := px - x0 if w > 1 else 0.0
+			var x1 := mini(x0 + 1, w - 1)
+			var o := (gz * _nx + gx) * ch
+			for c in ch:
+				var top := lerpf(src[(y0 * w + x0) * ch + c], src[(y0 * w + x1) * ch + c], fx)
+				var bot := lerpf(src[(y1 * w + x0) * ch + c], src[(y1 * w + x1) * ch + c], fx)
+				out[o + c] = lerpf(top, bot, fy)
+	return {"width": _nx, "height": _nz, "data": out}
+
+
 ## Reconstructs the terrain's maps from the [code]region_*.res[/code] files under [param dir]
 ## (written by [method save_regions]): restores the grid from their header, reassembles the whole
 ## height, splat and hole maps from the per-region tiles (through [method _region_coalesce]), binds

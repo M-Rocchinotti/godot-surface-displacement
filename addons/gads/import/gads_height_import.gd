@@ -7,10 +7,15 @@ extends RefCounted
 ## at their 65 536 steps (and every other format through the engine). [method build_mipmaps]
 ## makes the mip chain by averaging, or by keeping each block's highest or lowest value, so
 ## distant parallax keeps (Max) the peaks an average would flatten. The GADS Height Map importer
-## ("Import As" in the Import dock) runs these on import.
+## ("Import As" in the Import dock) runs these on import. [method import_as_regions] bridges the
+## loader to the terrain's region system: a large heightmap (World Machine / Unreal / Unity /
+## HTerrain) becomes a set of per-region files a streaming [GADSTerrain3D] loads sparsely.
 ## [codeblock]
 ## var height := GADSHeightImport.load_height("res://terrain/world.r16")  # FORMAT_RF, 0..1
 ## var tex := GADSHeightImport.make_texture(height, {"mip_filter": GADSHeightImport.MipFilter.MAX})
+## # A 16k heightmap -> per-region files a streaming terrain loads (Stage 4a):
+## GADSHeightImport.import_as_regions("res://terrain/world_16k.r16", "res://terrain/regions",
+##     {"size": Vector2(4096, 4096), "height_scale": 600.0, "region_size": 256.0})
 ## [/codeblock]
 
 enum Channel { RED, GREEN, BLUE, ALPHA, LUMINANCE }
@@ -285,6 +290,185 @@ static func import_texture(path: String, options := {}) -> ImageTexture:
 		return null
 	height = remap_height(height, int(options.get("remap", Remap.NONE)), bool(options.get("invert", false)))
 	return make_texture(height, options)
+
+
+# --- Region import (Stage 5) --------------------------------------------------------------------
+# Bridges the single-file loader above to the terrain's region system: a large heightmap (up to ~16k,
+# from World Machine / Unreal / Unity / HTerrain) becomes a set of per-region files that a streaming
+# GADSTerrain3D loads sparsely (Stage 4a), instead of one texture the whole world must hold. These
+# are a thin orchestration layer -- load_height reads the heightmap, GADSTerrain3D.build_region_store
+# splits it into the region grid and save_regions writes the files; no new parsing or splitting here.
+#
+# PER-TOOL CONVENTIONS (which options to pass). The terrain's vertex grid is "size / vertex_spacing"
+# quads, rounded to a whole number of "chunk_quads", plus one (n * chunk_quads + 1 vertices). The
+# region files are one texel per vertex, so the import fits the source heightmap to that grid (the
+# same bilinear get_height samples it with); a heightmap already at the grid resolution is byte-exact.
+#   - Unreal Engine: 16-bit RAW, little-endian, grey, sized (n * chunk_component) + 1 (e.g. 505, 1009,
+#     2017, 4033, 8129). Pass the file (".raw"/".r16" use decode_raw16); the default scale is Z 100
+#     (the landscape's Scale maps 0..65535 to -256..256 m by default), so set "height_scale" to your
+#     landscape's metres and "remap" NONE. A square map auto-detects its width; otherwise set "raw_width".
+#   - Unity: terrain exports 16-bit RAW, usually little-endian (set "raw_big_endian" if a Mac export),
+#     sized 2^k + 1 (513, 1025, 2049, 4097). "height_scale" = the terrain's Y size; "remap" NONE.
+#   - World Machine: r16 (16-bit RAW) or EXR, often a power of two (1024, 4096) rather than n + 1 --
+#     then the fit resamples it onto the grid. r16 is little-endian; EXR loads through the engine at
+#     full float. Use its "Height Output"/"Terrain Scalar" for "height_scale". Tiled builds: see
+#     [method import_tiles_as_regions].
+#   - HTerrain (Godot plugin): exports a 16-bit RAW ("terrain export" / RAW) or an EXR, sized 2^k + 1.
+#     EXR keeps full precision; r16 is little-endian. "height_scale" = the HTerrain height range.
+
+## Imports the heightmap at [param height_path] into a per-region file set under [param out_dir] that
+## a streaming [GADSTerrain3D] loads (Stage 5). Loads it with [method load_height] (so [param params]
+## may carry "channel", "raw_width", "raw_big_endian" and "remap"/"invert" exactly as the single-file
+## importer takes them), configures an off-tree terrain with the geometry from [param params]
+## ("size" in metres -- default the heightmap sized at "vertex_spacing" per texel -- "vertex_spacing",
+## "chunk_quads", "region_size", "height_scale", "height_offset") and that map, then calls
+## [method GADSTerrain3D.save_regions]. "splat" and "holes" ([Image], [Texture2D] or a path) add those
+## maps. Returns [constant OK] or an error. Editor use: holding the whole heightmap in memory for this
+## one-time import is fine; it is the runtime residency the region files keep sparse.
+static func import_as_regions(height_path: String, out_dir: String, params := {}) -> Error:
+	var height := load_height(height_path, params)
+	if height == null:
+		return ERR_FILE_CANT_READ
+	height = remap_height(height, int(params.get("remap", Remap.NONE)), bool(params.get("invert", false)))
+	return _save_image_as_regions(height, out_dir, params)
+
+
+## Imports a heightmap already split into one file per tile (e.g. a World Machine tiled build) into a
+## per-region file set under [param out_dir]. Reassembles the tiles into the whole heightmap with
+## [method assemble_tiles], then does exactly what [method import_as_regions] does (so the same
+## [param params] apply, plus the tile options [method assemble_tiles] reads). A pre-tiled set imports
+## into the same region set as the equivalent whole map. Returns [constant OK] or an error.
+static func import_tiles_as_regions(tiles_dir: String, out_dir: String, params := {}) -> Error:
+	var whole := assemble_tiles(tiles_dir, params)
+	if whole == null:
+		return ERR_FILE_NOT_FOUND
+	whole = remap_height(whole, int(params.get("remap", Remap.NONE)), bool(params.get("invert", false)))
+	return _save_image_as_regions(whole, out_dir, params)
+
+
+## Reassembles a grid of heightmap tiles under [param tiles_dir] into one FORMAT_RF [Image], or null
+## with an error. A tile's file name ends in its grid position: [code]<name>_<col>_<row>.<ext>[/code]
+## (the common terrain-tool naming); the two trailing integers are column then row, or row then column
+## with "tile_row_first" true. [param params] options: "tile_extension" (the tiles' extension, default
+## "r16"), "overlap" (texels shared on the border between neighbours, default 0 -- set 1 for tools that
+## repeat the edge row/column), and the [method load_height] options for the tiles ("raw_width",
+## "raw_big_endian", "channel"). Every tile must be the same size and the whole grid must be present.
+static func assemble_tiles(tiles_dir: String, params := {}) -> Image:
+	var ext := str(params.get("tile_extension", "r16")).to_lower()
+	var overlap := int(params.get("overlap", 0))
+	var row_first := bool(params.get("tile_row_first", false))
+	var da := DirAccess.open(tiles_dir)
+	if da == null:
+		push_error("GADSHeightImport: cannot open tiles directory %s" % tiles_dir)
+		return null
+	var tiles := {} # Vector2i(col, row) -> path
+	for f in da.get_files():
+		if f.get_extension().to_lower() != ext:
+			continue
+		var coord := _tile_coord(f, row_first)
+		if coord.x >= 0:
+			tiles[tiles_dir.path_join(f)] = coord
+	if tiles.is_empty():
+		push_error("GADSHeightImport: no tiles named <name>_<col>_<row>.%s under %s" % [ext, tiles_dir])
+		return null
+	var cols := 0
+	var rows := 0
+	for coord: Vector2i in tiles.values():
+		cols = maxi(cols, coord.x + 1)
+		rows = maxi(rows, coord.y + 1)
+	# Load each tile at full precision (through load_height, so RAW options apply) and check it is
+	# present and the same size as the rest; tiles are assumed equal-sized and abutting.
+	var images := {} # Vector2i -> Image
+	var tw := 0
+	var th := 0
+	for path: String in tiles:
+		var coord: Vector2i = tiles[path]
+		var img := load_height(path, params)
+		if img == null:
+			return null
+		if tw == 0:
+			tw = img.get_width()
+			th = img.get_height()
+		elif img.get_width() != tw or img.get_height() != th:
+			push_error("GADSHeightImport: tile %s is %d x %d, not the grid's %d x %d" % [path, img.get_width(), img.get_height(), tw, th])
+			return null
+		images[coord] = img
+	for ry in rows:
+		for rx in cols:
+			if not images.has(Vector2i(rx, ry)):
+				push_error("GADSHeightImport: the %d x %d tile grid is missing (%d, %d)" % [cols, rows, rx, ry])
+				return null
+	var step_x := tw - overlap
+	var step_y := th - overlap
+	var whole_w := step_x * (cols - 1) + tw
+	var whole_h := step_y * (rows - 1) + th
+	var out := PackedFloat32Array()
+	out.resize(whole_w * whole_h)
+	for coord: Vector2i in images:
+		var data := (images[coord] as Image).get_data().to_float32_array()
+		var ox := coord.x * step_x
+		var oy := coord.y * step_y
+		for y in th:
+			var dst := (oy + y) * whole_w + ox
+			var srow := y * tw
+			for x in tw:
+				out[dst + x] = data[srow + x]
+	return Image.create_from_data(whole_w, whole_h, false, Image.FORMAT_RF, out.to_byte_array())
+
+
+## The (col, row) a tile file name ends in ([code]<name>_<col>_<row>.<ext>[/code]: the two trailing
+## integers), or (-1, -1) when it has none. [param row_first] reads them as row then column instead.
+static func _tile_coord(file: String, row_first := false) -> Vector2i:
+	var parts := file.get_basename().split("_")
+	if parts.size() < 2:
+		return Vector2i(-1, -1)
+	var a := parts[parts.size() - 2]
+	var b := parts[parts.size() - 1]
+	if not a.is_valid_int() or not b.is_valid_int():
+		return Vector2i(-1, -1)
+	return Vector2i(int(b), int(a)) if row_first else Vector2i(int(a), int(b))
+
+
+## An optional splat / hole map from [param value] ([Image], [Texture2D] or a path), or null.
+static func _optional_map_image(value: Variant) -> Image:
+	if value is Image:
+		return value
+	if value is Texture2D:
+		return (value as Texture2D).get_image()
+	if value is String and not (value as String).is_empty():
+		var img := Image.load_from_file(ProjectSettings.globalize_path(value))
+		if img == null or img.is_empty():
+			push_error("GADSHeightImport: cannot load map %s" % value)
+			return null
+		return img
+	return null
+
+
+## Configures an off-tree [GADSTerrain3D] with [param params]' geometry and [param height] (plus an
+## optional "splat" / "holes" map) and writes its region files to [param out_dir]. Shared by
+## [method import_as_regions] and [method import_tiles_as_regions]. The terrain is never added to the
+## scene: [method GADSTerrain3D.build_region_store] builds only the maps the save needs, no geometry.
+static func _save_image_as_regions(height: Image, out_dir: String, params := {}) -> Error:
+	var vertex_spacing := float(params.get("vertex_spacing", 1.0))
+	var default_size := Vector2(maxi(height.get_width() - 1, 1), maxi(height.get_height() - 1, 1)) * vertex_spacing
+	var t := GADSTerrain3D.new()
+	t.chunk_quads = int(params.get("chunk_quads", 64))
+	t.vertex_spacing = vertex_spacing
+	t.size = params.get("size", default_size)
+	t.region_size = float(params.get("region_size", 1024.0))
+	t.height_scale = float(params.get("height_scale", 40.0))
+	t.height_offset = float(params.get("height_offset", 0.0))
+	t.heightmap = ImageTexture.create_from_image(height)
+	var splat := _optional_map_image(params.get("splat"))
+	if splat != null:
+		t.splatmap = ImageTexture.create_from_image(splat)
+	var holes := _optional_map_image(params.get("holes"))
+	if holes != null:
+		t.holes = ImageTexture.create_from_image(holes)
+	t.build_region_store()
+	var err := t.save_regions(out_dir)
+	t.free() # off-tree, built no geometry: frees its maps at once, nothing to wait on
+	return err
 
 
 static func _u32(b: PackedByteArray, at: int) -> int:

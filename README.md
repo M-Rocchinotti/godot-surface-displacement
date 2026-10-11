@@ -1063,6 +1063,35 @@ and `big_endian`). The result is an `ImageTexture` that GADS materials and `GADS
 take like any texture. From scripts, `GADSHeightImport.load_height(path)` reads a height map the
 same way (FORMAT_RF) and `make_texture(image, {"mip_filter": ...})` builds the texture.
 
+#### Region import (large heightmaps → a streaming terrain)
+
+A terrain of thousands of metres cannot hold one giant heightmap texture. `GADSHeightImport.import_as_regions(height_path, out_dir, params)` turns a large heightmap (up to ~16k, from World Machine, Unreal, Unity or HTerrain) into a set of per-region files (`region_<x>_<y>.res`) that a streaming `GADSTerrain3D` loads sparsely — only the regions near the camera stay in memory (the Streaming section above; `load_regions()`). It is a thin wrapper: `load_height` reads the heightmap, an off-tree terrain splits it into the region grid (`build_region_store()`, which never builds the world's geometry — only its maps), and `save_regions()` writes the files. Holding the whole heightmap in memory for this one-time editor import is fine; it is the runtime residency the files keep sparse.
+
+```gdscript
+# A 16k World Machine r16 -> 256 m regions under res://terrain/regions/
+GADSHeightImport.import_as_regions("res://terrain/world_16k.r16", "res://terrain/regions",
+    {"size": Vector2(4096, 4096), "height_scale": 600.0, "region_size": 256.0})
+
+# Later, a streaming terrain loads them sparsely:
+terrain.stream_radius = 512.0
+terrain.stream_camera = terrain.get_path_to(camera)
+terrain.height_scale = 600.0          # region files store normalized 0..1 heights; set the scale here
+terrain.load_regions("res://terrain/regions")
+```
+
+`params`: the terrain geometry — `size` (m; default the heightmap sized at `vertex_spacing` per texel), `vertex_spacing`, `chunk_quads`, `region_size`, `height_scale`, `height_offset` — plus the `load_height` options (`channel`, `raw_width`, `raw_big_endian`, `remap`, `invert`) and optional `splat` / `holes` maps (an `Image`, a `Texture2D` or a path). The files hold **normalized** 0..1 heights; `height_scale` and `height_offset` are terrain settings, not stored, so set them on the loading terrain (as above). The terrain's vertex grid is `n * chunk_quads + 1` wide; the import fits the source heightmap to it (the same bilinear `get_height()` uses), so a heightmap already at the grid resolution is byte-exact and an off-grid one (a power-of-two export) is resampled onto the grid.
+
+Per-tool conventions (which options to pass):
+
+| Tool | Format | Options |
+|---|---|---|
+| **Unreal Engine** | 16-bit RAW, little-endian, grey, sized `(n·component)+1` (505, 1009, 2017, 4033, 8129) | default endianness; Unreal's default Z scale maps 0..65535 to −256..256 m, so set `height_scale` to your landscape's metre range, `remap` None |
+| **Unity** | 16-bit RAW, usually little-endian, `2^k+1` (513, 1025, 2049, 4097) | `raw_big_endian` only for a Mac export; `height_scale` = the terrain's Y size; `remap` None |
+| **World Machine** | r16 (16-bit RAW) or EXR, often a power of two (1024, 4096) | r16 is little-endian (resampled onto the grid when not `n+1`); EXR loads at full float; `height_scale` = the build's height output |
+| **HTerrain** (Godot) | 16-bit RAW or EXR, `2^k+1` | EXR keeps full precision; r16 is little-endian; `height_scale` = the HTerrain height range |
+
+**Pre-tiled sources.** When a tool exports one file per tile (a World Machine tiled build), `import_tiles_as_regions(tiles_dir, out_dir, params)` reassembles them first (and imports into the same region set as the equivalent whole map). Tiles are named `<name>_<col>_<row>.<ext>` (the two trailing integers are column then row, or row then column with `tile_row_first`); extra `params`: `tile_extension` (default `"r16"`) and `overlap` (texels shared on a tile border, default 0 — set 1 for tools that repeat the edge row/column). `GADSHeightImport.assemble_tiles()` does the reassembly on its own if you want the whole `Image`.
+
 ## Offline hero bake (Blender)
 
 For props whose silhouette matters (a wall end, a rock seen against the sky),

@@ -28,6 +28,7 @@ func _run() -> void:
 	await _test("persists_regions_to_files", test_region_persistence)
 	await _test("region_data_streams_by_distance", test_region_residency)
 	await _test("collision_streams_by_distance", test_collision_streaming)
+	await _test("imports_heightmaps_as_regions", test_import_regions)
 	await _test("chunk_lods_and_skirts", test_lods)
 	await _test("layers_by_rules_and_splat_map", test_layers)
 	if DisplayServer.get_name() != "headless":
@@ -673,6 +674,158 @@ func test_collision_streaming() -> void:
 	src.queue_free()
 	await process_frame
 	_clear_dir(dir)
+
+
+## A synthetic heightmap value 0..1 at texel (x, y) of an n x n map: smooth relief plus a gentle ramp,
+## so every texel differs and the import's grid-fit resampling is exercised where it runs.
+static func _import_src(x: int, y: int, n: int) -> float:
+	var u := float(x) / (n - 1)
+	var v := float(y) / (n - 1)
+	return clampf(0.25 + 0.2 * sin(u * TAU * 2.0) * cos(v * TAU * 1.5) + 0.2 * u + 0.1 * v, 0.0, 1.0)
+
+
+## Writes a w x h 16-bit unsigned RAW (little-endian, the Windows order load_height reads) whose
+## texel (x, y) is [param fn](x, y) in 0..1, to [param path].
+static func _write_raw16(path: String, w: int, h: int, fn: Callable) -> void:
+	var bytes := PackedByteArray()
+	bytes.resize(w * h * 2)
+	for y in h:
+		for x in w:
+			bytes.encode_u16((y * w + x) * 2, int(roundf(clampf(fn.call(x, y), 0.0, 1.0) * 65535.0)))
+	var f := FileAccess.open(path, FileAccess.WRITE)
+	f.store_buffer(bytes)
+	f.close()
+
+
+## Writes an n x n grayscale float EXR whose texel is [param fn](x, y) in 0..1, to [param path].
+static func _write_exr(path: String, n: int, fn: Callable) -> void:
+	var img := Image.create(n, n, false, Image.FORMAT_RF)
+	for y in n:
+		for x in n:
+			img.set_pixel(x, y, Color(clampf(fn.call(x, y), 0.0, 1.0), 0, 0))
+	img.save_exr(ProjectSettings.globalize_path(path), true)
+
+
+## The largest difference (world metres) between [param t]'s surface and the source map [param src]
+## (FORMAT_RF, the terrain's grid resolution) over a sample of interior vertices: the terrain is
+## centred on its node and its grid matches the source, so vertex (gx, gz) world-samples src texel
+## (gx, gz) at height [param offset] + [param scale] * value.
+static func _worst_vs_source(t: GADSTerrain3D, src: Image, scale: float, offset: float) -> float:
+	var n := src.get_width()
+	var spacing := t.get_vertex_spacing()
+	var origin := -Vector2(n - 1, n - 1) * spacing * 0.5
+	var worst := 0.0
+	for gz in range(0, n - 1, 3):
+		for gx in range(0, n - 1, 3):
+			var p := Vector3(origin.x + gx * spacing, 0.0, origin.y + gz * spacing)
+			worst = maxf(worst, absf(t.get_height(p) - (offset + scale * src.get_pixel(gx, gz).r)))
+	return worst
+
+
+## Stage 5 region import: GADSHeightImport.import_as_regions bridges the single-file loader to the
+## region system (load_height -> GADSTerrain3D.build_region_store -> save_regions). (a) A synthetic
+## 16-bit .r16 and a float .exr each import into a 2 x 2 region set; loaded back into a terrain the
+## heights match the source map by world position within 16-bit precision, and the files are one texel
+## per vertex (so a streaming terrain loads them sparsely). (b) A heightmap split into a 2 x 2 grid of
+## tiles imports into the same region set as the equivalent whole map. Temp files are cleaned up.
+func test_import_regions() -> void:
+	var src_dir := "user://gads_import_src"
+	var dir_raw := "user://gads_import_raw_regions"
+	var dir_exr := "user://gads_import_exr_regions"
+	_clear_dir(src_dir)
+	_clear_dir(dir_raw)
+	_clear_dir(dir_exr)
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(src_dir))
+	# --- (a) a 65 x 65 source (grid-aligned: 64 m at 1 m, 32-quad chunks -> 65 vertices) round-trips. ---
+	var n := 65
+	var raw_path := src_dir.path_join("source.r16")
+	var exr_path := src_dir.path_join("source.exr")
+	_write_raw16(raw_path, n, n, func(x, y): return _import_src(x, y, n))
+	_write_exr(exr_path, n, func(x, y): return _import_src(x, y, n))
+	var params := {"size": Vector2(64, 64), "vertex_spacing": 1.0, "chunk_quads": 32,
+		"region_size": 32.0, "height_scale": 50.0}
+	# .r16
+	var err := GADSHeightImport.import_as_regions(raw_path, dir_raw, params)
+	var raw_files := _dir_files(dir_raw, "region_", "res")
+	check(err == OK and raw_files.size() == 4, "import_as_regions wrote a 2 x 2 region set from a .r16 (%d files, err %d)" % [raw_files.size(), err])
+	var one := ResourceLoader.load(dir_raw.path_join(raw_files[0]), "", ResourceLoader.CACHE_MODE_IGNORE) as GADSTerrainRegion
+	check(one != null and one.height_dims == Vector3i(65, 65, 1), "the region files are one texel per vertex (sparse-streamable): %s" % [one.height_dims if one != null else "null"])
+	one = null
+	var raw_src := GADSHeightImport.load_height(raw_path) # what the file decodes to: the source map
+	# Region files store normalized 0..1 heights; height_scale is terrain config (not persisted), so
+	# the loading terrain sets the same scale the import used.
+	var tr := GADSTerrain3D.new()
+	tr.detail_field = false
+	tr.height_scale = 50.0
+	root.add_child(tr)
+	check(tr.load_regions(dir_raw) and tr.get_grid_size() == Vector2i(65, 65) and tr.get_region_grid() == Vector2i(2, 2),
+		"load_regions restored a 65 x 65 grid in 2 x 2 regions (%s, %s)" % [tr.get_grid_size(), tr.get_region_grid()])
+	var worst_raw := _worst_vs_source(tr, raw_src, 50.0, 0.0)
+	print("  .r16 import: largest height error vs the source map %.4f mm" % (worst_raw * 1000.0))
+	check(worst_raw < 50.0 / 65535.0 + 1e-4, "heights match the source .r16 within 16-bit precision")
+	tr.queue_free()
+	# .exr
+	err = GADSHeightImport.import_as_regions(exr_path, dir_exr, params)
+	check(err == OK and _dir_files(dir_exr, "region_", "res").size() == 4, "import_as_regions wrote a 2 x 2 region set from an .exr (err %d)" % err)
+	var exr_src := GADSHeightImport.load_height(exr_path)
+	var te := GADSTerrain3D.new()
+	te.detail_field = false
+	te.height_scale = 50.0
+	root.add_child(te)
+	check(te.load_regions(dir_exr), "load_regions restored the .exr region set")
+	var worst_exr := _worst_vs_source(te, exr_src, 50.0, 0.0)
+	print("  .exr import: largest height error vs the source map %.4f mm" % (worst_exr * 1000.0))
+	check(worst_exr < 50.0 / 65535.0 + 1e-4, "heights match the source .exr within 16-bit precision")
+	te.queue_free()
+	await process_frame
+	_clear_dir(src_dir)
+	_clear_dir(dir_raw)
+	_clear_dir(dir_exr)
+	# --- (b) a pre-tiled set imports into the same region set as the equivalent whole map. ---
+	var m := 128 # off-grid (grid fits to 129): exercises the resample, in both import paths identically
+	var tiles_dir := "user://gads_import_tiles"
+	var whole_path2 := "user://gads_import_whole.r16"
+	var dir_whole := "user://gads_import_whole_regions"
+	var dir_tiled := "user://gads_import_tiled_regions"
+	_clear_dir(tiles_dir)
+	_clear_dir(dir_whole)
+	_clear_dir(dir_tiled)
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(tiles_dir))
+	_write_raw16(whole_path2, m, m, func(x, y): return _import_src(x, y, m))
+	var half := m / 2
+	for row in 2:
+		for col in 2:
+			var ox := col * half
+			var oy := row * half
+			_write_raw16(tiles_dir.path_join("tile_%d_%d.r16" % [col, row]), half, half,
+				func(x, y): return _import_src(ox + x, oy + y, m))
+	var p := {"size": Vector2(128, 128), "vertex_spacing": 1.0, "chunk_quads": 32, "region_size": 64.0, "height_scale": 40.0}
+	check(GADSHeightImport.import_as_regions(whole_path2, dir_whole, p) == OK, "the whole heightmap imports")
+	check(GADSHeightImport.import_tiles_as_regions(tiles_dir, dir_tiled, p) == OK, "the tiled set imports (assembled from 2 x 2 tiles)")
+	check(_dir_files(dir_whole, "region_", "res").size() == _dir_files(dir_tiled, "region_", "res").size(),
+		"the two imports wrote the same number of region files (%d)" % _dir_files(dir_whole, "region_", "res").size())
+	var tw := GADSTerrain3D.new()
+	tw.detail_field = false
+	root.add_child(tw)
+	tw.load_regions(dir_whole)
+	var tt := GADSTerrain3D.new()
+	tt.detail_field = false
+	root.add_child(tt)
+	tt.load_regions(dir_tiled)
+	var a: PackedFloat32Array = tw._region_coalesce("height")
+	var b: PackedFloat32Array = tt._region_coalesce("height")
+	var same := a.size() == b.size() and a.size() == 129 * 129
+	var worst := 0.0
+	for i in mini(a.size(), b.size()):
+		worst = maxf(worst, absf(a[i] - b[i]))
+	check(same and worst == 0.0, "a pre-tiled set imports into the same region set as the whole map (%d texels, worst %f)" % [a.size(), worst])
+	tw.queue_free()
+	tt.queue_free()
+	await process_frame
+	_clear_dir(tiles_dir)
+	_clear_dir(dir_whole)
+	_clear_dir(dir_tiled)
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(whole_path2))
 
 
 func test_lods() -> void:
