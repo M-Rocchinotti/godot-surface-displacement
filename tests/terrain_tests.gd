@@ -24,6 +24,7 @@ func _initialize() -> void:
 func _run() -> void:
 	await process_frame # _initialize runs before the root enters the tree.
 	await _test("heights_follow_the_heightmap", test_heights)
+	await _test("partitions_into_regions", test_region_grid)
 	await _test("chunk_lods_and_skirts", test_lods)
 	await _test("layers_by_rules_and_splat_map", test_layers)
 	if DisplayServer.get_name() != "headless":
@@ -259,6 +260,65 @@ func test_heights() -> void:
 	var n := t.get_normal(Vector3(10 + 0.4 * 32, 0, -3))
 	check(n.is_normalized() and n.y > 0.0, "a normal points up out of the ground")
 	t.queue_free()
+	await process_frame
+
+
+## Stage 3a region grid: the terrain's maps are partitioned into a sparse grid of fixed-size
+## regions addressed by integer Vector2i. A terrain wider than one region splits into the expected
+## grid; the default large region keeps the whole terrain as one region; reading heights by world
+## position is identical tiled or not; an edit in one region changes that region's slice and leaves
+## a far region's untouched; and the coalesced store equals the working view.
+func test_region_grid() -> void:
+	# A 64 m terrain at 0.5 m is 129 x 129 vertices in 4 x 4 chunks of 32 quads (16 m each). A 16 m
+	# region is one chunk, so the maps tile into a 4 x 4 region grid. The default (1024 m) is far
+	# wider than the terrain, so the whole terrain is a single region (the byte-identical path).
+	var t := make_terrain({"region_size": 16.0})
+	root.add_child(t)
+	var whole := make_terrain({"region_size": 1024.0})
+	root.add_child(whole)
+	check(t.get_region_grid() == Vector2i(4, 4) and whole.get_region_grid() == Vector2i(1, 1),
+		"64 m tiles into 4 x 4 regions at 16 m, one region at 1024 m (%s, %s)" % [t.get_region_grid(), whole.get_region_grid()])
+	# Reading by world position is the same whether the maps are tiled into regions or not.
+	var worst := 0.0
+	for z in range(0, 129, 11):
+		for x in range(0, 129, 9):
+			var p := Vector3(-32.0 + x * 0.5, 0.0, -32.0 + z * 0.5)
+			worst = maxf(worst, absf(t.get_height(p) - whole.get_height(p)))
+	print("  largest height difference tiled vs whole %.6f mm" % (worst * 1000.0))
+	check(worst < 1e-5, "heights read the same tiled into regions or not")
+	# The coalesced store equals the working heightmap view and has one float per vertex.
+	t.make_heights_editable()
+	var coalesced: PackedFloat32Array = t._region_coalesce("height")
+	var view: PackedFloat32Array = t._src["data"]
+	var same := coalesced.size() == view.size() and coalesced.size() == 129 * 129
+	for i in range(0, view.size(), 101):
+		same = same and absf(coalesced[i] - view[i]) < 1e-7
+	check(same, "the regions coalesce back to the whole heightmap exactly (%d texels)" % coalesced.size())
+	# An edit in one region changes that region's slice and leaves a far region's untouched.
+	var near := Vector3(-28.0, 0, -28.0) # grid vertex (8, 8): the (0, 0) region
+	var far := Vector3(28.0, 0, 28.0)    # grid vertex (120, 120): the (3, 3) region
+	var rn := t._region_of_vertex(int((near.x + 32.0) / 0.5), int((near.z + 32.0) / 0.5))
+	var rf := t._region_of_vertex(int((far.x + 32.0) / 0.5), int((far.z + 32.0) / 0.5))
+	check(rn == Vector2i(0, 0) and rf == Vector2i(3, 3), "world positions map to their region (%s, %s)" % [rn, rf])
+	var before_near: PackedFloat32Array = (t._region_slice(rn, "height") as PackedFloat32Array).duplicate()
+	var before_far: PackedFloat32Array = (t._region_slice(rf, "height") as PackedFloat32Array).duplicate()
+	t.sculpt(near, 2.0, GADSSculpt.Mode.RAISE, 3.0)
+	var after_near: PackedFloat32Array = t._region_slice(rn, "height")
+	var after_far: PackedFloat32Array = t._region_slice(rf, "height")
+	var near_changed := before_near.size() == after_near.size() and after_near.size() > 0
+	var near_diff := 0.0
+	for i in mini(before_near.size(), after_near.size()):
+		near_diff = maxf(near_diff, absf(before_near[i] - after_near[i]))
+	near_changed = near_changed and near_diff > 1e-4
+	var far_same := before_far.size() == after_far.size()
+	for i in mini(before_far.size(), after_far.size()):
+		far_same = far_same and absf(before_far[i] - after_far[i]) < 1e-9
+	check(near_changed and far_same, "a sculpt in region %s changes its slice, region %s untouched" % [rn, rf])
+	# The edit shows at the sculpted spot in world space and nowhere in the far region.
+	check(t.get_height(near) > whole.get_height(near) + 0.1 and absf(t.get_height(far) - whole.get_height(far)) < 1e-5,
+		"the edit reads back at the sculpt and not in the far region")
+	t.queue_free()
+	whole.queue_free()
 	await process_frame
 
 

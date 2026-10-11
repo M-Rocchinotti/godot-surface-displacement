@@ -153,6 +153,22 @@ const MAX_STREAM_TASKS := 4
 		occluder_quads = value
 		_queue_rebuild()
 
+@export_group("Regions")
+## The side (m) of one region of the sparse region grid the terrain's maps are partitioned into
+## (Stage 3a). Rounded up to a whole number of chunks (so it stays aligned to the chunk grid and
+## is a power-of-two multiple of the chunk size when it starts as one), at least one chunk. The
+## default (1024 m) is far larger than a typical demo terrain, so such a terrain is a single
+## region and the maps are stored and read exactly as before; a terrain wider than this tiles into
+## a [method get_region_grid] grid of regions, the last on each axis partial. The grid is the
+## foundation a 16k world needs: it addresses each region by an integer [Vector2i] coordinate (not
+## assumed to start at the origin) so later stages can load and free regions by distance and save
+## them one file at a time. It changes no geometry, collision or rendering: every region stays
+## resident here.
+@export_range(16.0, 16384.0, 1.0, "or_greater", "suffix:m") var region_size := 1024.0:
+	set(value):
+		region_size = maxf(value, 1.0)
+		_queue_rebuild()
+
 @export_group("Streaming")
 ## Build only the chunks within this distance (m) of the camera, on worker threads, and free those
 ## that fall behind; 0 = the whole terrain at once. For terrains of kilometres: collision comes per
@@ -214,6 +230,20 @@ var _w2 := PackedFloat32Array() # the third layer's
 var _holes := PackedByteArray() # 1 per vertex in a hole (row-major, _nx per row); empty: none
 var _hole_count := 0
 var _holes_texture: Texture2D # the hole map _holes was read from
+# The sparse region store (Stage 3a). The terrain's maps -- the heightmap source (_src), the splat
+# source (_splat), the holes and the per-vertex caches (_heights/_w1/_w2) -- are partitioned into a
+# grid of fixed-size regions keyed by integer coordinate, each region holding its own slice of each
+# map. This is the per-region SOURCE OF TRUTH that Stages 3b (load/free by distance) and 3c (save
+# per region) build on. While every region is resident (all of Stage 3a) the flat arrays above stay
+# as the hot-path view: the whole terrain's map coalesced for the chunk builder, the native mesher,
+# the collision shape and the editing tools, which read and write it exactly as before. _region_sync
+# re-partitions the store from that view after every change, so the two never diverge; in the common
+# single-region case the store simply references the same arrays (no copy, byte-identical).
+var _regions := {} # Vector2i -> { map_name: PackedFloat32Array / PackedByteArray slice }
+var _region_dims := {} # map_name -> {"w", "h", "ch"} of the whole (coalesced) map
+var _region_quads := 0 # a region's side in quads on the finest grid (a whole number of chunks)
+var _region_cols := 1
+var _region_rows := 1
 var _chunks: Array[MeshInstance3D] = []
 var _chunk_nodes := {} # Vector2i -> MeshInstance3D
 var _chunk_data := {} # Vector2i -> its arrays and LODs (kept for repainting)
@@ -309,6 +339,7 @@ func rebuild() -> void:
 	if not is_streaming():
 		_build_heights()
 		_build_weights()
+	_region_sync() # partition the freshly read maps into the region store
 	_material = material if material != null else GADSMaterials.combine_layers(layers.slice(0, MAX_LAYERS))
 	if not is_streaming():
 		var levels := _levels()
@@ -348,6 +379,12 @@ func get_vertex_spacing() -> float:
 ## Chunks per side (x, z).
 func get_chunk_grid() -> Vector2i:
 	return Vector2i((_nx - 1) / chunk_quads, (_nz - 1) / chunk_quads) if _nx > 1 else Vector2i.ZERO
+
+
+## Regions per side (x, z) of the sparse region grid the maps are partitioned into (see
+## [member region_size]); at least 1 x 1. The last region on each axis may be partial.
+func get_region_grid() -> Vector2i:
+	return Vector2i(_region_cols, _region_rows)
 
 
 ## World height of the terrain's surface (as its finest LOD draws it) under [param world_position];
@@ -914,6 +951,7 @@ func make_heights_editable() -> void:
 	heightmap = ImageTexture.create_from_image(_height_image())
 	_swapping_edit_map = false
 	_src_texture = heightmap
+	_region_sync() # _src is now an editable per-vertex map: re-partition it into the store
 
 
 ## Replaces [member splatmap] by an editable map with the same layer weights at every vertex (R:
@@ -942,6 +980,7 @@ func make_splat_editable() -> void:
 	splatmap = ImageTexture.create_from_image(_splat_image())
 	_swapping_edit_map = false
 	_splat_texture = splatmap
+	_region_sync() # _splat (and the weight caches) rebuilt: re-partition into the store
 
 
 ## The editable heights (FORMAT_RF, 0..1 over [member height_scale], one texel per vertex), a copy.
@@ -1155,6 +1194,7 @@ func _heights_changed(rect: Rect2i) -> void:
 				map[z * _nx + x] = _heights[z * _nx + x] / _spacing
 		shape.map_data = map
 	_queue_edit_flush(grown, "height")
+	_region_sync() # the edited heights (and the caches they changed) back into the store
 
 
 ## After the splat weights of grid [param rect] changed in _splat.
@@ -1168,6 +1208,7 @@ func _weights_changed(rect: Rect2i) -> void:
 	_repaint_chunks(local)
 	_update_control_map()
 	_queue_edit_flush(rect, "splat")
+	_region_sync() # the edited splat weights (and the caches) back into the store
 
 
 func _build_weights_rect(rect: Rect2i) -> void:
@@ -1259,10 +1300,138 @@ func _setup_grid() -> void:
 	_nx = qx + 1
 	_nz = qz + 1
 	_origin = -Vector2(qx, qz) * _spacing * 0.5
+	# region_size rounded to a whole number of chunks (so a region is a block of whole chunks), at
+	# least one chunk, then expressed in quads. ceili so a terrain that is not a whole number of
+	# regions still tiles, with the last region on each axis partial; at least one region on each
+	# axis so a terrain smaller than a region is one region.
+	var chunk_side := cq * _spacing
+	var region_chunks := maxi(1, ceili(region_size / maxf(chunk_side, 1e-6) - 1e-6))
+	_region_quads = region_chunks * cq
+	_region_cols = maxi(1, ceili(float(qx) / _region_quads))
+	_region_rows = maxi(1, ceili(float(qz) / _region_quads))
 
 
 func _levels() -> int:
 	return clampi(lod_levels, 1, int(log(chunk_quads) / log(2.0) + 0.5) + 1)
+
+
+# --- Region store (Stage 3a) --------------------------------------------------------------------
+# The maps are partitioned into a sparse grid of fixed-size regions (see region_size). _regions is
+# the per-region source of truth; the flat arrays (_src/_splat/_holes/_heights/_w1/_w2) are the
+# coalesced hot-path view that _region_sync keeps the store in step with after every change. In the
+# single-region case (a terrain smaller than one region, the usual case) a region simply references
+# the whole map array, so this is a no-op in storage and behaviour; a multi-region terrain splits
+# each map into its regions' slices. No geometry reads the store yet (every region is resident), so
+# 3a changes nothing observable; 3b (load/free by distance) and 3c (save per region) build on it.
+
+## Re-partitions the store from the current coalesced view. Called after every change to the maps,
+## so _regions always equals the live maps split into the region grid.
+func _region_sync() -> void:
+	_regions.clear()
+	_region_dims.clear()
+	if not _src.is_empty():
+		_region_put("height", int(_src["width"]), int(_src["height"]), 1, _src["data"])
+	if not _splat.is_empty():
+		_region_put("splat", int(_splat["width"]), int(_splat["height"]), 4, _splat["data"])
+	if not _holes.is_empty():
+		_region_put("holes", _nx, _nz, 1, _holes)
+	if not _heights.is_empty():
+		_region_put("heights", _nx, _nz, 1, _heights)
+	if not _w1.is_empty():
+		_region_put("w1", _nx, _nz, 1, _w1)
+		_region_put("w2", _nx, _nz, 1, _w2)
+
+
+## Splits the whole-terrain map [param flat] ([param w] x [param h] texels, [param ch] values a
+## texel, row-major) into the store under [param name]. One region holds the whole array by
+## reference (no copy); otherwise each region holds the texels of its rectangle of the grid.
+func _region_put(name: String, w: int, h: int, ch: int, flat: Variant) -> void:
+	_region_dims[name] = {"w": w, "h": h, "ch": ch}
+	if _region_cols == 1 and _region_rows == 1:
+		if not _regions.has(Vector2i.ZERO):
+			_regions[Vector2i.ZERO] = {}
+		_regions[Vector2i.ZERO][name] = flat
+		return
+	for ry in _region_rows:
+		var y0 := _split(h, _region_rows, ry)
+		var y1 := _split(h, _region_rows, ry + 1)
+		for rx in _region_cols:
+			var x0 := _split(w, _region_cols, rx)
+			var x1 := _split(w, _region_cols, rx + 1)
+			var tile: Variant = PackedByteArray() if name == "holes" else PackedFloat32Array()
+			for y in range(y0, y1):
+				tile.append_array(flat.slice((y * w + x0) * ch, (y * w + x1) * ch))
+			var key := Vector2i(rx, ry)
+			if not _regions.has(key):
+				_regions[key] = {}
+			_regions[key][name] = tile
+
+
+## Reassembles map [param name] from its regions into one whole-terrain array (the inverse of
+## [method _region_put]); the single-region store returns its array directly. For the view, for the
+## tests and for Stage 3c's per-region save to reconstruct a map. Empty if the map is not stored.
+func _region_coalesce(name: String) -> Variant:
+	if not _region_dims.has(name):
+		return PackedByteArray() if name == "holes" else PackedFloat32Array()
+	var d: Dictionary = _region_dims[name]
+	var w: int = d["w"]
+	var h: int = d["h"]
+	var ch: int = d["ch"]
+	if _region_cols == 1 and _region_rows == 1:
+		return _regions[Vector2i.ZERO][name]
+	var flat: Variant = PackedByteArray() if name == "holes" else PackedFloat32Array()
+	flat.resize(w * h * ch)
+	for ry in _region_rows:
+		var y0 := _split(h, _region_rows, ry)
+		var y1 := _split(h, _region_rows, ry + 1)
+		for rx in _region_cols:
+			var x0 := _split(w, _region_cols, rx)
+			var x1 := _split(w, _region_cols, rx + 1)
+			var tile: Variant = _regions[Vector2i(rx, ry)][name]
+			var ti := 0
+			for y in range(y0, y1):
+				var base := (y * w + x0) * ch
+				for k in (x1 - x0) * ch:
+					flat[base + k] = tile[ti]
+					ti += 1
+	return flat
+
+
+## Region [param coord]'s slice of map [param name] (its own texels, row-major), or an empty array
+## if the region or the map is not stored. The addressable per-region source of truth 3b/3c use.
+func _region_slice(coord: Vector2i, name: String) -> Variant:
+	var region: Dictionary = _regions.get(coord, {})
+	return region.get(name, PackedByteArray() if name == "holes" else PackedFloat32Array())
+
+
+## The region that owns grid vertex (gx, gz). Keyed by integer coordinate so a world laid out far
+## from the origin addresses the same way (Stage 3b/3c); here the grid starts at vertex (0, 0).
+func _region_of_vertex(gx: int, gy: int) -> Vector2i:
+	return Vector2i(_region_axis(clampi(gx, 0, _nx - 1), _nx, _region_cols),
+		_region_axis(clampi(gy, 0, _nz - 1), _nz, _region_rows))
+
+
+static func _region_axis(i: int, n: int, parts: int) -> int:
+	for p in range(parts - 1, -1, -1):
+		if _split(n, parts, p) <= i:
+			return p
+	return 0
+
+
+## The grid vertices [param coord]'s region covers: [x0, x0 + w) by [y0, y0 + h).
+func _region_vertex_rect(coord: Vector2i) -> Rect2i:
+	var x0 := _split(_nx, _region_cols, coord.x)
+	var x1 := _split(_nx, _region_cols, coord.x + 1)
+	var y0 := _split(_nz, _region_rows, coord.y)
+	var y1 := _split(_nz, _region_rows, coord.y + 1)
+	return Rect2i(x0, y0, x1 - x0, y1 - y0)
+
+
+## The i-th boundary when [0, n) is divided into [param parts] contiguous, near-equal integer
+## ranges; region r covers [_split(n, parts, r), _split(n, parts, r + 1)). Monotonic, 0 at i = 0 and
+## n at i = parts, so coalescing the regions reproduces the whole map exactly.
+static func _split(n: int, parts: int, i: int) -> int:
+	return i * n / parts
 
 
 ## Height of grid vertex (gx, gz) (clamped to the grid): from the whole-terrain array, or sampled
@@ -1623,6 +1792,7 @@ func make_holes_editable() -> void:
 	holes = ImageTexture.create_from_image(_hole_image())
 	_swapping_edit_map = false
 	_holes_texture = holes
+	_region_sync() # _holes is now an editable per-vertex map: re-partition it into the store
 
 
 ## The editable hole map (FORMAT_L8, 255 where a vertex is in a hole, one texel per vertex), a copy.
@@ -1669,6 +1839,7 @@ func _holes_changed(rect: Rect2i) -> void:
 	if not is_streaming() and _body != null and whole == (_hole_count > 0):
 		_build_collision()
 	_queue_edit_flush(grown, "holes")
+	_region_sync() # the edited holes back into the store
 
 
 ## The ground data's texels that lie on a hole get no ground (code -2): the near-camera field
