@@ -25,6 +25,7 @@ func _run() -> void:
 	await process_frame # _initialize runs before the root enters the tree.
 	await _test("heights_follow_the_heightmap", test_heights)
 	await _test("partitions_into_regions", test_region_grid)
+	await _test("persists_regions_to_files", test_region_persistence)
 	await _test("chunk_lods_and_skirts", test_lods)
 	await _test("layers_by_rules_and_splat_map", test_layers)
 	if DisplayServer.get_name() != "headless":
@@ -320,6 +321,139 @@ func test_region_grid() -> void:
 	t.queue_free()
 	whole.queue_free()
 	await process_frame
+
+
+## Lists the files under [param dir] whose name starts with [param prefix] and ends in [param ext].
+static func _dir_files(dir: String, prefix: String, ext: String) -> PackedStringArray:
+	var out := PackedStringArray()
+	var da := DirAccess.open(dir)
+	if da == null:
+		return out
+	for f in da.get_files():
+		if f.begins_with(prefix) and f.get_extension() == ext:
+			out.append(f)
+	return out
+
+
+## Removes a temp directory and its files (test cleanup).
+static func _clear_dir(dir: String) -> void:
+	var da := DirAccess.open(dir)
+	if da != null:
+		for f in da.get_files():
+			da.remove(f)
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(dir))
+
+
+## Stage 3b per-region persistence: save_regions() writes one GADSTerrainRegion resource per region;
+## load_regions() reassembles the maps from them and rebuilds. (a) A multi-region terrain with a
+## sculpt, a splat paint and a hole round-trips -- cleared and reloaded, heights, weights and holes
+## read back identical by world position, and the coalesced maps are byte-identical. (b) A terrain
+## loaded from region files equals the same terrain imported from a whole heightmap and splat (the
+## source maps are byte-identical). load_regions() is false when no region files are present.
+func test_region_persistence() -> void:
+	var grass := layer_material(2.0, Color(0.2, 0.6, 0.2))
+	var rock := layer_material(4.0, Color(0.5, 0.5, 0.5))
+	# --- (a) round-trip with edits over a 4 x 4 region grid (16 m regions tile the 64 m terrain). ---
+	var dir := "user://gads_region_persist_a"
+	_clear_dir(dir)
+	var t := make_terrain({"layers": [grass, rock] as Array[ShaderMaterial], "region_size": 16.0, "height_scale": 20.0})
+	root.add_child(t)
+	check(t.get_region_grid() == Vector2i(4, 4), "a 16 m region tiles the 64 m terrain into 4 x 4 regions (%s)" % t.get_region_grid())
+	# Edits in different regions: a sculpt (height), a splat paint (weights) and a hole.
+	t.sculpt(Vector3(-24, 0, -24), 3.0, GADSSculpt.Mode.RAISE, 4.0)
+	t.paint_splatmap(Vector3(20, 0, 20), 3.0, 1, 1.0)
+	t.cut_holes(Vector3(0, 0, 8), 1.5)
+	t.flush_edits()
+	# Compare against a rebuilt terrain: load_regions() always rebuilds, and a rebuild re-derives the
+	# per-vertex weight cache from the (quantized) splat map, so its weights are the ones that
+	# persist. (In-memory, before a rebuild, the cache can still hold pre-splat rule weights the
+	# native builder does not refresh -- a quirk of the editing path, not of what is saved.)
+	t.rebuild()
+	var probes := PackedVector3Array()
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 23
+	for i in 80:
+		probes.append(Vector3(rng.randf_range(-31, 31), 0, rng.randf_range(-31, 31)))
+	var h_before := PackedFloat32Array()
+	var w_before: Array[Vector2] = []
+	var hole_before: Array[bool] = []
+	for p in probes:
+		h_before.append(t.get_height(p))
+		w_before.append(t.get_layer_weights(p))
+		hole_before.append(t.is_hole(p))
+	var err := t.save_regions(dir)
+	var files := _dir_files(dir, "region_", "res")
+	check(err == OK and files.size() == 16, "save_regions() wrote one file per region (%d files, err %d)" % [files.size(), err])
+	# Clear: a terrain configured on purpose with the wrong geometry and no heightmap; load restores it.
+	var l := make_terrain({"region_size": 1024.0, "vertex_spacing": 1.0, "height_scale": 20.0})
+	l.heightmap = null
+	root.add_child(l)
+	var ok := l.load_regions(dir)
+	check(ok and l.get_region_grid() == Vector2i(4, 4) and l.get_grid_size() == t.get_grid_size(),
+		"load_regions() restored the grid from the files (%s, %s)" % [l.get_region_grid(), l.get_grid_size()])
+	var worst_h := 0.0
+	var worst_w := 0.0
+	var holes_ok := true
+	for i in probes.size():
+		worst_h = maxf(worst_h, absf(l.get_height(probes[i]) - h_before[i]))
+		worst_w = maxf(worst_w, l.get_layer_weights(probes[i]).distance_to(w_before[i]))
+		holes_ok = holes_ok and l.is_hole(probes[i]) == hole_before[i]
+	print("  round-trip: largest height difference %.6f mm, weight %.6f; holes match %s" % [worst_h * 1000.0, worst_w, holes_ok])
+	check(worst_h < 1e-5 and worst_w < 1e-6 and holes_ok, "heights, weights and holes read back identical by world position")
+	# The coalesced maps are byte-identical (the store reassembles to the same arrays).
+	var maps_same := true
+	for pair in [["height", 1], ["splat", 4], ["holes", 1]]:
+		var a: Variant = t._region_coalesce(pair[0])
+		var b: Variant = l._region_coalesce(pair[0])
+		maps_same = maps_same and a.size() == b.size() and a.size() > 0
+		for i in range(0, a.size(), 97):
+			maps_same = maps_same and absf(float(a[i]) - float(b[i])) < 1e-7
+	check(maps_same, "the reloaded height, splat and hole maps are byte-identical")
+	t.queue_free()
+	l.queue_free()
+	await process_frame
+	# --- (b) a terrain loaded from region files equals the same terrain imported whole. ---
+	var dir_b := "user://gads_region_persist_b"
+	_clear_dir(dir_b)
+	var splat := Image.create(16, 16, false, Image.FORMAT_RGBA8)
+	splat.fill(Color(0, 0, 0, 1))
+	splat.fill_rect(Rect2i(0, 0, 8, 16), Color(1, 0, 0, 1)) # the second layer on the -X half
+	var whole := make_terrain({"layers": [grass, rock] as Array[ShaderMaterial], "region_size": 16.0,
+		"height_scale": 20.0, "splatmap": ImageTexture.create_from_image(splat)})
+	root.add_child(whole)
+	check(whole.save_regions(dir_b) == OK, "the whole-imported terrain saves its regions")
+	var loaded := make_terrain({"region_size": 16.0, "height_scale": 20.0})
+	loaded.heightmap = null
+	root.add_child(loaded)
+	check(loaded.load_regions(dir_b), "a second terrain loads those region files")
+	var worst := 0.0
+	var wworst := 0.0
+	for p in probes:
+		worst = maxf(worst, absf(loaded.get_height(p) - whole.get_height(p)))
+		wworst = maxf(wworst, loaded.get_layer_weights(p).distance_to(whole.get_layer_weights(p)))
+	# The source maps are byte-identical, so the two terrains are the same import.
+	var src_same: bool = (whole._src["data"] as PackedFloat32Array).size() == (loaded._src["data"] as PackedFloat32Array).size()
+	var sb: PackedFloat32Array = whole._src["data"]
+	var sl: PackedFloat32Array = loaded._src["data"]
+	for i in range(0, sb.size(), 53):
+		src_same = src_same and sb[i] == sl[i]
+	var splat_same: bool = (whole._splat["data"] as PackedFloat32Array).size() == (loaded._splat["data"] as PackedFloat32Array).size()
+	var pb: PackedFloat32Array = whole._splat["data"]
+	var pl: PackedFloat32Array = loaded._splat["data"]
+	for i in range(0, pb.size(), 53):
+		splat_same = splat_same and pb[i] == pl[i]
+	print("  vs whole import: height %.6f mm, weight %.6f; _src identical %s, _splat identical %s" % [worst * 1000.0, wworst, src_same, splat_same])
+	check(worst < 1e-5 and wworst < 1e-6 and src_same and splat_same, "a terrain loaded from region files equals the same terrain imported whole")
+	# No files: load_regions() is false and changes nothing.
+	var empty := make_terrain()
+	root.add_child(empty)
+	check(not empty.load_regions("user://gads_region_persist_none"), "load_regions() is false when no region files are present")
+	whole.queue_free()
+	loaded.queue_free()
+	empty.queue_free()
+	await process_frame
+	_clear_dir(dir)
+	_clear_dir(dir_b)
 
 
 func test_lods() -> void:

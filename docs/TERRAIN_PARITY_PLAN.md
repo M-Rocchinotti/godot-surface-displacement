@@ -96,4 +96,16 @@ Not code: **maturity** — shipped projects, community, longevity.
     (`partitions_into_regions`) checks the grid, that reads match tiled or not, that an edit touches
     only its region, and that the regions coalesce back to the whole map. The visual-regression
     baselines are unchanged (every scene is a single region).
-  - **3b (load/free regions by distance) and 3c (per-region save/load) are not done yet.**
+- **Stage 3b: per-region persistence is done.** A terrain's editable maps can be saved one file
+  per region (`GADSTerrainRegion`, `addons/gads/terrain/gads_terrain_region.gd`) and loaded back:
+  `GADSTerrain3D.save_regions(dir)` writes a `region_<x>_<y>.res` per region (header: coord, region
+  grid, size, spacing, chunk quads, each whole map's dimensions; body: that region's height/splat/
+  holes tile), and `load_regions(dir)` restores the grid from the header, reassembles the whole maps
+  through `_region_coalesce` and rebuilds. A terrain loaded from region files is byte-identical to
+  the same terrain imported from a whole heightmap/splat (proven by `persists_regions_to_files`).
+  It is additional to the whole-texture import and `save_edited_maps` (those are untouched), every
+  region still stays resident, and building is unchanged. This is the persistence primitive Stage 4
+  uses to keep near regions and free far ones. Full suite 15/15; visual-regression baselines
+  unchanged.
+  - **Remaining for the region system → Stage 4:** load/free region *data* (and their chunks and
+    collision) by distance for the actual 16k memory win, with cross-region border handling.

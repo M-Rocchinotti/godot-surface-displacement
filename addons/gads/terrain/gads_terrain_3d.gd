@@ -1102,6 +1102,159 @@ func _edit_stem() -> String:
 	return stem.validate_filename().replace(" ", "_")
 
 
+# --- Per-region persistence (Stage 3b) ----------------------------------------------------------
+# A whole-texture terrain is one file; a 16k world cannot be. These two methods save the terrain's
+# editable maps (height, splat, holes) one file per region and load them back, so Stage 4 can keep
+# only the near regions on disk-backed storage and free the far ones. They are ADDITIONAL to the
+# whole-texture import and save_edited_maps()/flush_edits() -- those paths are untouched -- and in
+# 3b every region still stays resident and building is unchanged: save writes the region store, load
+# reassembles the whole maps through _region_coalesce() (the exact inverse of the split) so a terrain
+# loaded from region files is byte-identical to the same terrain imported from a whole map. Only
+# the SOURCE maps are persisted; the per-vertex caches (_heights/_w1/_w2) are derived on the next
+# rebuild, exactly as they are for a whole import.
+
+## Saves each region's slice of the editable maps that exist (height, splat, holes) to its own
+## resource under [param dir] ([code]region_<x>_<y>.res[/code], a [GADSTerrainRegion]), with enough
+## header to reconstruct the terrain's grid and put each tile back. A set of these files is the
+## per-region form of [method save_edited_maps]'s whole-map files; [method load_regions] reads them
+## back. Works at runtime and in the editor (unlike [method save_edited_maps], which also rewrites
+## the scene's resource references). Returns [constant OK], or the first save error. Writes nothing
+## and returns [constant OK] for a terrain with no maps (nothing to persist).
+func save_regions(dir := data_directory) -> Error:
+	flush_edits() # fold any pending stroke into the maps before the store is read
+	if _regions.is_empty():
+		return OK
+	var abs_dir := ProjectSettings.globalize_path(dir)
+	if DirAccess.make_dir_recursive_absolute(abs_dir) != OK and not DirAccess.dir_exists_absolute(abs_dir):
+		push_warning("GADS: %s: cannot create %s." % [name, dir])
+		return ERR_CANT_CREATE
+	var first_error := OK
+	for coord: Vector2i in _regions:
+		var region := GADSTerrainRegion.new()
+		region.coord = coord
+		region.region_grid = Vector2i(_region_cols, _region_rows)
+		region.region_size = region_size
+		region.terrain_size = Vector2(_nx - 1, _nz - 1) * _spacing
+		region.vertex_spacing = _spacing
+		region.chunk_quads = chunk_quads
+		# Each map's WHOLE dimensions (what the split used) plus this region's tile; a map that does
+		# not exist leaves its dims zero and its tile empty.
+		if _region_dims.has("height"):
+			region.height_dims = _dims_vec("height")
+			region.height_tile = _region_slice(coord, "height")
+		if _region_dims.has("splat"):
+			region.splat_dims = _dims_vec("splat")
+			region.splat_tile = _region_slice(coord, "splat")
+		if _region_dims.has("holes"):
+			region.holes_dims = _dims_vec("holes")
+			region.holes_tile = _region_slice(coord, "holes")
+		var path := dir.path_join("region_%d_%d.res" % [coord.x, coord.y])
+		var err := ResourceSaver.save(region, path)
+		if err != OK:
+			push_warning("GADS: %s: cannot save %s." % [name, path])
+			if first_error == OK:
+				first_error = err
+	return first_error
+
+
+## Reconstructs the terrain's maps from the [code]region_*.res[/code] files under [param dir]
+## (written by [method save_regions]): restores the grid from their header, reassembles the whole
+## height, splat and hole maps from the per-region tiles (through [method _region_coalesce]), binds
+## them as the terrain's maps and rebuilds. The result is byte-identical to the same terrain imported
+## from a whole heightmap / splat. Returns false (and changes nothing) if [param dir] holds no region
+## files. The terrain's own configuration that is not part of the maps (height scale and offset, the
+## layer materials) is left as it is -- only the grid geometry and the maps come from the files.
+func load_regions(dir := data_directory) -> bool:
+	var loaded := _read_region_files(dir)
+	if loaded.is_empty():
+		return false
+	# Restore the grid from the header (any file carries it; they all agree), so _setup_grid()
+	# reproduces _nx/_nz/_spacing/_origin and the region split, then the tiles land where they came
+	# from. The setters queue a deferred rebuild, which our explicit rebuild() below makes a no-op.
+	var header: GADSTerrainRegion = loaded.values()[0]
+	size = header.terrain_size
+	chunk_quads = header.chunk_quads
+	region_size = header.region_size
+	vertex_spacing = header.vertex_spacing # the resolved spacing reproduces the same grid
+	_setup_grid()
+	if Vector2i(_region_cols, _region_rows) != header.region_grid:
+		push_warning("GADS: %s: region grid %s does not match the files' %s; loading anyway." %
+			[name, Vector2i(_region_cols, _region_rows), header.region_grid])
+	# Rebuild the store from the loaded tiles, then coalesce each map into one whole array and bind
+	# it as a texture. rebuild() re-reads the textures and re-partitions the store itself, so this
+	# store is transient -- only _region_coalesce() reads it, the inverse of save's split.
+	_regions.clear()
+	_region_dims.clear()
+	for coord: Vector2i in loaded:
+		var region: GADSTerrainRegion = loaded[coord]
+		var tiles := {}
+		if region.height_dims != Vector3i.ZERO:
+			tiles["height"] = region.height_tile
+		if region.splat_dims != Vector3i.ZERO:
+			tiles["splat"] = region.splat_tile
+		if region.holes_dims != Vector3i.ZERO:
+			tiles["holes"] = region.holes_tile
+		_regions[coord] = tiles
+	for entry in [["height", header.height_dims], ["splat", header.splat_dims], ["holes", header.holes_dims]]:
+		var d: Vector3i = entry[1]
+		if d != Vector3i.ZERO:
+			_region_dims[entry[0]] = {"w": d.x, "h": d.y, "ch": d.z}
+	_swapping_edit_map = true # bind the maps without each setter queuing its own rebuild
+	if _region_dims.has("height"):
+		var d: Dictionary = _region_dims["height"]
+		var img := Image.create_from_data(d["w"], d["h"], false, Image.FORMAT_RF,
+			(_region_coalesce("height") as PackedFloat32Array).to_byte_array())
+		heightmap = ImageTexture.create_from_image(img)
+		_src_texture = heightmap
+	if _region_dims.has("splat"):
+		var d: Dictionary = _region_dims["splat"]
+		var img := Image.create_from_data(d["w"], d["h"], false, Image.FORMAT_RGBAF,
+			(_region_coalesce("splat") as PackedFloat32Array).to_byte_array())
+		splatmap = ImageTexture.create_from_image(img)
+		_splat_texture = splatmap
+	if _region_dims.has("holes"):
+		var d: Dictionary = _region_dims["holes"]
+		# One L8 texel a vertex, 255 for a hole (as _hole_image() stores it, so _build_holes() reads
+		# it back with no resize and the same threshold): coalesced bytes are the store's 0 / non-zero.
+		var bytes: PackedByteArray = _region_coalesce("holes")
+		var l8 := bytes.duplicate()
+		for i in l8.size():
+			l8[i] = 255 if l8[i] != 0 else 0
+		var img := Image.create_from_data(d["w"], d["h"], false, Image.FORMAT_L8, l8)
+		holes = ImageTexture.create_from_image(img)
+		_holes_texture = holes
+	_swapping_edit_map = false
+	rebuild()
+	return true
+
+
+## The whole-map (width, height, channels) of map [param name] from [member _region_dims] as a
+## [Vector3i], for a [GADSTerrainRegion] header.
+func _dims_vec(name: String) -> Vector3i:
+	var d: Dictionary = _region_dims[name]
+	return Vector3i(d["w"], d["h"], d["ch"])
+
+
+## Loads the [code]region_*.res[/code] files under [param dir] into {coord: [GADSTerrainRegion]}.
+## Empty if the directory has none (or cannot be opened). Keyed by each resource's own coordinate,
+## not its file name, so a renamed file still lands in the right place.
+func _read_region_files(dir: String) -> Dictionary:
+	var out := {}
+	var da := DirAccess.open(dir)
+	if da == null:
+		return out
+	for file in da.get_files():
+		if not file.begins_with("region_") or file.get_extension() != "res":
+			continue
+		# Save then load in one run (a test, an editor session): ignore the resource cache so a file
+		# rewritten this run is read fresh, not served from an earlier load. The type hint stays
+		# empty -- a custom class_name there makes ResourceLoader fail to resolve the loader.
+		var region := ResourceLoader.load(dir.path_join(file), "", ResourceLoader.CACHE_MODE_IGNORE) as GADSTerrainRegion
+		if region != null:
+			out[region.coord] = region
+	return out
+
+
 ## Where the ray from [param origin] along [param direction] (world space) first comes down onto
 ## the terrain's surface (its finest LOD), or Vector3.INF. Steps along the grid at half the vertex
 ## spacing within the terrain's bounds, then bisects to about a millimetre. The Sculpt tool picks
