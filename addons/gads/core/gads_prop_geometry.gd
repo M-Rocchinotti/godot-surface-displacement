@@ -32,8 +32,8 @@ static func is_candidate(mi: MeshInstance3D) -> bool:
 		return false
 	if mi.mesh is ArrayMesh and mi.mesh.get_surface_count() > 0 and ((mi.mesh as ArrayMesh).surface_get_format(0) & Mesh.ARRAY_FORMAT_BONES) != 0:
 		return false
-	if not GADSMeshBaker.check_mesh(mi.mesh).is_empty():
-		return false
+	# The materials first: they rule out nearly every mesh cheaply, while check_mesh() may have to
+	# read a mesh type other than ArrayMesh and PrimitiveMesh back from the GPU.
 	var relief := false
 	for m in GADSMeshBaker.resolve_materials(mi, mi.mesh):
 		if not GADSMaterials.is_gads_material(m):
@@ -44,10 +44,11 @@ static func is_candidate(mi: MeshInstance3D) -> bool:
 		var d := GADSMeshBaker.displacement_of(m)
 		if not d.is_empty() and float(d["height_m"]) > 0.0:
 			relief = true
-	return relief
+	return relief and GADSMeshBaker.check_mesh(mi.mesh).is_empty()
 
 
-## Remembers [param mi] if it is a candidate (GADSManager calls this for every node it registers).
+## Remembers [param mi] if it is a candidate (GADSManager calls this for every MeshInstance3D it
+## registers while [member GADSManager.prop_geometry] is on).
 func consider(mi: MeshInstance3D) -> void:
 	if is_candidate(mi):
 		_candidates[mi.get_instance_id()] = weakref(mi)

@@ -20,6 +20,7 @@ func _run() -> void:
 	test_deformation_field()
 	test_presets()
 	test_manager()
+	await test_prop_geometry_registration()
 	await test_settings_changes()
 	test_material_discovery()
 	test_validator()
@@ -256,6 +257,66 @@ func test_manager() -> void:
 	check(GADSGlobals.get_value(GADSGlobals.WEATHER) == Vector4(0.25, 0.5, 0.75, 0.0), "set_weather() sets the weather global")
 	gads.set_weather(0.0, 0.0, 0.0)
 	scene.queue_free()
+
+
+## A GADSManager with prop_geometry off (the default) does not look at the meshes a game spawns:
+## no prop candidates, and no surface read back from the GPU for a PrimitiveMesh (a regression:
+## every BoxMesh / SphereMesh added cost a RenderingServer readback). Switched on later, it finds
+## the props already in the tree and those added after.
+func test_prop_geometry_registration() -> void:
+	print("
+== GADSManager prop geometry registration")
+	await process_frame
+	var scene := Node3D.new()
+	root.add_child(scene)
+	var gads := GADSManager.new()
+	scene.add_child(gads)
+	var height := Image.create(16, 16, false, Image.FORMAT_RF)
+	height.fill(Color(0.5, 0, 0))
+	var relief := func() -> Material:
+		return GADSMaterials.create(GADSMaterials.Mapping.UV, {"height": ImageTexture.create_from_image(height)},
+			{"height_m": 0.05}, GADSMaterials.Quality.POM)
+	var make := func(mesh: Mesh, mat: Material) -> MeshInstance3D:
+		var mi := MeshInstance3D.new()
+		mi.mesh = mesh
+		mi.material_override = mat
+		scene.add_child(mi)
+		return mi
+	var reads := GADSMeshBaker.rs_surface_reads
+	var plain := StandardMaterial3D.new()
+	var shapes: Array[Callable] = [BoxMesh.new, SphereMesh.new, QuadMesh.new, CylinderMesh.new]
+	for i in 200:
+		make.call(shapes[i % shapes.size()].call(), plain if i % 2 == 0 else null)
+	var early := make.call(BoxMesh.new(), relief.call()) as MeshInstance3D
+	check(not gads.prop_geometry and gads._props._candidates.is_empty() and GADSMeshBaker.rs_surface_reads == reads,
+		"prop_geometry off: 200 spawned primitive meshes and a relief prop are not looked at, nothing is read back from the GPU")
+	var immediate := ImmediateMesh.new()
+	immediate.surface_begin(Mesh.PRIMITIVE_TRIANGLES)
+	immediate.surface_add_vertex(Vector3.ZERO)
+	immediate.surface_add_vertex(Vector3.RIGHT)
+	immediate.surface_add_vertex(Vector3.UP)
+	immediate.surface_end()
+	var plain_immediate := MeshInstance3D.new()
+	plain_immediate.mesh = immediate
+	check(not GADSPropGeometry.is_candidate(plain_immediate) and GADSMeshBaker.rs_surface_reads == reads,
+		"is_candidate() rejects a mesh without a GADS material before checking its surfaces")
+	plain_immediate.free()
+	check(GADSMeshBaker.surface_primitive(SphereMesh.new(), 0) == Mesh.PRIMITIVE_TRIANGLES
+		and GADSMeshBaker.surface_primitive(PointMesh.new(), 0) == Mesh.PRIMITIVE_POINTS
+		and GADSMeshBaker.rs_surface_reads == reads,
+		"surface_primitive() answers a PrimitiveMesh without the RenderingServer")
+	GADSMeshBaker.surface_primitive(immediate, 0)
+	check(GADSMeshBaker.rs_surface_reads == reads + 1, "any other mesh type is still asked there (and counted)")
+	gads.prop_geometry = true
+	check(gads._props._candidates.size() == 1 and gads._props._candidates.has(early.get_instance_id()),
+		"switched on, it finds the relief prop already in the tree (and only it)")
+	var late := make.call(SphereMesh.new(), relief.call()) as MeshInstance3D
+	make.call(BoxMesh.new(), plain)
+	check(gads._props._candidates.size() == 2 and gads._props._candidates.has(late.get_instance_id()),
+		"and the relief props added while it is on")
+	gads.prop_geometry = false
+	scene.queue_free()
+	await process_frame
 
 
 ## Presets reach GADS materials wherever a scene draws them, not only on MeshInstance3D surfaces.

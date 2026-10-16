@@ -4,6 +4,22 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- **A `GADSManager` no longer costs a GPU readback per spawned mesh.** With `prop_geometry` off
+  (the default) the manager still checked every `MeshInstance3D` entering the tree as a prop
+  candidate, and that check asked the RenderingServer for the surface type of any non-`ArrayMesh`
+  (`BoxMesh`, `SphereMesh`, ...), reading the surface back from the GPU before the cheap material
+  test ruled it out: a game keeping one manager alive paid ~0.3 ms or more for every projectile,
+  pickup or view model it spawned. Props are now considered only while `prop_geometry` is on
+  (switching it on scans the tree once), the candidate test looks at the materials first, and
+  `GADSMeshBaker.surface_primitive()` answers a `PrimitiveMesh` without the RenderingServer
+  (triangles; `PointMesh` points). `GADSMeshBaker.rs_surface_reads` counts the remaining readbacks;
+  the logic tests check that spawning 200 primitive meshes takes none, and the bake tests check the
+  answer against the RenderingServer for every `PrimitiveMesh` type.
+
 ## [1.0.0] - 2026-10-10
 
 ### Added

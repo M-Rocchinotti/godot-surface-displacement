@@ -80,6 +80,7 @@ func _run() -> void:
 		await _test("runtime_tessellation_follows_the_camera", test_runtime_tessellation)
 		await _test("runtime_budget_and_adaptive_quality", test_runtime_budget)
 		await _test("prop_geometry_near_the_camera", test_prop_geometry)
+		await _test("primitive_mesh_surface_types", test_primitive_surface_types)
 	print("\nbake tests: %d passed, %d failed" % [_passed, _failed])
 	h.clear_scene()
 	h.viewport.queue_free()
@@ -2262,6 +2263,29 @@ func test_prop_geometry() -> void:
 	check(manager.get_prop_geometry_nodes().is_empty(), "turning it off lets them go")
 	h.clear_scene()
 	await process_frame
+
+
+## GADSMeshBaker.surface_primitive() answers every PrimitiveMesh type without asking the
+## RenderingServer (a GPU readback): what it answers must be what the RenderingServer holds.
+func test_primitive_surface_types() -> void:
+	var classes := ClassDB.get_inheriters_from_class("PrimitiveMesh")
+	var wrong: Array[String] = []
+	var checked := 0
+	for c in classes:
+		if not ClassDB.can_instantiate(c):
+			continue
+		var mesh := ClassDB.instantiate(c) as Mesh
+		if mesh is TextMesh:
+			(mesh as TextMesh).text = "GADS"
+		for s in mesh.get_surface_count():
+			var held: int = RenderingServer.mesh_get_surface(mesh.get_rid(), s).get("primitive", -1)
+			checked += 1
+			if GADSMeshBaker.surface_primitive(mesh, s) != held:
+				wrong.append("%s surface %d: %d, the RenderingServer holds %d" % [c, s, GADSMeshBaker.surface_primitive(mesh, s), held])
+	print("  %d surfaces of %d PrimitiveMesh types checked" % [checked, classes.size()])
+	for line in wrong:
+		print("  %s" % line)
+	check(checked >= 10 and wrong.is_empty(), "every PrimitiveMesh type's surface type is known without a readback")
 
 
 ## GADSImpact.dent_ray on a baked mesh with collision: the physics ray finds the node, the dent

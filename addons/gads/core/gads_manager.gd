@@ -115,9 +115,13 @@ enum DebugView { OFF = 0, HIT_OFFSET = 1, COST = 2, RELIEF = 3, NORMALS = 4, SEL
 ## further away they draw their parallax again. Needs the native library; runs in the game only.
 @export var prop_geometry := false:
 	set(value):
+		var was_on := prop_geometry
 		prop_geometry = value
 		if not value:
 			_props.release_all()
+		elif not was_on and is_inside_tree() and not Engine.is_editor_hint():
+			# Meshes added while it was off were not looked at: look at the whole tree once.
+			_consider_props(get_tree().root)
 		_update_processing()
 ## How close (m, to a prop's bounds) the camera must come for it to get geometry.
 @export_range(0.5, 100.0, 0.5, "or_greater", "suffix:m") var prop_geometry_range := 6.0:
@@ -574,7 +578,15 @@ func _on_node_added(node: Node) -> void:
 func _register_node(node: Node) -> void:
 	if node is GeometryInstance3D or node.is_class("GridMap"):
 		_register_materials(GADSMaterials.materials_of(node))
-	if node is MeshInstance3D and not Engine.is_editor_hint():
+	# Only while prop geometry is on: a game spawning meshes all the time pays nothing for it.
+	if prop_geometry and node is MeshInstance3D and not Engine.is_editor_hint():
+		_props.consider(node as MeshInstance3D)
+
+
+func _consider_props(root: Node) -> void:
+	if root is MeshInstance3D:
+		_props.consider(root as MeshInstance3D)
+	for node in root.find_children("*", "MeshInstance3D", true, false):
 		_props.consider(node as MeshInstance3D)
 
 

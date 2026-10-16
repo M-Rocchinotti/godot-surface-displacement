@@ -22,6 +22,10 @@ const NATIVE_CLASS := "GADSTessellator"
 
 enum Collision { NONE, TRIMESH, CONVEX }
 
+## How often [method surface_primitive] has read a surface back from the GPU through the
+## RenderingServer (diagnostics and tests: registering ordinary meshes must not add to it).
+static var rs_surface_reads := 0
+
 ## The baked mesh (after a successful run() or finish()).
 var mesh: ArrayMesh
 ## The collision shape, or null when no collision was asked for.
@@ -174,10 +178,17 @@ static func check_mesh(mesh: Mesh) -> String:
 	return ""
 
 
-## The primitive type of a surface of any Mesh (only ArrayMesh has a method for it).
+## The primitive type of a surface of any Mesh (only ArrayMesh has a method for it). A
+## PrimitiveMesh is answered without the RenderingServer (its one surface is triangles, PointMesh's
+## points); any other mesh type is asked there, which reads the surface back from the GPU.
 static func surface_primitive(mesh: Mesh, surface: int) -> int:
 	if mesh is ArrayMesh:
 		return (mesh as ArrayMesh).surface_get_primitive_type(surface)
+	if mesh is PointMesh:
+		return Mesh.PRIMITIVE_POINTS
+	if mesh is PrimitiveMesh:
+		return Mesh.PRIMITIVE_TRIANGLES
+	rs_surface_reads += 1
 	return RenderingServer.mesh_get_surface(mesh.get_rid(), surface).get("primitive", Mesh.PRIMITIVE_TRIANGLES)
 
 
