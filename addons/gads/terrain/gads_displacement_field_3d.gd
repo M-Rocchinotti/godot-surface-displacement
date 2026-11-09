@@ -122,6 +122,10 @@ func _enter_tree() -> void:
 		_mesh_instance = MeshInstance3D.new()
 		_mesh_instance.name = "FieldMesh"
 		_mesh_instance.top_level = true
+		# Moved in _process together with the field_origin uniform: with physics interpolation on,
+		# an interpolated transform would lag the uniform by a tick and the relief would flicker at
+		# every snap step.
+		_mesh_instance.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 		_mesh_instance.material_override = _material
 		_mesh_instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON if cast_shadows else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		add_child(_mesh_instance, false, Node.INTERNAL_MODE_BACK)

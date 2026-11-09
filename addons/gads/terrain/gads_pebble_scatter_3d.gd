@@ -71,6 +71,8 @@ func _enter_tree() -> void:
 		_particles = GPUParticles3D.new()
 		_particles.name = "Pebbles"
 		_particles.top_level = true
+		# Moved in _process with the camera window: never physics-interpolated (see the field mesh).
+		_particles.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 		_particles.local_coords = false
 		_particles.explosiveness = 1.0
 		_particles.lifetime = 3600.0

@@ -38,6 +38,7 @@ func _run() -> void:
 	await _test("surface_queries", test_surface_queries)
 	await _test("ground_bake_precision", test_ground_bake)
 	await _test("pebbles_stay_put", test_pebbles)
+	await _test("no_physics_interpolation_of_internal_nodes", test_no_physics_interpolation)
 	await _test("lifetime_resize_viewports", test_lifetime)
 	await _test("demo_scenes_render", test_demo_scenes)
 	await _test("demo_camera_flies", test_demo_camera)
@@ -885,6 +886,24 @@ func test_pebbles() -> void:
 	print("  pebble pixels %d; pixels that changed when the camera moved 1.24 m: %d" % [pebble_px, changed])
 	check(pebble_px > 500, "pebbles are drawn around the camera")
 	check(changed == 0, "they stay exactly where they are when the camera (and the cell window) moves")
+
+
+## With physics interpolation on project-wide, the field mesh and the pebbles (moved in _process
+## together with their shader uniforms) must not be interpolated, or they are drawn a tick behind
+## the uniforms and the relief flickers at every snap step (1.0.0 bug).
+func test_no_physics_interpolation() -> void:
+	h.new_lit_scene(Color(0.3, 0.3, 0.3))
+	var was_on := physics_interpolation
+	physics_interpolation = true
+	var tracked := add_tracked_camera(Vector3(0.0, 1.7, 0.0))
+	var f := add_field(Harness.make_wave_field(64), 1.0, 0.0, tracked)
+	var pebbles := GADSPebbleScatter3D.new()
+	f.add_child(pebbles)
+	await h.frames(2)
+	check(f.is_physics_interpolated(), "the field node itself follows the project setting")
+	check(not f.get_mesh_instance().is_physics_interpolated(), "the field mesh is not interpolated")
+	check(not pebbles.get_particles().is_physics_interpolated(), "the pebbles are not interpolated")
+	physics_interpolation = was_on
 
 
 # --- 7. Lifetime --------------------------------------------------------------------------------

@@ -4,6 +4,16 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [1.0.1] - 2026-11-09
+
+### Fixed
+
+- **Displacement field flicker with physics interpolation on.** The field's internal mesh and the
+  pebble scatter are moved in `_process` together with their shader uniforms; with
+  `physics/common/physics_interpolation` enabled the mesh was drawn with an interpolated transform
+  one tick behind the uniform, so the relief jumped for a frame at every snap step. Both internal
+  nodes now have physics interpolation turned off.
+
 ## [1.0.0] - 2026-10-10
 
 ### Added
