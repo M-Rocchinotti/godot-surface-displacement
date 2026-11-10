@@ -110,6 +110,30 @@ func sample_weights(xz: Vector2) -> Color:
 	return sample(xz)["weights"]
 
 
+## The 2 x 2 texels around world [param xz] (the footprint [method sample] interpolates), as the
+## field's shaders read them (gads_ground_cell): {"height": their bilinear height (m, texels
+## without ground as stored), "covered": all four are ground, "step": two neighbours among them
+## differ by more than [member step_limit]}. The field draws nothing where a cell is not covered
+## or steps.
+func cell(xz: Vector2) -> Dictionary:
+	var size := get_size()
+	var t := (xz - origin) / texel_size - Vector2(0.5, 0.5)
+	var i0 := Vector2i(floori(t.x), floori(t.y))
+	var f := t - Vector2(i0)
+	var h := PackedFloat64Array()
+	h.resize(4)
+	var covered := true
+	for k in 4:
+		var p := i0 + Vector2i(k % 2, k / 2)
+		var pc := p.clamp(Vector2i.ZERO, size - Vector2i.ONE)
+		var d := data.get_pixel(pc.x, pc.y)
+		h[k] = height_min + (roundf(d.r * 255.0) * 256.0 + roundf(d.g * 255.0)) / 65535.0 * height_range
+		covered = covered and p == pc and d.a > 0.5
+	var step := absf(h[1] - h[0]) > step_limit or absf(h[3] - h[2]) > step_limit \
+			or absf(h[2] - h[0]) > step_limit or absf(h[3] - h[1]) > step_limit
+	return {"height": lerpf(lerpf(h[0], h[1], f.x), lerpf(h[2], h[3], f.x), f.y), "covered": covered, "step": step}
+
+
 ## A bake from arrays, e.g. procedural terrain (row-major, [param size].x values per row, row 0
 ## at [param origin_xz].y): [param heights] in metres, [param layers] the field layer of each
 ## cell (-1 = ground that is none of the layers, -2 = no ground).

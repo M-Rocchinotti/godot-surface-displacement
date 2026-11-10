@@ -663,6 +663,33 @@ func test_ground_bake_sampling() -> void:
 	check(hb.sample_weights(Vector2(0.55, 0.15)).g > 0.999 and hb.sample_weights(Vector2(0.15, 0.15)).r > 0.999,
 			"each cell carries the field layer its ground is")
 
+	# Drops: a 50 cm wall between texels 5 and 6 (5 cm texels). The field draws nothing over the
+	# cell that steps or lacks ground, and a vertex whose triangles reach across the wall sinks
+	# below its foot; one farther away, or on a 30-degree slope, does not.
+	var wall := PackedFloat32Array()
+	var wall_layers := PackedInt32Array()
+	for y in 5:
+		for x in 12:
+			wall.append(0.5 if x >= 6 else 0.0)
+			wall_layers.append(0)
+	var wb := GADSGroundBake.from_arrays(Vector2i(12, 5), wall, wall_layers, Vector2.ZERO, 0.05)
+	var at_wall := wb.cell(Vector2(0.3, 0.125))
+	var before_wall := wb.cell(Vector2(0.15, 0.125))
+	check(at_wall["covered"] and at_wall["step"] and before_wall["covered"] and not before_wall["step"]
+			and not wb.cell(Vector2(-0.01, 0.125))["covered"] and not hb.cell(Vector2(0.33, 0.37))["covered"],
+			"a cell across the wall steps, one before it does not; beyond the bake and next to no ground a cell is not covered")
+	var foot := GADSDisplacementField3D.vertex_drop(wb, Vector2(0.27, 0.125), wb.sample_height(Vector2(0.27, 0.125)), 0.04)
+	var top := GADSDisplacementField3D.vertex_drop(wb, Vector2(0.33, 0.125), wb.sample_height(Vector2(0.33, 0.125)), 0.04)
+	var clear := GADSDisplacementField3D.vertex_drop(wb, Vector2(0.15, 0.125), wb.sample_height(Vector2(0.15, 0.125)), 0.04)
+	var slope := PackedFloat32Array()
+	for y in 5:
+		for x in 12:
+			slope.append(tan(deg_to_rad(30.0)) * 0.05 * x)
+	var sb := GADSGroundBake.from_arrays(Vector2i(12, 5), slope, wall_layers, Vector2.ZERO, 0.05)
+	var on_slope := GADSDisplacementField3D.vertex_drop(sb, Vector2(0.3, 0.125), sb.sample_height(Vector2(0.3, 0.125)), 0.04)
+	check(foot.x > 0.999 and absf(foot.y) < 1e-3 and top.x > 0.999 and top.y < 0.5 and clear.x == 0.0 and on_slope.x == 0.0,
+			"beside the wall a vertex sinks below the lower side (and on top of it), 15 cm away or on a 30-degree slope it does not")
+
 
 # --- Demo textures ------------------------------------------------------------------------------
 

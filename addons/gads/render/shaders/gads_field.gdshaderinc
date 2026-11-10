@@ -16,7 +16,10 @@
 // relief wins (stones stick out of sand) instead of an average. h_i is each layer's height map at
 // the mip that matches the vertex spacing. Where no layer is
 // displaceable, the vertices dive `push_down` below the ground so the original ground mesh hides
-// them. The vertices pass the layer weights on to the fragments.
+// them; next to a drop (a kerb, a wall, a pit's rim) below the lowest ground around them, and
+// fragments over no ground, over a step or under the ground are discarded, so no triangle across a
+// drop shows, nor the dive where nothing hides it. The vertices pass the layer weights on to the
+// fragments.
 //
 // The geometry can only carry relief down to its vertex spacing (4 cm at Ultra): a gravel's
 // individual stones are finer than that. So the geometry is a proxy (coverage, silhouettes, real
@@ -67,6 +70,7 @@ varying float f_ground;
 varying float f_level;
 varying vec4 f_weights;        // normalised layer weights
 varying float f_displaceable;  // 0 = no layer here (the vertices dove under the ground)
+varying float f_clearance;     // height over the ground minus the deformation (m), >= lift where displaced
 
 #ifdef GADS_SELF_SHADOW
 varying vec2 f_ss_xz;
@@ -232,7 +236,37 @@ void vertex() {
 	vec4 clip = PROJECTION_MATRIX * (MODELVIEW_MATRIX * vec4(local_xz.x, ground - field_origin.y, local_xz.y, 1.0));
 	float split = clip.w > 0.0 ? gads_split(clip.x / clip.w * 0.5 + 0.5) : 1.0;
 	float y = ground + lift + gads_field_fade(xz) * gads_fade(view_distance) * split * (gads_field_relief(xz, lod, w) + deform) - deform;
-	y = mix(ground - push_down, y, displaceable);
+	// Drops (a kerb, a wall, a bridge deck's or a pit's edge): the bake is a height field, so across
+	// a drop its height ramps from the upper surface to the lower one within a texel, and a
+	// triangle across it would hang a sheet from the edge (top-down textured into stripes) that
+	// diving under the ramp leaves standing above the lower ground. A vertex whose triangles may
+	// reach across a drop - some ground up to (1 + m) spacings away (the morph stretches the edges
+	// to two) differs from its own by more than the bake's steepest ground rises over that
+	// distance - sinks below the lowest ground around it instead, so every triangle across the drop
+	// lies under both sides. At a ring's outer edge (m = 1) the distance is the next ring's spacing,
+	// so both rings place the vertices they share alike.
+	float drop = 0.0;
+	float low = ground;
+	if (ground_mode == 1) {
+		float reach = base_spacing * spacing_units * (1.0 + m);
+		float rise = ground_decode.z / ground_rect.z;
+		for (int j = -1; j <= 1; j++) {
+			for (int i = -1; i <= 1; i++) {
+				if (i == 0 && j == 0) {
+					continue;
+				}
+				vec2 o = vec2(float(i), float(j)) * reach;
+				GADSGroundCell around = gads_ground_cell(xz + o);
+				if (around.covered) {
+					float allowed = rise * (abs(o.x) + abs(o.y)) + 0.25 * ground_decode.z;
+					drop = max(drop, smoothstep(allowed, allowed + ground_decode.z, abs(around.height - ground)));
+					low = min(low, around.height);
+				}
+			}
+		}
+	}
+	displaceable *= 1.0 - drop;
+	y = mix(mix(ground, low, drop) - push_down, y, displaceable);
 	VERTEX = vec3(local_xz.x, y - field_origin.y, local_xz.y);
 	f_base_normal = g.normal;
 	NORMAL = f_base_normal;
@@ -240,6 +274,7 @@ void vertex() {
 	f_level = level + m;
 	f_weights = w;
 	f_displaceable = displaceable;
+	f_clearance = y - ground + deform;
 }
 
 void fragment() {
@@ -260,6 +295,19 @@ void fragment() {
 	vec2 plane_xz = wpos.xz - v.xz * (n.y / max(dot(n, v), GADS_MIN_NDOTV)) * (wpos.y - f_ground);
 	vec2 dpdx = dFdx(plane_xz);
 	vec2 dpdy = dFdy(plane_xz);
+	// The field leaves out what lies over no ground (past the edge of the ground meshes: a road's
+	// edge over unbaked ground, a hole) or over a step, and what lies under the ground (where it
+	// dives or sinks): no texel there is displaceable, so the ground mesh is what shows, and where
+	// nothing else is drawn (seen through a hole, from below) the dive shows nothing either. Cut
+	// out, the dive cannot leave anything standing beside a drop. The clearance is interpolated
+	// between the triangle's vertices like its height, so it is exact for the drawn plane and
+	// includes the deformation. (After the derivatives, which need the whole pixel quad.)
+	if (ground_mode == 1) {
+		GADSGroundCell cell = gads_ground_cell(wpos.xz);
+		if (!cell.covered || cell.step || f_clearance < min(lift, 0.0) - 0.001) {
+			discard;
+		}
+	}
 	float pix_m = max(length(dpdx), length(dpdy));
 	float lod = log2(max(pix_m, 1e-6)) + gads_pom_range.z;
 	int main_layer = 0;

@@ -10,7 +10,9 @@ extends Node3D
 ## mesh and its collision stay. Its layers are the ground's own GADS materials
 ## (world-planar mapping, [code]height_center = 0[/code] so their parallax relief also sits
 ## above the surface). Where the ground under the field is not one of the layers, the field dives
-## below it and the ground shows.
+## below it and the ground shows. Over no ground (past the edges of the ground meshes, in holes),
+## over steps and under the ground it draws nothing, and next to a drop its vertices sink below the
+## lower side, so it never hangs a sheet from an edge (see [method vertex_drop]).
 ##
 ## Ground height and layers come from [member ground_bake] (a top-down capture of the meshes in
 ## [member ground_group], see [GADSGroundBake]); without meshes in the group the ground is the
@@ -338,6 +340,28 @@ func raycast_surface(from: Vector3, to: Vector3) -> Dictionary:
 		t0 = t1
 		g0 = g1
 	return {}
+
+
+## How a field vertex at world [param xz] on [param bake] meets a drop (a kerb, a wall, a pit's
+## rim), as the field's vertex shader computes it: Vector2(how far it sinks 0..1, the lowest ground
+## around it in m). [param ground]: the bake's height there ([method GADSGroundBake.sample]);
+## [param reach]: how far its triangles reach (its ring's spacing times 1 + morph). Fully sunk, the
+## vertex sits [code]push_down[/code] below that lowest ground, not displaced.
+static func vertex_drop(bake: GADSGroundBake, xz: Vector2, ground: float, reach: float) -> Vector2:
+	var drop := 0.0
+	var low := ground
+	var rise := bake.step_limit / bake.texel_size
+	for j in range(-1, 2):
+		for i in range(-1, 2):
+			if i == 0 and j == 0:
+				continue
+			var o := Vector2(i, j) * reach
+			var around := bake.cell(xz + o)
+			if around["covered"]:
+				var allowed := rise * (absf(o.x) + absf(o.y)) + 0.25 * bake.step_limit
+				drop = maxf(drop, smoothstep(allowed, allowed + bake.step_limit, absf(float(around["height"]) - ground)))
+				low = minf(low, around["height"])
+	return Vector2(drop, low)
 
 
 ## How far below the ground the field hides where it does not displace (m).

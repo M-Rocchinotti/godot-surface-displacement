@@ -4,6 +4,34 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [1.0.2] - 2026-11-10
+
+### Fixed
+
+- **Displacement field: sheets, stripes and shards at drops in the ground.** The field's ground
+  bake is a height field, so at a drop (a kerb, a wall, a bridge deck or a road's edge over a
+  trench, a pit's rim, the edge of the `gads_ground` meshes) its height ramps from the upper
+  surface to the lower one within one texel. The continuous grid hung a near-vertical sheet from
+  the edge there, textured top-down into stretched stripes, and its dive (`push_down` under the
+  ramp) left slivers standing above the lower ground and showed through holes. Now:
+  - a vertex whose triangles reach across a drop (ground up to (1 + morph) spacings away differs
+    from its own by more than the steepest ground could rise there) sinks below the lowest ground
+    around it, so no triangle spans a drop; ring seams stay closed (both rings use the coarser
+    spacing on the shared edge);
+  - the field draws nothing over cells without ground or with a step, and nothing under the
+    ground (where it dives or sinks), so the ground mesh with its parallax is what shows there.
+    The ground mesh is always drawn, so this opens no holes.
+  CPU twins for the tests: `GADSGroundBake.cell()` and `GADSDisplacementField3D.vertex_drop()`.
+  New field test `no_sheets_at_drops` (a 50 cm step, a pit, the ground's edge; fails on 1.0.1:
+  sheets up to 0.29 m above the true surface, every pixel over no ground drawn); `baked_ground`
+  checks that nothing is drawn over no ground, steps and under the ground; two new logic checks
+  and four new mutation checks (the `baked_ground` kerb moved to x = 1 m, where the existing
+  "ground steps not marked (shader)" mutation stays visible).
+  Cost: the field now uses `discard` (it loses early-Z) and reads 4 ground texels per fragment and
+  32 per vertex. On an RTX 5080, Hills demo Ultra at 1280 x 720: 0.744 -> 0.769 ms GPU per frame
+  (the near field's own share 0.216 -> 0.242 ms); Truck Town at 960 x 540: 0.550 -> 0.567 and
+  0.595 -> 0.615 ms.
+
 ## [1.0.1] - 2026-11-09
 
 ### Fixed

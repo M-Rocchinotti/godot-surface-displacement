@@ -225,7 +225,22 @@ layer, or weights of 0 and 1, give the plain `w_i * height_m_i * h_i`.
 - The field is drawn *on top of* the original ground: relief "up only", the geometry raised by
   `lift` (2 mm).
   Where no layer is displaceable, vertices dive `push_down` under the ground and the ground mesh
-  hides them - no `discard`, so early-Z stays.
+  hides them.
+- Drops (kerbs, walls, a pit's rim, the edge of the ground meshes): the bake is a height field, so
+  across a drop its height ramps from the upper surface to the lower one within one texel, and a
+  grid triangle across it hung a near-vertical sheet from the edge (top-down textured into
+  stripes) that the dive left standing above the lower ground (1.0.1). Since 1.0.2 a vertex that
+  sees, at its 8 neighbours (1 + m) spacings away, covered ground differing from its own by more
+  than the steepest ground could rise over that distance sinks `push_down` under the *lowest* of
+  them (`gads_ground_cell()`, CPU twin `vertex_drop()`), so every triangle across the drop lies
+  under both sides; at a ring's outer edge (m = 1) the distance is the next ring's spacing, so
+  shared vertices sink alike. The fragments `discard` over a texel cell that is uncovered or steps,
+  and under the ground (`f_clearance`, the vertex's height over ground minus deformation,
+  interpolated like the height, below `min(lift, 0)` - 1 mm), after the derivatives. Where the
+  ground mesh is drawn it hid all of that anyway, so leaving it out cannot open a hole; where it
+  is not (a hole seen from above, the underside of the terrain) the dive no longer shows. The
+  discard costs the field early-Z: measured in the Hills pit and Truck Town repros, see the
+  changelog.
 - Collision stays on the original ground.
 
 ### 4.4 Why the fragments still march

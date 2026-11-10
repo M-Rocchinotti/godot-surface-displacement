@@ -9,10 +9,11 @@
 // Texel (i, j) is centred on origin + (i + 0.5, j + 0.5) * texel size. A texel is displaceable
 // when it and its four neighbours are covered and no neighbour's height differs from its own by
 // more than ground_decode.z: a kerb or a step is not a height field, and the field dives under the
-// ground there. Heights, normals and layer weights are bilinear between texel centres. Outside the
-// bake nothing is displaceable and the height continues the bake's edge.
+// ground there (and draws nothing over it, see gads_ground_cell()). Heights, normals and layer
+// weights are bilinear between texel centres. Outside the bake nothing is displaceable and the
+// height continues the bake's edge.
 //
-// GADSGroundBake.sample() repeats this on the CPU (tests compare the two).
+// GADSGroundBake.sample() and cell() repeat this on the CPU (tests compare the two).
 
 uniform int ground_mode = 0;
 uniform sampler2D ground_data : filter_nearest, repeat_disable;
@@ -87,4 +88,37 @@ GADSGround gads_ground(vec2 xz) {
 	g.normal = normalize(vec3(-slope.x, 1.0, -slope.y));
 	g.weights = mix(mix(w[0], w[1], f.x), mix(w[2], w[3], f.x), f.y);
 	return g;
+}
+
+// The bake's 2 x 2 texels around xz (the footprint gads_ground() interpolates; ground_mode 1):
+// their bilinear height (texels without ground included as stored), whether all four are ground
+// (`covered`) and whether two neighbours among them differ by more than the step limit (`step`).
+// Where a cell is not covered or steps, no texel of it is displaceable. GADSGroundBake.cell()
+// repeats this on the CPU.
+struct GADSGroundCell {
+	float height;
+	bool covered;
+	bool step;
+};
+
+GADSGroundCell gads_ground_cell(vec2 xz) {
+	GADSGroundCell cell;
+	ivec2 size = textureSize(ground_data, 0);
+	vec2 t = (xz - ground_rect.xy) / ground_rect.z - 0.5;
+	ivec2 i0 = ivec2(floor(t));
+	vec2 f = t - vec2(i0);
+	float h[4];
+	cell.covered = true;
+	for (int k = 0; k < 4; k++) {
+		ivec2 p = i0 + ivec2(k % 2, k / 2);
+		ivec2 pc = clamp(p, ivec2(0), size - 1);
+		vec4 d = texelFetch(ground_data, pc, 0);
+		h[k] = ground_decode.x + (round(d.r * 255.0) * 256.0 + round(d.g * 255.0)) / 65535.0 * ground_decode.y;
+		cell.covered = cell.covered && p == pc && d.a > 0.5;
+	}
+	float step_limit = ground_decode.z;
+	cell.step = abs(h[1] - h[0]) > step_limit || abs(h[3] - h[2]) > step_limit
+			|| abs(h[2] - h[0]) > step_limit || abs(h[3] - h[1]) > step_limit;
+	cell.height = mix(mix(h[0], h[1], f.x), mix(h[2], h[3], f.x), f.y);
+	return cell;
 }

@@ -28,6 +28,7 @@ func _run() -> void:
 	await _test("vertex_heights_match_the_height_map", test_vertex_heights)
 	await _test("runtime_deformation_moves_the_geometry", test_deformation)
 	await _test("baked_ground_matches_the_cpu_reference", test_baked_ground)
+	await _test("no_sheets_at_drops", test_drops)
 	await _test("field_pom_matches_ray_traced_height_field", test_field_pom)
 	await _test("layers_blend_by_height", test_layer_height_blend)
 	await _test("animated_layer_moves_the_geometry", test_animated_field)
@@ -336,7 +337,8 @@ func test_deformation() -> void:
 ## The field over a baked ground with a gentle slope, a 6 cm kerb, a cell without ground and
 ## ground that is none of the field's layers: every vertex (away from morph bands and the fade)
 ## must sit where GADSGroundBake.sample() - the CPU twin of gads_ground.gdshaderinc - puts it:
-## mix(ground - push_down, ground + lift + relief, smoothstep(0.35, 0.65, weight sum)).
+## mix(ground - push_down, ground + lift + relief, smoothstep(0.35, 0.65, weight sum)). Vertices
+## that this puts under the ground (they dove) are cut out: nothing is drawn there.
 func test_baked_ground() -> void:
 	var tile := 1.28
 	var amp := 0.04
@@ -352,7 +354,7 @@ func test_baked_ground() -> void:
 	for y in cells.y:
 		for x in cells.x:
 			var p := bake_origin + (Vector2(x, y) + Vector2(0.5, 0.5)) * texel
-			heights.append(0.004 * p.x - 0.003 * p.y + (0.06 if p.x > 1.5 else 0.0))
+			heights.append(0.004 * p.x - 0.003 * p.y + (0.06 if p.x > 1.0 else 0.0))
 			var id := 0
 			if p.y > 2.2:
 				id = -1
@@ -382,7 +384,7 @@ func test_baked_ground() -> void:
 	var push: float = f.get_material().get_shader_parameter("push_down")
 	var fade := f.get_fade_range()
 	var errors := []
-	var kinds := {"displaced": 0, "dived": 0, "blended": 0}
+	var kinds := {"displaced": 0, "dived": 0, "blended": 0, "sunk": 0, "left out": 0, "drawn where left out": 0, "under the ground": 0, "drawn under the ground": 0}
 	# Every pixel (one per innermost vertex): the partly displaceable vertices lie in bands a
 	# fraction of a texel wide.
 	for py in SIZE.y:
@@ -401,13 +403,31 @@ func test_baked_ground() -> void:
 			var d := xz.distance_to(Vector2(tracked.position.x, tracked.position.z))
 			if d >= f.get_morph_range(k).x or d >= fade.x:
 				continue
+			var cell := bake.cell(xz)
+			if not cell["covered"] or cell["step"]:
+				# Over no ground and over the kerb the field draws nothing (the background is 0).
+				kinds["left out"] += 1
+				if img.get_pixel(px, py).r != 0.0:
+					kinds["drawn where left out"] += 1
+				continue
 			var s := bake.sample(xz)
 			var w: Color = s["weights"]
 			var displaceable := smoothstep(0.35, 0.65, w.r)
 			var ground: float = s["height"]
-			var want := lerpf(ground - push, ground + f.lift + amp * Harness.sample_field(mips[k], xz / tile), displaceable)
-			var got := reference + img.get_pixel(px, py).r * scale
-			errors.append(absf(got - want))
+			# Beside the kerb the vertices sink below its lower side (within a spacing of their ring).
+			var drop := GADSDisplacementField3D.vertex_drop(bake, xz, ground, S0 * step)
+			displaceable *= 1.0 - drop.x
+			var want := lerpf(lerpf(ground, drop.y, drop.x) - push, ground + f.lift + amp * Harness.sample_field(mips[k], xz / tile), displaceable)
+			if want < ground - 0.002:
+				# Under the ground the field draws nothing (the ground mesh is what shows).
+				kinds["under the ground"] += 1
+				if img.get_pixel(px, py).r != 0.0:
+					kinds["drawn under the ground"] += 1
+			elif want >= ground:
+				var got := reference + img.get_pixel(px, py).r * scale
+				errors.append(absf(got - want))
+			if drop.x > 0.0:
+				kinds["sunk"] += 1
 			if displaceable >= 1.0:
 				kinds["displaced"] += 1
 			elif displaceable <= 0.0:
@@ -417,7 +437,157 @@ func test_baked_ground() -> void:
 	var worst := percentile(errors, 1.0)
 	print("  %d vertices checked %s, largest error %.4f mm" % [errors.size(), kinds, worst * 1000.0])
 	check(kinds["displaced"] > 1000 and kinds["dived"] > 1000 and kinds["blended"] > 2, "displaced, dived and partly displaced vertices are all checked")
-	check(worst < 0.0003, "every vertex is where the CPU reference of the baked ground puts it (within 0.3 mm)")
+	check(worst < 0.0003, "every vertex over the ground is where the CPU reference of the baked ground puts it (within 0.3 mm)")
+	check(kinds["under the ground"] > 1000 and kinds["drawn under the ground"] == 0, "where the field dives under the ground it draws nothing")
+	check(kinds["left out"] > 50 and kinds["drawn where left out"] == 0, "over the cell without ground and over the kerb the field draws nothing")
+	GADSGlobals.set_value(GADSGlobals.DEBUG, Vector4(0, 0.1, 0, 0))
+
+
+## Drops in the baked ground: a 50 cm step between two baked levels, a hole in the upper one (a
+## pit) and the end of the ground towards ground that is not baked (a road's edge over a trench),
+## each crossing the inner three rings. Seen from above, the field must never stand higher than
+## its relief over the true surface (no triangle may span a drop, nothing may hang from an edge),
+## must draw nothing over no ground, and must still cover the ground with its relief away from the
+## drops. (1.0.1 hung sheets from such edges, top-down textured into vertical stripes, and left
+## its dive standing in pits and beside roads.)
+func test_drops() -> void:
+	var tile := 1.28
+	var amp := 0.04
+	var field := Harness.make_wave_field(256)
+	h.new_debug_scene()
+	var tracked := add_tracked_camera(Vector3(-0.3, 1.7, -2.5))
+	var f := add_field(field, tile, amp, tracked)
+	var texel := 0.05
+	var cells := Vector2i(280, 280)
+	var bake_origin := Vector2(-7.0, -7.0)
+	var step_x := 0.4
+	var upper := 0.5
+	var hole := Vector2(-0.9, -1.6)
+	var hole_r := 0.4
+	var edge_z := 3.0
+	var surface := func(xz: Vector2) -> float:
+		return 0.003 * xz.x - 0.002 * xz.y + (upper if xz.x < step_x else 0.0)
+	var heights := PackedFloat32Array()
+	var ids := PackedInt32Array()
+	for y in cells.y:
+		for x in cells.x:
+			var p := bake_origin + (Vector2(x, y) + Vector2(0.5, 0.5)) * texel
+			heights.append(surface.call(p))
+			ids.append(-2 if p.distance_to(hole) < hole_r or p.y > edge_z else 0)
+	f.ground_bake = GADSGroundBake.from_arrays(cells, heights, ids, bake_origin, texel)
+	await h.frames(3)
+	var pixel := 0.012
+	var centre := Vector2(0.4, 1.0)
+	add_top_camera(centre, pixel)
+	# World height relative to -1 m in units of 2 m: the field reads 0.2 to 0.8 here, the black
+	# background 0.
+	var reference := -1.0
+	var scale := 2.0
+	GADSGlobals.set_value(GADSGlobals.DEBUG, Vector4(Harness.DEBUG_WORLD_HEIGHT, scale, reference, 0.0))
+	await h.frames(5)
+	var img := await h.capture()
+	var origin := f.snapped_origin(tracked.position)
+	var inner := f.get_reach() - 0.2
+	var counts := {"beside": 0, "too high": 0, "no ground": 0, "drawn over no ground": 0, "away": 0, "wrong away": 0,
+			"cells left out": 0, "drawn over cells left out": 0}
+	var highest := -INF
+	for py in SIZE.y:
+		for px in SIZE.x:
+			var xz := pixel_to_xz(Vector2i(px, py), centre, pixel)
+			var value := img.get_pixel(px, py).r
+			var drawn := value > 0.1
+			var height := reference + value * scale
+			var to_hole := xz.distance_to(hole) - hole_r
+			var to_drop := minf(absf(xz.x - step_x), minf(absf(to_hole), absf(xz.y - edge_z)))
+			# Near the drops, per bake cell as the shader cuts: a cell without ground or with a step
+			# shows nothing (also where a long, morphed edge of an outer ring would reach over it).
+			# Pixels within 0.5 mm of a cell's border may fall either way.
+			var t := (xz - bake_origin) / texel - Vector2(0.5, 0.5)
+			if to_drop < 0.3 and minf(absf(t.x - roundf(t.x)), absf(t.y - roundf(t.y))) * texel > 0.0005:
+				var cell := f.ground_bake.cell(xz)
+				if not cell["covered"] or cell["step"]:
+					counts["cells left out"] += 1
+					if drawn:
+						counts["drawn over cells left out"] += 1
+			if to_hole < 0.0 or xz.y > edge_z:
+				# No ground here: past the texel boundary (every cell here has a texel without ground)
+				# nothing is drawn.
+				if to_drop > 0.75 * texel:
+					counts["no ground"] += 1
+					if drawn:
+						counts["drawn over no ground"] += 1
+				continue
+			var ground: float = surface.call(xz)
+			if drawn:
+				if to_drop < 1.0:
+					counts["beside"] += 1
+				# Nothing higher than the relief over the true surface (below the step: its lower level).
+				if height > ground + f.lift + amp + 0.003:
+					counts["too high"] += 1
+					highest = maxf(highest, height - ground)
+			if to_drop > 0.8 and absf(xz.x - origin.x) < inner and absf(xz.y - origin.z) < inner:
+				counts["away"] += 1
+				if not drawn or height < ground + f.lift - 0.002 or height > ground + f.lift + amp + 0.002:
+					counts["wrong away"] += 1
+	print("  %s; highest above the true surface %.3f m" % [counts, highest if highest > -INF else 0.0])
+	check(counts["beside"] > 20000 and counts["too high"] == 0, "beside the drops nothing of the field stands higher than its relief over the ground below (no sheets)")
+	check(counts["no ground"] > 20000 and counts["drawn over no ground"] == 0, "over no ground (a pit, past the ground's edge) the field draws nothing")
+	check(counts["cells left out"] > 5000 and counts["drawn over cells left out"] == 0, "over every bake cell without ground or with a step the field draws nothing")
+	check(counts["away"] > 100000 and counts["wrong away"] == 0, "away from the drops the field still covers the ground with its relief")
+	# The vertices themselves (one pixel per innermost vertex, as in test_baked_ground): where
+	# GADSDisplacementField3D.vertex_drop() sinks them under the ground beside the step and the pit,
+	# nothing is drawn; the others sit where it puts them. (Heights from -0.12 to 0.56 m read back as
+	# -0.97 to 0.97 around 0.22 m in units of 0.35 m, where a half float's step is at most 0.17 mm.)
+	var bake := f.ground_bake
+	var lattice_centre := Vector2(origin.x, origin.z) - Vector2(0.5, 0.5) * S0
+	add_top_camera(lattice_centre, S0)
+	reference = 0.22
+	scale = 0.35
+	GADSGlobals.set_value(GADSGlobals.DEBUG, Vector4(Harness.DEBUG_WORLD_HEIGHT, scale, reference, 0.0))
+	await h.frames(5)
+	img = await h.capture()
+	var mips := []
+	for k in LEVELS:
+		mips.append(Harness.field_mip(field, 2 + k))
+	var push: float = f.get_material().get_shader_parameter("push_down")
+	var fade := f.get_fade_range()
+	var errors := []
+	var sunk := 0
+	var drawn_sunk := 0
+	for py in SIZE.y:
+		for px in SIZE.x:
+			var xz := pixel_to_xz(Vector2i(px, py), lattice_centre, S0)
+			var lat := ((xz - Vector2(origin.x, origin.z)) / S0).round()
+			var ring := maxf(absf(lat.x), absf(lat.y))
+			var k := 0
+			while k < LEVELS - 1 and ring > N / 2.0 * pow(2.0, k):
+				k += 1
+			var step := pow(2.0, k)
+			if fposmod(lat.x, step) != 0.0 or fposmod(lat.y, step) != 0.0:
+				continue
+			if is_equal_approx(ring, N / 2.0 * step) or (k > 0 and is_equal_approx(ring, N / 4.0 * step)):
+				continue
+			var d := xz.distance_to(Vector2(tracked.position.x, tracked.position.z))
+			if d >= f.get_morph_range(k).x or d >= fade.x:
+				continue
+			var cell := bake.cell(xz)
+			if not cell["covered"] or cell["step"]:
+				continue
+			var s := bake.sample(xz)
+			var ground: float = s["height"]
+			var drop := GADSDisplacementField3D.vertex_drop(bake, xz, ground, S0 * step)
+			var displaceable := smoothstep(0.35, 0.65, (s["weights"] as Color).r) * (1.0 - drop.x)
+			var want := lerpf(lerpf(ground, drop.y, drop.x) - push, ground + f.lift + amp * Harness.sample_field(mips[k], xz / tile), displaceable)
+			if want < ground - 0.002:
+				if drop.x > 0.5:
+					sunk += 1
+				if img.get_pixel(px, py).r != 0.0:
+					drawn_sunk += 1
+			elif want >= ground:
+				errors.append(absf(reference + img.get_pixel(px, py).r * scale - want))
+	var worst := percentile(errors, 1.0)
+	print("  %d vertices over the ground checked, largest error %.4f mm; %d sunk under it beside a drop, %d of them drawn" % [errors.size(), worst * 1000.0, sunk, drawn_sunk])
+	check(sunk > 100 and drawn_sunk == 0 and worst < 0.0005, "the vertices beside the drops sink where the CPU reference puts them: under the ground, not drawn (the rest within 0.5 mm)")
 	GADSGlobals.set_value(GADSGlobals.DEBUG, Vector4(0, 0.1, 0, 0))
 
 
